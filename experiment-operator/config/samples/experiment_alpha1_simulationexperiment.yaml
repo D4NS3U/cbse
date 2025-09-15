@@ -1,0 +1,41 @@
+apiVersion: experiment.cbse.terministic.de/alpha1
+kind: SimulationExperiment
+metadata:
+  labels:
+    app.kubernetes.io/name: experiment-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: simulationexperiment-sample
+  namespace: default
+spec:
+  # TODO(user): Add fields here
+  detailDatabase:
+    dbname: simulation_db
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    user: postgres
+    password: postgres
+    port: 5432
+  resultDatabase:
+    dbname: result_db
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    user: postgres
+    password: postgres
+    port: 5432
+  translator:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    repository: translator-repo
+    baseimage: translator-baseimage
+  postProcessingService:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+  experimentalDesign: >
+    This experiment runs multiple simulation scenarios
+    to benchmark system behavior under varying load profiles
+    and records performance metrics for analysis.
+
