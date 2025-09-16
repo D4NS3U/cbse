@@ -14,118 +14,151 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package alpha1
+package alpha2
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:object:generate=true
+
+// SimulationExperimentSpec (alpha2) — BREAKING changes carried here
+// - ExperimentalDesign(string) -> ExperimentalDesignService(struct)
+// - Add Port to Translator and PostProcessingService
 type SimulationExperimentSpec struct {
 	// +kubebuilder:validation:Required
 	DetailDatabase DatabaseSpec `json:"detailDatabase"`
+
 	// +kubebuilder:validation:Required
 	ResultDatabase DatabaseSpec `json:"resultDatabase"`
+
 	// +kubebuilder:validation:Required
 	Translator TranslatorSpec `json:"translator"`
+
 	// +kubebuilder:validation:Required
 	PostProcessingService PostProcessingSpec `json:"postProcessingService"`
+
 	// +kubebuilder:validation:Required
-	ExperimentalDesign string `json:"experimentalDesign"`
+	ExperimentalDesignService ExperimentalDesignServiceSpec `json:"experimentalDesignService"`
 }
 
-// DatabaseSpec model either a containerized or external database
-// +kubebuilder:validation:Required
-// Either Image or Host must be specified, not both
-// +kubebuilder:validation:Xor=host,image
-// Note: Xor requires custom validation logic; for CRD we enforce in controller
+// DatabaseSpec is unchanged from alpha1 (keep wire-compat where possible).
 // +kubebuilder:validation:Required
 type DatabaseSpec struct {
-	// Either Image or Host have to specified, not both
+	// Either Image or Host must be specified (enforced by controller).
 	Image    string `json:"image,omitempty"`
 	Host     string `json:"host,omitempty"`
 	DBName   string `json:"dbname"`
 	User     string `json:"user"`
 	Password string `json:"password"`
-	Port     int32  `json:"port"` // +kubebuilder:validation:Minimum=1 +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
 
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
-	// Command to override the container's entrypoint
 	Command []string `json:"command,omitempty"`
 
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
-	// Args to pass to the container
 	Args []string `json:"args,omitempty"`
 }
 
-// TranslatorSpec defines the container that performs translation from scenario data to executable simulation models
+// TranslatorSpec now includes Port for service routing.
 // +kubebuilder:validation:Required
 type TranslatorSpec struct {
-	Image      string `json:"image"` // This is the image that contains the Translator logic
+	// This is the image that contains the Translator logic.
+	Image string `json:"image"`
+
 	Repository string `json:"repository"`
-	BaseImage  string `json:"baseimage"` // This is the base image that is used by the Translator to create executable simulation models for each specific scenario
+
+	// Base image used to build executable model per scenario.
+	BaseImage string `json:"baseimage"`
+
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
+	Port int32 `json:"port,omitempty"`
 
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
-	// Command to override the container's entrypoint
 	Command []string `json:"command,omitempty"`
 
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
-	// Args to pass to the container
 	Args []string `json:"args,omitempty"`
 }
 
-// PostProcessingSpec defines the service used for evaluation after simulation
+// PostProcessingSpec now includes Port for service routing.
 // +kubebuilder:validation:Required
 type PostProcessingSpec struct {
 	Image string `json:"image"`
 
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
+	Port int32 `json:"port,omitempty"`
+
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
-	// Command to override the container's entrypoint
 	Command []string `json:"command,omitempty"`
 
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
-	// Args to pass to the container
 	Args []string `json:"args,omitempty"`
 }
 
-// SimulationExperimentStatus defines the observed state of SimulationExperiment.
-// +kubebuilder:validation:Required
+// ExperimentalDesignServiceSpec replaces the former string.
+// Start minimal with Name to retain prior meaning; extensible later.
+type ExperimentalDesignServiceSpec struct {
+
+	// +kubebuilder:validation:MinLength=1
+	Design string `json:"design,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	Image string `json:"image,omitempty"`
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default={}
+	Command []string `json:"command,omitempty"`
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default={}
+	Args []string `json:"args,omitempty"`
+
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
+	Port int32 `json:"port,omitempty"`
+}
+
+// SimulationExperimentStatus is unchanged; keep wire-compat for clients.
 type SimulationExperimentStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Provisioning;InProgress;Completed;Failed;Error
-	Phase   string         `json:"phase,omitempty"`   // Phase of the experiment (e.g., Pending, Provisioning, InProgress, Completed, Failed, Error)
-	Message string         `json:"message,omitempty"` // Additional information about the experiment status
-	Metrics *StatusMetrics `json:"metrics,omitempty"` // Optional nested metrics
+	Phase   string         `json:"phase,omitempty"`
+	Message string         `json:"message,omitempty"`
+	Metrics *StatusMetrics `json:"metrics,omitempty"`
 }
 
 type StatusMetrics struct {
 	// +kubebuilder:validation:Minimum=0
-	ScenarioCount int64 `json:"scenarioCount,omitempty"` // Number of scenarios processed
+	ScenarioCount int64 `json:"scenarioCount,omitempty"`
 }
 
+// +kubebuilder:storageversion
 // +kubebuilder:object:root=true
+// +kubebuilder:storageversion
+// +kubebuilder:conversion:hub
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=simulationexperiments,shortName=simexp,scope=Namespaced
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Scenarios",type=integer,priority=1,JSONPath=".status.metrics.scenarioCount"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-
-// SimulationExperiment is the Schema for the simulationexperiments API.
 type SimulationExperiment struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	Spec   SimulationExperimentSpec   `json:"spec,omitempty"`
-	Status SimulationExperimentStatus `json:"status,omitempty"`
+	Spec              SimulationExperimentSpec   `json:"spec,omitempty"`
+	Status            SimulationExperimentStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
-
-// SimulationExperimentList contains a list of SimulationExperiment.
 type SimulationExperimentList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

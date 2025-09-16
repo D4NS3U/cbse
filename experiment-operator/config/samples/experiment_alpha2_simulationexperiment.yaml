@@ -1,0 +1,49 @@
+apiVersion: experiment.cbse.terministic.de/alpha2
+kind: SimulationExperiment
+metadata:
+  labels:
+    app.kubernetes.io/name: experiment-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: simulationexperiment-sample
+spec:
+  kind: SimulationExperiment
+metadata:
+  labels:
+    app.kubernetes.io/name: experiment-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: simulationexperiment-sample
+  namespace: default
+spec:
+  detailDatabase:
+    dbname: simulation_db
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    user: postgres
+    password: postgres
+    port: 5432
+  resultDatabase:
+    dbname: result_db
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    user: postgres
+    password: postgres
+    port: 5432
+  translator:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    repository: translator-repo
+    baseimage: translator-baseimage
+    port: 8080
+  postProcessingService:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    port: 8081
+  experimentalDesignService:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    port: 8082
