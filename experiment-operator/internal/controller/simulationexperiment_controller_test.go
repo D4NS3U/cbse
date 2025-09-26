@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	experimentalpha1 "cbse.terministic.de/experiment-operator/api/alpha1"
+	experimentalpha2 "cbse.terministic.de/experiment-operator/api/alpha2"
 )
 
 var _ = Describe("SimulationExperiment Controller", func() {
@@ -40,13 +40,13 @@ var _ = Describe("SimulationExperiment Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		simulationexperiment := &experimentalpha1.SimulationExperiment{}
+		simulationexperiment := &experimentalpha2.SimulationExperiment{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind SimulationExperiment")
 			err := k8sClient.Get(ctx, typeNamespacedName, simulationexperiment)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &experimentalpha1.SimulationExperiment{
+				resource := &experimentalpha2.SimulationExperiment{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,7 +59,7 @@ var _ = Describe("SimulationExperiment Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &experimentalpha1.SimulationExperiment{}
+			resource := &experimentalpha2.SimulationExperiment{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 

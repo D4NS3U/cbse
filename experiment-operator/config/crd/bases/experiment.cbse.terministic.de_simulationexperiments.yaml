@@ -27,11 +27,9 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: alpha1
+    name: alpha2
     schema:
       openAPIV3Schema:
-        description: SimulationExperiment is the Schema for the simulationexperiments
-          API.
         properties:
           apiVersion:
             description: |-
@@ -51,22 +49,29 @@ spec:
           metadata:
             type: object
           spec:
+            description: |-
+              SimulationExperimentSpec (alpha2) — BREAKING changes carried here
+              - ExperimentalDesign(string) -> ExperimentalDesignService(struct)
+              - Add Port to Translator and PostProcessingService
             properties:
+              defaultServiceType:
+                default: ClusterIP
+                enum:
+                - ClusterIP
+                - NodePort
+                - LoadBalancer
+                type: string
               detailDatabase:
-                description: |-
-                  DatabaseSpec model either a containerized or external database
-                  Either Image or Host must be specified, not both
-                  Note: Xor requires custom validation logic; for CRD we enforce in controller
+                description: DatabaseSpec is unchanged from alpha1 (keep wire-compat
+                  where possible).
                 properties:
                   args:
                     default: []
-                    description: Args to pass to the container
                     items:
                       type: string
                     type: array
                   command:
                     default: []
-                    description: Command to override the container's entrypoint
                     items:
                       type: string
                     type: array
@@ -75,13 +80,28 @@ spec:
                   host:
                     type: string
                   image:
-                    description: Either Image or Host have to specified, not both
+                    description: Either Image or Host must be specified (enforced
+                      by controller).
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
                   password:
                     type: string
                   port:
                     format: int32
+                    maximum: 65535
+                    minimum: 1
                     type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
                   user:
                     type: string
                 required:
@@ -90,44 +110,93 @@ spec:
                 - port
                 - user
                 type: object
-              experimentalDesign:
-                type: string
-              postProcessingService:
-                description: PostProcessingSpec defines the service used for evaluation
-                  after simulation
+              experimentalDesignService:
+                description: |-
+                  ExperimentalDesignServiceSpec replaces the former string.
+                  Start minimal with Name to retain prior meaning; extensible later.
                 properties:
                   args:
                     default: []
-                    description: Args to pass to the container
                     items:
                       type: string
                     type: array
                   command:
                     default: []
-                    description: Command to override the container's entrypoint
+                    items:
+                      type: string
+                    type: array
+                  design:
+                    minLength: 1
+                    type: string
+                  image:
+                    minLength: 1
+                    type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  port:
+                    default: 8080
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
+                type: object
+              postProcessingService:
+                description: PostProcessingSpec now includes Port for service routing.
+                properties:
+                  args:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  command:
+                    default: []
                     items:
                       type: string
                     type: array
                   image:
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  port:
+                    default: 8080
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
                 required:
                 - image
                 type: object
               resultDatabase:
-                description: |-
-                  DatabaseSpec model either a containerized or external database
-                  Either Image or Host must be specified, not both
-                  Note: Xor requires custom validation logic; for CRD we enforce in controller
+                description: DatabaseSpec is unchanged from alpha1 (keep wire-compat
+                  where possible).
                 properties:
                   args:
                     default: []
-                    description: Args to pass to the container
                     items:
                       type: string
                     type: array
                   command:
                     default: []
-                    description: Command to override the container's entrypoint
                     items:
                       type: string
                     type: array
@@ -136,13 +205,28 @@ spec:
                   host:
                     type: string
                   image:
-                    description: Either Image or Host have to specified, not both
+                    description: Either Image or Host must be specified (enforced
+                      by controller).
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
                   password:
                     type: string
                   port:
                     format: int32
+                    maximum: 65535
+                    minimum: 1
                     type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
                   user:
                     type: string
                 required:
@@ -152,26 +236,43 @@ spec:
                 - user
                 type: object
               translator:
-                description: TranslatorSpec defines the container that performs translation
-                  from scenario data to executable simulation models
+                description: TranslatorSpec now includes Port for service routing.
                 properties:
                   args:
                     default: []
-                    description: Args to pass to the container
                     items:
                       type: string
                     type: array
                   baseimage:
+                    description: Base image used to build executable model per scenario.
                     type: string
                   command:
                     default: []
-                    description: Command to override the container's entrypoint
                     items:
                       type: string
                     type: array
                   image:
+                    description: This is the image that contains the Translator logic.
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  port:
+                    default: 8080
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
                   repository:
+                    type: string
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
                     type: string
                 required:
                 - baseimage
@@ -180,14 +281,14 @@ spec:
                 type: object
             required:
             - detailDatabase
-            - experimentalDesign
+            - experimentalDesignService
             - postProcessingService
             - resultDatabase
             - translator
             type: object
           status:
-            description: SimulationExperimentStatus defines the observed state of
-              SimulationExperiment.
+            description: SimulationExperimentStatus is unchanged; keep wire-compat
+              for clients.
             properties:
               message:
                 type: string

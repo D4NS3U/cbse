@@ -1,0 +1,57 @@
+apiVersion: experiment.cbse.terministic.de/alpha2
+kind: SimulationExperiment
+metadata:
+  labels:
+    app.kubernetes.io/name: experiment-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: simulationexperiment-nodeport
+  namespace: default
+spec:
+  defaultServiceType: NodePort
+  detailDatabase:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    dbname: simulation_db
+    user: postgres
+    password: postgres
+    port: 5432
+    serviceType: NodePort
+    nodePort: 31092
+  resultDatabase:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    dbname: result_db
+    user: postgres
+    password: postgres
+    port: 5432
+    serviceType: NodePort
+    nodePort: 31093
+  translator:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    repository: translator-repo
+    baseimage: translator-baseimage
+    serviceType: NodePort
+    port: 8080
+    nodePort: 31080
+  postProcessingService:
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    serviceType: NodePort
+    port: 8081
+    nodePort: 31081
+  experimentalDesignService:
+    design: |
+      This experiment runs multiple simulation scenarios
+      to benchmark system behavior under varying load profiles
+      and records performance metrics for analysis.
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    serviceType: NodePort
+    port: 8082
+    nodePort: 31082

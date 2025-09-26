@@ -37,7 +37,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	experimentalpha1 "cbse.terministic.de/experiment-operator/api/alpha1"
+	experimentalpha2 "cbse.terministic.de/experiment-operator/api/alpha2"
 	"cbse.terministic.de/experiment-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -50,7 +50,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(experimentalpha1.AddToScheme(scheme))
+	utilruntime.Must(experimentalpha2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -209,6 +209,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SimulationExperiment")
 		os.Exit(1)
 	}
+	// nolint:goconst
+	// if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+	// 	if err := webhookalpha2.SetupSimulationExperimentWebhookWithManager(mgr); err != nil {
+	// 		setupLog.Error(err, "unable to create webhook", "webhook", "SimulationExperiment")
+	// 		os.Exit(1)
+	// 	}
+	// }
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {
