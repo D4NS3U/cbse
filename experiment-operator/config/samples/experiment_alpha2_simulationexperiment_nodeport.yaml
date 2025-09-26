@@ -4,10 +4,10 @@ metadata:
   labels:
     app.kubernetes.io/name: experiment-operator
     app.kubernetes.io/managed-by: kustomize
-  name: simulationexperiment-sample
+  name: simulationexperiment-nodeport
   namespace: default
 spec:
-  defaultServiceType: ClusterIP
+  defaultServiceType: NodePort
   detailDatabase:
     image: busybox:latest
     command: ["tail"]
@@ -16,7 +16,8 @@ spec:
     user: postgres
     password: postgres
     port: 5432
-    serviceType: ClusterIP
+    serviceType: NodePort
+    nodePort: 31092
   resultDatabase:
     image: busybox:latest
     command: ["tail"]
@@ -25,6 +26,8 @@ spec:
     user: postgres
     password: postgres
     port: 5432
+    serviceType: NodePort
+    nodePort: 31093
   translator:
     image: busybox:latest
     command: ["tail"]
@@ -32,14 +35,15 @@ spec:
     repository: translator-repo
     baseimage: translator-baseimage
     serviceType: NodePort
-    nodePort: 31080
     port: 8080
+    nodePort: 31080
   postProcessingService:
     image: busybox:latest
     command: ["tail"]
     args: ["-f", "/dev/null"]
-    serviceType: LoadBalancer
+    serviceType: NodePort
     port: 8081
+    nodePort: 31081
   experimentalDesignService:
     design: |
       This experiment runs multiple simulation scenarios
@@ -48,5 +52,6 @@ spec:
     image: busybox:latest
     command: ["tail"]
     args: ["-f", "/dev/null"]
-    serviceType: ClusterIP
+    serviceType: NodePort
     port: 8082
+    nodePort: 31082

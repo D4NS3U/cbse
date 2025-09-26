@@ -54,6 +54,13 @@ spec:
               - ExperimentalDesign(string) -> ExperimentalDesignService(struct)
               - Add Port to Translator and PostProcessingService
             properties:
+              defaultServiceType:
+                default: ClusterIP
+                enum:
+                - ClusterIP
+                - NodePort
+                - LoadBalancer
+                type: string
               detailDatabase:
                 description: DatabaseSpec is unchanged from alpha1 (keep wire-compat
                   where possible).
@@ -76,6 +83,11 @@ spec:
                     description: Either Image or Host must be specified (enforced
                       by controller).
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
                   password:
                     type: string
                   port:
@@ -83,6 +95,13 @@ spec:
                     maximum: 65535
                     minimum: 1
                     type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
                   user:
                     type: string
                 required:
@@ -112,12 +131,24 @@ spec:
                   image:
                     minLength: 1
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
                   port:
                     default: 8080
                     format: int32
                     maximum: 65535
                     minimum: 1
                     type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
                 type: object
               postProcessingService:
                 description: PostProcessingSpec now includes Port for service routing.
@@ -134,12 +165,24 @@ spec:
                     type: array
                   image:
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
                   port:
                     default: 8080
                     format: int32
                     maximum: 65535
                     minimum: 1
                     type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
                 required:
                 - image
                 type: object
@@ -165,6 +208,11 @@ spec:
                     description: Either Image or Host must be specified (enforced
                       by controller).
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
                   password:
                     type: string
                   port:
@@ -172,6 +220,13 @@ spec:
                     maximum: 65535
                     minimum: 1
                     type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
                   user:
                     type: string
                 required:
@@ -199,6 +254,11 @@ spec:
                   image:
                     description: This is the image that contains the Translator logic.
                     type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
                   port:
                     default: 8080
                     format: int32
@@ -206,6 +266,13 @@ spec:
                     minimum: 1
                     type: integer
                   repository:
+                    type: string
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
                     type: string
                 required:
                 - baseimage

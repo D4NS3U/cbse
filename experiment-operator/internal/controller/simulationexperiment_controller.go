@@ -127,25 +127,25 @@ func (r *SimulationExperimentReconciler) Reconcile(ctx context.Context, req ctrl
 		}
 
 		// Create both databases
-		if res, err := r.reconcileDatabase(ctx, instance, instance.Spec.DetailDatabase, "detaildb"); err != nil || res.RequeueAfter > 0 {
+		if res, err := r.reconcileDatabase(ctx, instance, instance.Spec.DetailDatabase, "detaildb"); err != nil || res.Requeue || res.RequeueAfter > 0 {
 			return res, err
 		}
-		if res, err := r.reconcileDatabase(ctx, instance, instance.Spec.ResultDatabase, "resultdb"); err != nil || res.RequeueAfter > 0 {
+		if res, err := r.reconcileDatabase(ctx, instance, instance.Spec.ResultDatabase, "resultdb"); err != nil || res.Requeue || res.RequeueAfter > 0 {
 			return res, err
 		}
 
 		// Translator
-		if res, err := r.reconcileTranslator(ctx, instance, instance.Spec.Translator); err != nil || res.RequeueAfter > 0 {
+		if res, err := r.reconcileTranslator(ctx, instance, instance.Spec.Translator); err != nil || res.Requeue || res.RequeueAfter > 0 {
 			return res, err
 		}
 
 		// PostProcessingService
-		if res, err := r.reconcilePPS(ctx, instance, instance.Spec.PostProcessingService); err != nil || res.RequeueAfter > 0 {
+		if res, err := r.reconcilePPS(ctx, instance, instance.Spec.PostProcessingService); err != nil || res.Requeue || res.RequeueAfter > 0 {
 			return res, err
 		}
 
 		// ExperimentalDesignService
-		if res, err := r.reconcileExperimentalDesignService(ctx, instance, instance.Spec.ExperimentalDesignService); err != nil || res.RequeueAfter > 0 {
+		if res, err := r.reconcileExperimentalDesignService(ctx, instance, instance.Spec.ExperimentalDesignService); err != nil || res.Requeue || res.RequeueAfter > 0 {
 			return res, err
 		}
 
@@ -194,6 +194,7 @@ func (r *SimulationExperimentReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		&corev1.Service{},
 		&corev1.Secret{},
 		&corev1.ConfigMap{},
+		&corev1.Pod{},
 	} {
 		if err := mgr.GetFieldIndexer().IndexField(context.Background(), obj, ".metadata.controller", indexFn); err != nil {
 			return err
@@ -216,6 +217,21 @@ func (r *SimulationExperimentReconciler) SetupWithManager(mgr ctrl.Manager) erro
 //
 // 11-07-2025-11:23: Dropping the cleanupComponents method, as it is not used in the current implementation.
 
+// setErrorStatus updates the SimulationExperiment status to Error and propagates failures.
+func (r *SimulationExperimentReconciler) setErrorStatus(
+	ctx context.Context,
+	instance *experimentalpha2.SimulationExperiment,
+	message string,
+) error {
+	instance.Status.Phase = "Error"
+	instance.Status.Message = message
+	if err := r.Status().Update(ctx, instance); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to update SimulationExperiment status", "message", message)
+		return err
+	}
+	return nil
+}
+
 // reconcileDatabase handles the creation of a database deployment and service
 func (r *SimulationExperimentReconciler) reconcileDatabase(
 	ctx context.Context,
@@ -228,9 +244,9 @@ func (r *SimulationExperimentReconciler) reconcileDatabase(
 		addr := net.JoinHostPort(spec.Host, fmt.Sprintf("%d", spec.Port))
 		conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
 		if err != nil {
-			instance.Status.Phase = "Error"
-			instance.Status.Message = fmt.Sprintf("Cannot connect to %s at %s", suffix, addr)
-			_ = r.Status().Update(ctx, instance)
+			if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Cannot connect to %s at %s", suffix, addr)); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry connection
 		}
 		conn.Close()
@@ -278,9 +294,9 @@ func (r *SimulationExperimentReconciler) reconcileDatabase(
 	})
 	// Handle error during Deployment creation/update
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update %s Deployment: %v", suffix, err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update %s Deployment: %v", suffix, err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled database Deployment", "name", dep.Name, "op", op1)
@@ -298,18 +314,23 @@ func (r *SimulationExperimentReconciler) reconcileDatabase(
 		if err := controllerutil.SetControllerReference(instance, svc, r.Scheme); err != nil {
 			return err
 		}
-
-		svc.Spec.Selector = map[string]string{"app": instance.Name + "-" + suffix}
-		svc.Spec.Ports = []corev1.ServicePort{{
+		// Set service type and ports
+		svc.Spec.Type = corev1.ServiceType(spec.ServiceType)
+		port := corev1.ServicePort{
 			Port:       spec.Port,
 			TargetPort: intstr.FromInt(int(spec.Port)),
-		}}
+		}
+		if spec.ServiceType == experimentalpha2.ServiceTypeNodePort && spec.NodePort != nil {
+			port.NodePort = *spec.NodePort
+		}
+		svc.Spec.Selector = map[string]string{"app": instance.Name + "-" + suffix}
+		svc.Spec.Ports = []corev1.ServicePort{port}
 		return nil
 	})
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update %s Service: %v", suffix, err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update %s Service: %v", suffix, err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled database Service", "name", svc.Name, "op", op2)
@@ -346,9 +367,9 @@ func (r *SimulationExperimentReconciler) reconcileDatabase(
 		return nil
 	})
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update %s connection Secret: %v", suffix, err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update %s connection Secret: %v", suffix, err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled database connection Secret", "name", secret.Name, "op", op3)
@@ -385,9 +406,9 @@ func (r *SimulationExperimentReconciler) reconcileTranslator(
 		return nil
 	})
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update Translator ConfigMap: %v", err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update Translator ConfigMap: %v", err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled Translator ConfigMap", "name", cm.Name, "op", op1)
@@ -441,9 +462,9 @@ func (r *SimulationExperimentReconciler) reconcileTranslator(
 		return nil
 	})
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update Translator Deployment: %v", err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update Translator Deployment: %v", err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled Translator Deployment", "name", dep.Name, "op", op2)
@@ -462,17 +483,23 @@ func (r *SimulationExperimentReconciler) reconcileTranslator(
 			return err
 		}
 
-		svc.Spec.Selector = map[string]string{"app": instance.Name + "-translator"}
-		svc.Spec.Ports = []corev1.ServicePort{{
+		// Set service type and ports
+		svc.Spec.Type = corev1.ServiceType(spec.ServiceType)
+		port := corev1.ServicePort{
 			Port:       spec.Port,
 			TargetPort: intstr.FromInt(int(spec.Port)),
-		}}
+		}
+		if spec.ServiceType == experimentalpha2.ServiceTypeNodePort && spec.NodePort != nil {
+			port.NodePort = *spec.NodePort
+		}
+		svc.Spec.Selector = map[string]string{"app": instance.Name + "-translator"}
+		svc.Spec.Ports = []corev1.ServicePort{port}
 		return nil
 	})
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update %s Service: %v", svc.Name, err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update %s Service: %v", svc.Name, err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled Translator Service", "name", svc.Name, "op", op3)
@@ -522,9 +549,9 @@ func (r *SimulationExperimentReconciler) reconcilePPS(
 		return nil
 	})
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to reconcile PostProcessingService Deployment: %v", err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to reconcile PostProcessingService Deployment: %v", err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled PostProcessingService Deployment", "name", dep.Name, "op", op1)
@@ -543,17 +570,23 @@ func (r *SimulationExperimentReconciler) reconcilePPS(
 			return err
 		}
 
-		svc.Spec.Selector = map[string]string{"app": instance.Name + "-postproc"}
-		svc.Spec.Ports = []corev1.ServicePort{{
+		// Set service type and ports
+		svc.Spec.Type = corev1.ServiceType(spec.ServiceType)
+		port := corev1.ServicePort{
 			Port:       spec.Port,
 			TargetPort: intstr.FromInt(int(spec.Port)),
-		}}
+		}
+		if spec.ServiceType == experimentalpha2.ServiceTypeNodePort && spec.NodePort != nil {
+			port.NodePort = *spec.NodePort
+		}
+		svc.Spec.Selector = map[string]string{"app": instance.Name + "-postproc"}
+		svc.Spec.Ports = []corev1.ServicePort{port}
 		return nil
 	})
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update %s Service: %v", svc.Name, err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update %s Service: %v", svc.Name, err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled PostProcessingService Service", "name", svc.Name, "op", op2)
@@ -562,46 +595,12 @@ func (r *SimulationExperimentReconciler) reconcilePPS(
 	return ctrl.Result{}, nil
 }
 
-// reconcileExperimentalDesign handles creation/update of the ExperimentalDesign ConfigMap
-// func (r *SimulationExperimentReconciler) reconcileExperimentalDesign(
-// 	ctx context.Context,
-// 	instance *experimentalpha2.SimulationExperiment,
-// 	design string,
-// ) (ctrl.Result, error) {
-// 	cm := &corev1.ConfigMap{
-// 		ObjectMeta: metav1.ObjectMeta{
-// 			Name:      instance.Name + "-design",
-// 			Labels:    map[string]string{"app": instance.Name + "-design"},
-// 			Namespace: instance.Namespace,
-// 		},
-// 	}
-// 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-// 		// Set controller reference to ensure garbage collection
-// 		if err := controllerutil.SetControllerReference(instance, cm, r.Scheme); err != nil {
-// 			return err
-// 		}
-// 		cm.Data = map[string]string{"experimentalDesign": design}
-// 		return nil
-// 	})
-// 	if err != nil {
-// 		instance.Status.Phase = "Error"
-// 		instance.Status.Message = fmt.Sprintf("Failed to reconcile ExperimentalDesign ConfigMap: %v", err)
-// 		_ = r.Status().Update(ctx, instance)
-// 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
-// 	}
-// 	logf.FromContext(ctx).Info("Reconciled ExperimentalDesign ConfigMap", "name", cm.Name)
-
-// 	// Config is static, no requeue needed
-// 	return ctrl.Result{}, nil
-// }
-
-// reconcileExperimentalDesign handles creation/update of the ExperimentalDesign ConfigMap
+// reconcileExperimentalDesignService handles creation/update of the ExperimentalDesign ConfigMap or the ExperimentalDesignService
 func (r *SimulationExperimentReconciler) reconcileExperimentalDesignService(
 	ctx context.Context,
 	instance *experimentalpha2.SimulationExperiment,
 	spec experimentalpha2.ExperimentalDesignServiceSpec,
 ) (ctrl.Result, error) {
-	// TODO: Implement logic for ExperimentalDesignService reconciliation^
 	if spec.Design != "" {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -619,9 +618,9 @@ func (r *SimulationExperimentReconciler) reconcileExperimentalDesignService(
 			return nil
 		})
 		if err != nil {
-			instance.Status.Phase = "Error"
-			instance.Status.Message = fmt.Sprintf("Failed to reconcile ExperimentalDesign ConfigMap: %v", err)
-			_ = r.Status().Update(ctx, instance)
+			if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to reconcile ExperimentalDesign ConfigMap: %v", err)); statusErr != nil {
+				return ctrl.Result{}, statusErr
+			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 		}
 		logf.FromContext(ctx).Info("Reconciled ExperimentalDesign ConfigMap", "name", cm.Name)
@@ -663,9 +662,9 @@ func (r *SimulationExperimentReconciler) reconcileExperimentalDesignService(
 	})
 
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update %s Pod: %v", instance.Name, err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update %s Pod: %v", instance.Name, err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled experimental design Pod", "name", pod.Name, "op", op1)
@@ -684,17 +683,23 @@ func (r *SimulationExperimentReconciler) reconcileExperimentalDesignService(
 			return err
 		}
 
-		svc.Spec.Selector = map[string]string{"app": instance.Name + "-design"}
-		svc.Spec.Ports = []corev1.ServicePort{{
+		// Set service type and ports
+		svc.Spec.Type = corev1.ServiceType(spec.ServiceType)
+		port := corev1.ServicePort{
 			Port:       spec.Port,
 			TargetPort: intstr.FromInt(int(spec.Port)),
-		}}
+		}
+		if spec.ServiceType == experimentalpha2.ServiceTypeNodePort && spec.NodePort != nil {
+			port.NodePort = *spec.NodePort
+		}
+		svc.Spec.Selector = map[string]string{"app": instance.Name + "-design"}
+		svc.Spec.Ports = []corev1.ServicePort{port}
 		return nil
 	})
 	if err != nil {
-		instance.Status.Phase = "Error"
-		instance.Status.Message = fmt.Sprintf("Failed to create/update %s Service: %v", svc.Name, err)
-		_ = r.Status().Update(ctx, instance)
+		if statusErr := r.setErrorStatus(ctx, instance, fmt.Sprintf("Failed to create/update %s Service: %v", svc.Name, err)); statusErr != nil {
+			return ctrl.Result{}, statusErr
+		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil // Requeue to retry
 	}
 	logf.FromContext(ctx).Info("Reconciled Design Service", "name", svc.Name, "op", op2)
@@ -742,8 +747,12 @@ func (r *SimulationExperimentReconciler) allComponentsReady(
 		}
 	}
 
-	// 2) Check the two ConfigMaps: translator & design
-	for _, suffix := range []string{"translator"} {
+	// 2) Check ConfigMaps created via Controller: translator always, design when provided
+	cmSuffixes := []string{"translator"}
+	if instance.Spec.ExperimentalDesignService.Design != "" {
+		cmSuffixes = append(cmSuffixes, "design")
+	}
+	for _, suffix := range cmSuffixes {
 		var cms corev1.ConfigMapList
 		if err := r.List(ctx, &cms,
 			client.InNamespace(instance.Namespace),
@@ -753,6 +762,40 @@ func (r *SimulationExperimentReconciler) allComponentsReady(
 			return false, err
 		}
 		if len(cms.Items) == 0 {
+			return false, nil
+		}
+	}
+
+	// 3) Check ExperimentalDesignService Pod readiness when image specified
+	if instance.Spec.ExperimentalDesignService.Image != "" {
+		var pods corev1.PodList
+		if err := r.List(ctx, &pods,
+			client.InNamespace(instance.Namespace),
+			client.MatchingLabels{"app": instance.Name + "-design"},
+			client.MatchingFields{".metadata.controller": instance.Name},
+		); err != nil {
+			return false, err
+		}
+		if len(pods.Items) == 0 {
+			return false, nil
+		}
+		isReady := false
+		for i := range pods.Items {
+			pod := &pods.Items[i]
+			if pod.Status.Phase != corev1.PodRunning {
+				continue
+			}
+			for _, cond := range pod.Status.Conditions {
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					isReady = true
+					break
+				}
+			}
+			if isReady {
+				break
+			}
+		}
+		if !isReady {
 			return false, nil
 		}
 	}

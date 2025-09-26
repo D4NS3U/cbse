@@ -40,7 +40,20 @@ type SimulationExperimentSpec struct {
 
 	// +kubebuilder:validation:Required
 	ExperimentalDesignService ExperimentalDesignServiceSpec `json:"experimentalDesignService"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +kubebuilder:default=ClusterIP
+	DefaultServiceType ServiceType `json:"defaultServiceType,omitempty"`
 }
+
+type ServiceType string
+
+const (
+	ServiceTypeClusterIP    ServiceType = "ClusterIP"
+	ServiceTypeNodePort     ServiceType = "NodePort"
+	ServiceTypeLoadBalancer ServiceType = "LoadBalancer"
+)
 
 // DatabaseSpec is unchanged from alpha1 (keep wire-compat where possible).
 // +kubebuilder:validation:Required
@@ -51,6 +64,17 @@ type DatabaseSpec struct {
 	DBName   string `json:"dbname"`
 	User     string `json:"user"`
 	Password string `json:"password"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +kubebuilder:default=ClusterIP
+	ServiceType ServiceType `json:"serviceType,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=30000
+	// +kubebuilder:validation:Maximum=32767
+	NodePort *int32 `json:"nodePort,omitempty"`
+
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port"`
@@ -75,6 +99,16 @@ type TranslatorSpec struct {
 	// Base image used to build executable model per scenario.
 	BaseImage string `json:"baseimage"`
 
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +kubebuilder:default=ClusterIP
+	ServiceType ServiceType `json:"serviceType,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=30000
+	// +kubebuilder:validation:Maximum=32767
+	NodePort *int32 `json:"nodePort,omitempty"`
+
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	// +kubebuilder:default=8080
@@ -93,6 +127,16 @@ type TranslatorSpec struct {
 // +kubebuilder:validation:Required
 type PostProcessingSpec struct {
 	Image string `json:"image"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +kubebuilder:default=ClusterIP
+	ServiceType ServiceType `json:"serviceType,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=30000
+	// +kubebuilder:validation:Maximum=32767
+	NodePort *int32 `json:"nodePort,omitempty"`
 
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
@@ -122,6 +166,16 @@ type ExperimentalDesignServiceSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default={}
 	Args []string `json:"args,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Enum=ClusterIP;NodePort;LoadBalancer
+	// +kubebuilder:default=ClusterIP
+	ServiceType ServiceType `json:"serviceType,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=30000
+	// +kubebuilder:validation:Maximum=32767
+	NodePort *int32 `json:"nodePort,omitempty"`
 
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535

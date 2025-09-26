@@ -4,7 +4,7 @@ metadata:
   labels:
     app.kubernetes.io/name: experiment-operator
     app.kubernetes.io/managed-by: kustomize
-  name: simulationexperiment-sample
+  name: simulationexperiment-clusterip
   namespace: default
 spec:
   defaultServiceType: ClusterIP
@@ -16,7 +16,6 @@ spec:
     user: postgres
     password: postgres
     port: 5432
-    serviceType: ClusterIP
   resultDatabase:
     image: busybox:latest
     command: ["tail"]
@@ -31,14 +30,11 @@ spec:
     args: ["-f", "/dev/null"]
     repository: translator-repo
     baseimage: translator-baseimage
-    serviceType: NodePort
-    nodePort: 31080
     port: 8080
   postProcessingService:
     image: busybox:latest
     command: ["tail"]
     args: ["-f", "/dev/null"]
-    serviceType: LoadBalancer
     port: 8081
   experimentalDesignService:
     design: |
@@ -48,5 +44,4 @@ spec:
     image: busybox:latest
     command: ["tail"]
     args: ["-f", "/dev/null"]
-    serviceType: ClusterIP
     port: 8082

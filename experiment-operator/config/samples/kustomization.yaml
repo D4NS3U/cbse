@@ -2,4 +2,7 @@
 resources:
 - experiment_alpha1_simulationexperiment.yaml
 - experiment_alpha2_simulationexperiment.yaml
+- experiment_alpha2_simulationexperiment_clusterip.yaml
+- experiment_alpha2_simulationexperiment_nodeport.yaml
+- experiment_alpha2_simulationexperiment_loadbalancer.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

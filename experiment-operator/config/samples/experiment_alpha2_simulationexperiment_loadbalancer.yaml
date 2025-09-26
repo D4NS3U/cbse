@@ -4,10 +4,10 @@ metadata:
   labels:
     app.kubernetes.io/name: experiment-operator
     app.kubernetes.io/managed-by: kustomize
-  name: simulationexperiment-sample
+  name: simulationexperiment-loadbalancer
   namespace: default
 spec:
-  defaultServiceType: ClusterIP
+  defaultServiceType: LoadBalancer
   detailDatabase:
     image: busybox:latest
     command: ["tail"]
@@ -16,7 +16,7 @@ spec:
     user: postgres
     password: postgres
     port: 5432
-    serviceType: ClusterIP
+    serviceType: LoadBalancer
   resultDatabase:
     image: busybox:latest
     command: ["tail"]
@@ -25,14 +25,14 @@ spec:
     user: postgres
     password: postgres
     port: 5432
+    serviceType: LoadBalancer
   translator:
     image: busybox:latest
     command: ["tail"]
     args: ["-f", "/dev/null"]
     repository: translator-repo
     baseimage: translator-baseimage
-    serviceType: NodePort
-    nodePort: 31080
+    serviceType: LoadBalancer
     port: 8080
   postProcessingService:
     image: busybox:latest
@@ -48,5 +48,5 @@ spec:
     image: busybox:latest
     command: ["tail"]
     args: ["-f", "/dev/null"]
-    serviceType: ClusterIP
+    serviceType: LoadBalancer
     port: 8082
