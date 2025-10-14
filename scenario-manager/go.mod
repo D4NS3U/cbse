@@ -1,4 +1,4 @@
-module cbse.terministic.de/scenario-manager
+module github.com/D4NS3U/cbse/scenario-manager
 
 go 1.24.0
 
@@ -8,8 +8,6 @@ require (
 	k8s.io/client-go v0.33.0
 	sigs.k8s.io/controller-runtime v0.21.0
 )
-
-replace github.com/D4NS3U/cbse/experiment-operator => ../experiment-operator
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -50,3 +48,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.6.0 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
 )
+
+replace github.com/D4NS3U/cbse/experiment-operator => ../experiment-operator

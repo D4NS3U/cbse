@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"cbse.terministic.de/scenario-manager/internal/kube"
+	"github.com/D4NS3U/cbse/scenario-manager/internal/kube"
 )
 
 // main is the entrypoint of the Scenario Manager service.
