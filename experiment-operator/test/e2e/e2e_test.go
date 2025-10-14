@@ -27,7 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"cbse.terministic.de/experiment-operator/test/utils"
+	"github.com/D4NS3U/cbse/experiment-operator/test/utils"
 )
 
 // namespace where the project is deployed in

@@ -1,4 +1,4 @@
-module cbse.terministic.de/experiment-operator
+module github.com/D4NS3U/cbse/experiment-operator
 
 go 1.24.0
 

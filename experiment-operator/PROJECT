@@ -7,7 +7,7 @@ domain: cbse.terministic.de
 layout:
 - go.kubebuilder.io/v4
 projectName: experiment-operator
-repo: cbse.terministic.de/experiment-operator
+repo: github.com/D4NS3U/cbse/experiment-operator
 resources:
 - api:
     crdVersion: v1
@@ -16,7 +16,7 @@ resources:
   domain: cbse.terministic.de
   group: experiment
   kind: SimulationExperiment
-  path: cbse.terministic.de/experiment-operator/api/alpha1
+  path: github.com/D4NS3U/cbse/experiment-operator/api/alpha1
   version: alpha1
 - api:
     crdVersion: v1
@@ -24,7 +24,7 @@ resources:
   domain: cbse.terministic.de
   group: experiment
   kind: SimulationExperiment
-  path: cbse.terministic.de/experiment-operator/api/alpha2
+  path: github.com/D4NS3U/cbse/experiment-operator/api/alpha2
   version: alpha2
   webhooks:
     conversion: true
