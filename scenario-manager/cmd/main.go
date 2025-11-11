@@ -1,45 +1,58 @@
-package cmd
+package main
 
 import (
 	"context"
 	"log"
-	"os"
-	"os/signal"
-	"syscall"
+	"time"
 
+	"github.com/D4NS3U/cbse/scenario-manager/internal/coredb"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/kube"
 )
 
-// main is the entrypoint of the Scenario Manager service.
-// Right now it just idles indefinitely until a termination signal arrives.
+const (
+	maxCoreDBAttempts = 6
+	coreDBRetryDelay  = 10 * time.Second
+)
+
+// main bootstraps the Scenario Manager by ensuring all critical dependencies are reachable.
 func main() {
-	// Create a cancellable context that listens for system signals (SIGINT, SIGTERM).
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	checkingDependencies()
+	runScenarioManager()
+}
 
-	// Channel to listen for OS signals.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+func checkingDependencies() {
+	ctx := context.Background()
+	for attempt := 1; attempt <= maxCoreDBAttempts; attempt++ {
+		if coredb.CoreDBConnect() {
+			log.Printf("Core DB connected on attempt %d.", attempt)
+			break
+		}
 
-	log.Println("Scenario Manager started. Waiting for tasks...")
+		if attempt == maxCoreDBAttempts {
+			log.Fatalf("Core DB connection failed after %d attempts.", maxCoreDBAttempts)
+		}
 
-	experiments, err := kube.ListSimulationExperiments(ctx, "")
-	if err != nil {
-		log.Printf("Failed to list SimulationExperiments: %v", err)
-	} else {
-		log.Printf("Found %d SimulationExperiments in the cluster", len(experiments))
+		log.Printf("Core DB connection attempt %d/%d failed. Retrying in %s...", attempt, maxCoreDBAttempts, coreDBRetryDelay)
+		time.Sleep(coreDBRetryDelay)
 	}
 
-	// Goroutine: Wait for termination signal and trigger cancellation.
-	go func() {
-		sig := <-sigCh
-		log.Printf("Received signal: %s. Shutting down...", sig)
-		cancel()
-	}()
+	if !coredb.EnsureTablesAvailable(ctx) {
+		log.Fatalf("Required Core DB tables are unavailable.")
+	}
 
-	// Idle loop: keeps the process alive until context is canceled.
-	<-ctx.Done()
+	if kube.KubeConnect() {
+		log.Println("Kubernetes client initialized.")
+		return
+	}
 
-	// Cleanup logic (if needed later, e.g., closing DB connections).
-	log.Println("Scenario Manager stopped gracefully.")
+	if kube.RunningInCluster() {
+		log.Fatalf("Running inside a Kubernetes cluster but failed to initialize the Kubernetes client.")
+	}
+
+	log.Println("Kubernetes client not initialized because no in-cluster configuration was detected.")
+}
+
+func runScenarioManager() {
+	log.Println("Scenario Manager is ready; awaiting future work loop.")
+	select {}
 }
