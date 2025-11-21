@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -20,16 +21,29 @@ func TestKubeConnectAndListSimulationExperiments(t *testing.T) {
 		t.Skipf("KubeConnect could not find an in-cluster configuration; skipping Kubernetes integration test (runningInCluster=%v)", RunningInCluster())
 	}
 
+	t.Log("Starting Kubernetes integration test...")
+
 	client := Client()
+
+	var errs []string
 	if client == nil {
-		t.Fatalf("Client returned nil after a successful KubeConnect call")
+		errs = append(errs, "Client returned nil after a successful KubeConnect call")
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		namespace := os.Getenv(testNamespaceEnv)
+		if _, err := ListSimulationExperiments(ctx, client, namespace); err != nil {
+			errs = append(errs, fmt.Sprintf("ListSimulationExperiments failed: %v", err))
+		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	namespace := os.Getenv(testNamespaceEnv)
-	if _, err := ListSimulationExperiments(ctx, client, namespace); err != nil {
-		t.Fatalf("ListSimulationExperiments failed: %v", err)
+	if len(errs) > 0 {
+		for _, err := range errs {
+			t.Logf("Kubernetes integration error: %s", err)
+		}
+		t.Fatalf("Kubernetes integration test failed with %d error(s)", len(errs))
 	}
+
+	t.Log("Kubernetes integration test succeeded.")
 }

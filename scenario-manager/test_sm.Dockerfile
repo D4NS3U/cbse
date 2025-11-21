@@ -46,4 +46,4 @@ RUN go mod download
 # when running the container inside Kubernetes.
 ENV CGO_ENABLED=0
 
-ENTRYPOINT ["go", "test", "./..."]
+ENTRYPOINT ["go", "test", "-v", "-count=1", "./..."]
