@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scenario-manager-postgres
+  labels:
+    app: scenario-manager-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scenario-manager-postgres
+  template:
+    metadata:
+      labels:
+        app: scenario-manager-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              value: scenarios
+            - name: POSTGRES_USER
+              value: scenariomanager
+            - name: POSTGRES_PASSWORD
+              value: scenariomanager
+          ports:
+            - containerPort: 5432
+              name: postgres
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scenario-manager-postgres
+  labels:
+    app: scenario-manager-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: scenario-manager-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
