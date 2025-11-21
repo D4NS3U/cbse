@@ -8,7 +8,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// ListSimulationExperiments discovers SimulationExperiment resources from the cluster.
+// ListSimulationExperiments fetches SimulationExperiment CRs from the cluster,
+// optionally scoping the list to a namespace when one is provided. The slice of
+// domain objects is returned so callers can reconcile desired state.
 func ListSimulationExperiments(ctx context.Context, k8sClient client.Client, namespace string) ([]experimentalpha2.SimulationExperiment, error) {
 	var list experimentalpha2.SimulationExperimentList
 	var opts []client.ListOption

@@ -1,3 +1,5 @@
+// Package kube contains helpers for establishing Kubernetes API clients and
+// interacting with SimulationExperiment custom resources.
 package kube
 
 import (
@@ -11,7 +13,11 @@ import (
 )
 
 var (
-	k8sClient        client.Client
+	// k8sClient stores the shared controller-runtime client instance used across
+	// the Scenario Manager to query and mutate cluster resources.
+	k8sClient client.Client
+	// runningInCluster tracks whether an in-cluster configuration was detected
+	// so callers can distinguish between local development and controller pods.
 	runningInCluster bool
 )
 

@@ -1,3 +1,5 @@
+// Package coredb centralizes connectivity and schema-management logic for the
+// Scenario Manager's PostgreSQL-compatible persistence layer.
 package coredb
 
 import (
@@ -20,6 +22,8 @@ const (
 	defaultProjectTbl        = "project"
 )
 
+// coreDBPool stores the lazily initialized database handle shared throughout
+// the Scenario Manager process.
 var coreDBPool *sql.DB
 
 // CoreDBConnect initializes and retains the shared core database connection pool.
@@ -69,6 +73,8 @@ func CoreDBConnect() bool {
 	return true
 }
 
+// buildCoreDBConnString merges the base DSN with the provided credentials so
+// the pgx driver receives a fully-qualified connection string.
 func buildCoreDBConnString(base, username, password string) (string, error) {
 	parsed, err := url.Parse(base)
 	if err != nil {
