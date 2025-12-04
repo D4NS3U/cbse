@@ -29,6 +29,28 @@ func main() {
 // applies schema checks, confirms the NATS broker is reachable, and finally
 // initializes the Kubernetes client used to coordinate SimulationExperiments.
 func checkingDependencies() {
+	if kube.KubeConnect() {
+		log.Println("Kubernetes client initialized.")
+	} else if kube.RunningInCluster() {
+		log.Fatalf("Running inside a Kubernetes cluster but failed to initialize the Kubernetes client.")
+	} else {
+		log.Println("Kubernetes client not initialized because no in-cluster configuration was detected.")
+	}
+
+	for attempt := 1; attempt <= maxNATSAttempts; attempt++ {
+		if nats.Connect() {
+			log.Printf("NATS broker connected on attempt %d.", attempt)
+			break
+		}
+
+		if attempt == maxNATSAttempts {
+			log.Fatalf("NATS connection failed after %d attempts.", maxNATSAttempts)
+		}
+
+		log.Printf("NATS connection attempt %d/%d failed. Retrying in %s...", attempt, maxNATSAttempts, natsRetryDelay)
+		time.Sleep(natsRetryDelay)
+	}
+
 	ctx := context.Background()
 	for attempt := 1; attempt <= maxCoreDBAttempts; attempt++ {
 		if coredb.CoreDBConnect() {
@@ -47,31 +69,6 @@ func checkingDependencies() {
 	if !coredb.EnsureTablesAvailable(ctx) {
 		log.Fatalf("Required Core DB tables are unavailable.")
 	}
-
-	for attempt := 1; attempt <= maxNATSAttempts; attempt++ {
-		if nats.Connect() {
-			log.Printf("NATS broker connected on attempt %d.", attempt)
-			break
-		}
-
-		if attempt == maxNATSAttempts {
-			log.Fatalf("NATS connection failed after %d attempts.", maxNATSAttempts)
-		}
-
-		log.Printf("NATS connection attempt %d/%d failed. Retrying in %s...", attempt, maxNATSAttempts, natsRetryDelay)
-		time.Sleep(natsRetryDelay)
-	}
-
-	if kube.KubeConnect() {
-		log.Println("Kubernetes client initialized.")
-		return
-	}
-
-	if kube.RunningInCluster() {
-		log.Fatalf("Running inside a Kubernetes cluster but failed to initialize the Kubernetes client.")
-	}
-
-	log.Println("Kubernetes client not initialized because no in-cluster configuration was detected.")
 }
 
 // runScenarioManager represents the long-running control loop placeholder.

@@ -52,7 +52,8 @@ func createSchema(ctx context.Context) error {
 	createProjectTable := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 		id SERIAL PRIMARY KEY,
 		project_name TEXT NOT NULL,
-		number_of_components INTEGER NOT NULL DEFAULT 0
+		number_of_components INTEGER NOT NULL DEFAULT 0,
+		status TEXT NOT NULL DEFAULT ''
 	)`, projectTable)
 
 	if _, err := coreDBPool.ExecContext(ctx, createProjectTable); err != nil {
