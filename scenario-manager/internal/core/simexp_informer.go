@@ -1,4 +1,4 @@
-package kube
+package core
 
 import (
 	"context"
@@ -222,6 +222,8 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 	return nil
 }
 
+// persistSimulationExperiment writes a summary of the SimulationExperiment into
+// the core DB so the Scenario Manager can recover state after restarts.
 func persistSimulationExperiment(ctx context.Context, se *experimentalpha2.SimulationExperiment) error {
 	if se == nil {
 		return fmt.Errorf("SimulationExperiment is nil")
@@ -236,6 +238,8 @@ func persistSimulationExperiment(ctx context.Context, se *experimentalpha2.Simul
 	return coredb.UpsertProject(ctx, project)
 }
 
+// countExperimentComponents returns how many optional components are configured
+// in the SimulationExperiment spec.
 func countExperimentComponents(spec experimentalpha2.SimulationExperimentSpec) int {
 	count := 0
 
@@ -258,6 +262,7 @@ func countExperimentComponents(spec experimentalpha2.SimulationExperimentSpec) i
 	return count
 }
 
+// databaseSpecDefined reports whether a database spec has any configuration set.
 func databaseSpecDefined(spec experimentalpha2.DatabaseSpec) bool {
 	return spec.Image != "" ||
 		spec.Host != "" ||
@@ -271,6 +276,7 @@ func databaseSpecDefined(spec experimentalpha2.DatabaseSpec) bool {
 		spec.ServiceType != ""
 }
 
+// translatorSpecDefined reports whether a translator spec has any configuration set.
 func translatorSpecDefined(spec experimentalpha2.TranslatorSpec) bool {
 	return spec.Image != "" ||
 		spec.Repository != "" ||
@@ -282,6 +288,7 @@ func translatorSpecDefined(spec experimentalpha2.TranslatorSpec) bool {
 		spec.ServiceType != ""
 }
 
+// postProcessingSpecDefined reports whether a post-processing spec has any configuration set.
 func postProcessingSpecDefined(spec experimentalpha2.PostProcessingSpec) bool {
 	return spec.Image != "" ||
 		spec.Port != 0 ||
@@ -291,6 +298,7 @@ func postProcessingSpecDefined(spec experimentalpha2.PostProcessingSpec) bool {
 		spec.ServiceType != ""
 }
 
+// experimentalDesignServiceDefined reports whether an experimental design service spec has any configuration set.
 func experimentalDesignServiceDefined(spec experimentalpha2.ExperimentalDesignServiceSpec) bool {
 	return spec.Design != "" ||
 		spec.Image != "" ||

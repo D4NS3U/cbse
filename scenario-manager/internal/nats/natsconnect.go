@@ -29,6 +29,7 @@ var (
 
 // Connect ensures a shared connection to the configured NATS broker, applying
 // environment derived defaults suitable for in-cluster service endpoints.
+// Scenario Manager startup treats a failure to connect as a critical error.
 func Connect() bool {
 	connMu.Lock()
 	defer connMu.Unlock()

@@ -27,6 +27,7 @@ const (
 var coreDBPool *sql.DB
 
 // CoreDBConnect initializes and retains the shared core database connection pool.
+// Scenario Manager startup treats a failure to connect as a critical error.
 func CoreDBConnect() bool {
 	if coreDBPool != nil {
 		return true

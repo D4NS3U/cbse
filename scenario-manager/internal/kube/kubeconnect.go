@@ -27,7 +27,7 @@ func RunningInCluster() bool {
 }
 
 // KubeConnect initializes and retains the shared Kubernetes client tailored for SimulationExperiment resources.
-// It automatically attempts to load the in-cluster configuration and reports whether a client was established.
+// It attempts to load the in-cluster configuration; startup treats any failure as fatal for the Scenario Manager.
 func KubeConnect() bool {
 	if k8sClient != nil {
 		return true
@@ -36,7 +36,7 @@ func KubeConnect() bool {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		runningInCluster = false
-		log.Printf("Kubernetes in-cluster config unavailable: %v", err)
+		log.Fatalf("Kubernetes in-cluster config unavailable: %v", err)
 		return false
 	}
 
