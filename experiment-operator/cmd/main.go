@@ -37,8 +37,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	experimentalpha2 "cbse.terministic.de/experiment-operator/api/alpha2"
-	"cbse.terministic.de/experiment-operator/internal/controller"
+	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
+	"github.com/D4NS3U/cbse/experiment-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 

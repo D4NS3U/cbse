@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scenario-manager-config
+  labels:
+    app: scenario-manager
+    component: config
+  # resources default to the namespace where the manifest is applied
+  # to keep the example minimal.
+data:
+  SCENARIO_MANAGER_CORE_DB_DSN: postgres://scenario-manager-postgres:5432/scenarios?sslmode=disable
+  SCENARIO_MANAGER_CORE_DB_USER: scenariomanager
+  SCENARIO_MANAGER_CORE_DB_PASSWORD: scenariomanager
+  SCENARIO_MANAGER_CORE_DB_SCENARIO_STATUS_TABLE: scenario_status
+  SCENARIO_MANAGER_CORE_DB_PROJECT_TABLE: project
+  SCENARIO_MANAGER_NATS_URL: nats://nats:4222
+  SCENARIO_MANAGER_NATS_USER: ""
+  SCENARIO_MANAGER_NATS_PASSWORD: ""
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scenario-manager
+  labels:
+    app: scenario-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scenario-manager
+rules:
+  - apiGroups:
+      - experiment.cbse.terministic.de
+    resources:
+      - simulationexperiments
+      - simulationexperiments/status
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scenario-manager
+subjects:
+  - kind: ServiceAccount
+    name: scenario-manager
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scenario-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scenario-manager-test
+  labels:
+    app: scenario-manager-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scenario-manager-test
+  template:
+    metadata:
+      labels:
+        app: scenario-manager-test
+    spec:
+      serviceAccountName: scenario-manager
+      imagePullSecrets:
+        - name: harbor-pull
+      containers:
+        - name: scenario-manager
+          image: logsimharbor.informatik.unibw-muenchen.de/cbse/scenario-manager-test:v0.1
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: scenario-manager-config

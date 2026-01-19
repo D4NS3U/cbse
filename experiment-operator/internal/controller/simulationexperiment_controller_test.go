@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	experimentalpha2 "cbse.terministic.de/experiment-operator/api/alpha2"
+	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
 )
 
 var _ = Describe("SimulationExperiment Controller", func() {

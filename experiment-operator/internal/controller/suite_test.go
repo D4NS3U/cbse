@@ -32,7 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	experimentalpha2 "cbse.terministic.de/experiment-operator/api/alpha2"
+	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
 	// +kubebuilder:scaffold:imports
 )
 

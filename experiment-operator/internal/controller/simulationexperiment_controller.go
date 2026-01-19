@@ -22,7 +22,7 @@ import (
 	"net"
 	"time"
 
-	experimentalpha2 "cbse.terministic.de/experiment-operator/api/alpha2"
+	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
