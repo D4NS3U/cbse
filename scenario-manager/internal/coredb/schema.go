@@ -63,6 +63,7 @@ func createSchema(ctx context.Context) error {
 	scenarioStatusTable := scenarioStatusTableName()
 	createScenarioStatusTable := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 		id SERIAL PRIMARY KEY,
+		project_id INTEGER NOT NULL REFERENCES %s(id) ON DELETE CASCADE,
 		state TEXT NOT NULL,
 		priority INTEGER NOT NULL DEFAULT 0,
 		number_of_reps INTEGER NOT NULL DEFAULT 0,
@@ -70,13 +71,64 @@ func createSchema(ctx context.Context) error {
 		recipe_info JSONB,
 		container_image TEXT,
 		confidence_metric DOUBLE PRECISION
-	)`, scenarioStatusTable)
+	)`, scenarioStatusTable, projectTable)
 
 	if _, err := coreDBPool.ExecContext(ctx, createScenarioStatusTable); err != nil {
 		return fmt.Errorf("create %s: %w", scenarioStatusTable, err)
 	}
 
+	if err := ensureScenarioStatusProjectLink(ctx, scenarioStatusTable, projectTable); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// ensureScenarioStatusProjectLink migrates older schema versions where the
+// scenario status table existed before project_id was introduced.
+func ensureScenarioStatusProjectLink(ctx context.Context, scenarioStatusTable, projectTable string) error {
+	addColumn := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS project_id INTEGER`, scenarioStatusTable)
+	if _, err := coreDBPool.ExecContext(ctx, addColumn); err != nil {
+		return fmt.Errorf("ensure %s.project_id column: %w", scenarioStatusTable, err)
+	}
+
+	fkExists, err := scenarioStatusProjectFKExists(ctx, scenarioStatusTable, projectTable)
+	if err != nil {
+		return fmt.Errorf("check %s.project_id foreign key: %w", scenarioStatusTable, err)
+	}
+	if !fkExists {
+		addFK := fmt.Sprintf(`ALTER TABLE %s ADD FOREIGN KEY (project_id) REFERENCES %s(id) ON DELETE CASCADE`, scenarioStatusTable, projectTable)
+		if _, err := coreDBPool.ExecContext(ctx, addFK); err != nil {
+			return fmt.Errorf("add %s.project_id foreign key: %w", scenarioStatusTable, err)
+		}
+	}
+
+	return nil
+}
+
+// scenarioStatusProjectFKExists reports whether scenario_status.project_id is
+// already constrained to project.id.
+func scenarioStatusProjectFKExists(ctx context.Context, scenarioStatusTable, projectTable string) (bool, error) {
+	var exists bool
+	err := coreDBPool.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_constraint c
+			JOIN pg_attribute a
+				ON a.attrelid = c.conrelid
+				AND a.attnum = ANY (c.conkey)
+			WHERE c.contype = 'f'
+				AND c.conrelid = to_regclass($1)
+				AND c.confrelid = to_regclass($2)
+				AND a.attname = 'project_id'
+		)`,
+		scenarioStatusTable,
+		projectTable,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // tableExists reports whether PostgreSQL can resolve the supplied table via

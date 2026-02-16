@@ -103,16 +103,13 @@ type ScenarioBatch struct {
 	Scenarios []ScenarioStatusPayload `json:"scenarios"`
 }
 
-// ScenarioStatusPayload matches the scenario status schema expected by the core DB.
-// It is translated into coredb.ScenarioStatusRecord before persistence.
+// ScenarioStatusPayload is the subset provided by EDS for each scenario.
+// Scenario Manager fills remaining scenario_status columns on insert.
 type ScenarioStatusPayload struct {
-	State                string          `json:"state"`
-	Priority             int             `json:"priority"`
-	NumberOfReps         int             `json:"number_of_reps"`
-	NumberOfComputedReps int             `json:"number_of_computed_reps"`
-	RecipeInfo           json.RawMessage `json:"recipe_info,omitempty"`
-	ContainerImage       string          `json:"container_image,omitempty"`
-	ConfidenceMetric     *float64        `json:"confidence_metric,omitempty"`
+	Priority         int             `json:"priority"`
+	NumberOfReps     int             `json:"number_of_reps"`
+	RecipeInfo       json.RawMessage `json:"recipe_info,omitempty"`
+	ConfidenceMetric *float64        `json:"confidence_metric,omitempty"`
 }
 
 // ScenarioBatchAck reports how many scenarios were persisted from the batch.
@@ -126,6 +123,11 @@ type ScenarioBatchAck struct {
 	Failed   int    `json:"failed"`
 	Reason   string `json:"reason,omitempty"`
 }
+
+// EDSBatchProcessor persists a decoded scenario batch and returns how many
+// records were inserted. Scenario Manager can provide a custom processor to
+// control ordering or additional handling.
+type EDSBatchProcessor func(ctx context.Context, batch ScenarioBatch) (int, error)
 
 // edsConfig stores the runtime configuration derived from environment variables.
 // It controls subject names, durable consumer tuning, and batch size limits.
@@ -149,12 +151,21 @@ type edsConfig struct {
 // for the batch subject so inserts are ACKed only after persistence succeeds.
 // The shared NATS connection from natsconnect.go is reused for all subscriptions.
 func StartEDSComms(ctx context.Context) error {
+	return StartEDSCommsWithProcessor(ctx, nil)
+}
+
+// StartEDSCommsWithProcessor wires up NATS handlers that coordinate scenario
+// intake from the EDS, using processor to persist validated batches.
+func StartEDSCommsWithProcessor(ctx context.Context, processor EDSBatchProcessor) error {
 	nc := Connection()
 	if nc == nil {
 		return errors.New("NATS connection is nil; dependency check has not initialized it")
 	}
 	if !nc.IsConnected() {
 		return errors.New("NATS connection is not ready")
+	}
+	if processor == nil {
+		processor = insertScenarioBatch
 	}
 
 	cfg := loadEDSConfig()
@@ -176,7 +187,7 @@ func StartEDSComms(ctx context.Context) error {
 	}
 
 	batchSub, err := js.QueueSubscribe(cfg.streamSubject, cfg.queueGroup, func(msg *natsgo.Msg) {
-		handleEDSScenarioBatch(ctx, msg, cfg)
+		handleEDSScenarioBatch(ctx, msg, cfg, processor)
 	}, natsgo.Durable(cfg.consumerName), natsgo.ManualAck(), natsgo.AckWait(cfg.ackWait), natsgo.MaxAckPending(cfg.maxAckPending))
 	if err != nil {
 		_ = availableSub.Unsubscribe()
@@ -238,7 +249,7 @@ func handleEDSAvailability(ctx context.Context, msg *natsgo.Msg, cfg edsConfig) 
 // handleEDSScenarioBatch validates the batch payload, translates it into DB
 // records, and inserts the scenario status rows. JetStream ACK/NACK is tied
 // to persistence success or failure to ensure at-least-once delivery.
-func handleEDSScenarioBatch(ctx context.Context, msg *natsgo.Msg, cfg edsConfig) {
+func handleEDSScenarioBatch(ctx context.Context, msg *natsgo.Msg, cfg edsConfig, processor EDSBatchProcessor) {
 	if ctx.Err() != nil {
 		respondJSON(msg, ScenarioBatchAck{Status: "error", Reason: "scenario manager shutting down"})
 		nakMsg(msg)
@@ -258,6 +269,12 @@ func handleEDSScenarioBatch(ctx context.Context, msg *natsgo.Msg, cfg edsConfig)
 		ackMsg(msg)
 		return
 	}
+	batch.Project = strings.TrimSpace(batch.Project)
+	if batch.Project == "" {
+		respondJSON(msg, ScenarioBatchAck{Status: "error", BatchID: batch.BatchID, Reason: "scenario batch project is required"})
+		ackMsg(msg)
+		return
+	}
 
 	if cfg.maxBatch > 0 && len(batch.Scenarios) > cfg.maxBatch {
 		respondJSON(msg, ScenarioBatchAck{
@@ -271,23 +288,10 @@ func handleEDSScenarioBatch(ctx context.Context, msg *natsgo.Msg, cfg edsConfig)
 		return
 	}
 
-	records := make([]coredb.ScenarioStatusRecord, 0, len(batch.Scenarios))
-	for _, scenario := range batch.Scenarios {
-		records = append(records, coredb.ScenarioStatusRecord{
-			State:                scenario.State,
-			Priority:             scenario.Priority,
-			NumberOfReps:         scenario.NumberOfReps,
-			NumberOfComputedReps: scenario.NumberOfComputedReps,
-			RecipeInfo:           scenario.RecipeInfo,
-			ContainerImage:       scenario.ContainerImage,
-			ConfidenceMetric:     scenario.ConfidenceMetric,
-		})
-	}
-
-	insertCtx, cancel := context.WithTimeout(ctx, cfg.insertTimeout)
+	processCtx, cancel := context.WithTimeout(ctx, cfg.insertTimeout)
 	defer cancel()
 
-	inserted, err := coredb.InsertScenarioStatusBatch(insertCtx, records)
+	inserted, err := processor(processCtx, batch)
 	ack := ScenarioBatchAck{
 		Status:   "accepted",
 		BatchID:  batch.BatchID,
@@ -306,6 +310,34 @@ func handleEDSScenarioBatch(ctx context.Context, msg *natsgo.Msg, cfg edsConfig)
 
 	respondJSON(msg, ack)
 	ackMsg(msg)
+}
+
+func insertScenarioBatch(ctx context.Context, batch ScenarioBatch) (int, error) {
+	project := strings.TrimSpace(batch.Project)
+	if project == "" {
+		return 0, fmt.Errorf("scenario batch project must not be empty")
+	}
+
+	projectID, err := coredb.ProjectIDByName(ctx, project)
+	if err != nil {
+		return 0, fmt.Errorf("resolve project %q: %w", project, err)
+	}
+
+	records := make([]coredb.ScenarioStatusRecord, 0, len(batch.Scenarios))
+	for _, scenario := range batch.Scenarios {
+		records = append(records, coredb.ScenarioStatusRecord{
+			ProjectID:            projectID,
+			State:                coredb.DefaultScenarioState,
+			Priority:             scenario.Priority,
+			NumberOfReps:         scenario.NumberOfReps,
+			NumberOfComputedReps: coredb.DefaultScenarioComputedReps,
+			RecipeInfo:           scenario.RecipeInfo,
+			ContainerImage:       coredb.DefaultScenarioContainerImage,
+			ConfidenceMetric:     scenario.ConfidenceMetric,
+		})
+	}
+
+	return coredb.InsertScenarioStatusBatch(ctx, records)
 }
 
 // respondJSON replies to request messages with a JSON payload when a reply
