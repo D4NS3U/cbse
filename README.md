@@ -1,25 +1,31 @@
 # Container-Based Simulation Environment (CBSE)
 
-The **Container-Based Simulation Environment (CBSE)** integrates large-scale simulation workflows with **Kubernetes-native infrastructure**.
+The **Container-Based Simulation Environment (CBSE)** explores the integration of large-scale simulation workflows with **Kubernetes-native infrastructure**.
 
-CBSE currently consists of three core components:
-
-- **Experiment Operator (ExOp)** – Kubernetes operator managing simulation experiments  
-- **SimulationExperiment CR** – Custom Resource definition for experiment configuration  
-- **Scenario Manager (SM)** – Backend service coordinating scenario execution and lifecycle management  
+CBSE is a research-driven framework investigating how container orchestration can serve as computational infrastructure for simulation experiments.
 
 ---
 
-## Project Status (dev branch)
+## Project Status
 
-🚧 **Work in Progress**
+⚠️ **Research Prototype – Early Development Stage**
 
-This branch reflects ongoing development.
+The repository currently does **not** provide a functional simulation execution framework.
 
-- The **Experiment Operator** successfully manages `SimulationExperiment` resources, but does not yet provide full execution functionality.
-- The **Scenario Manager** is under active development and not yet production-ready.
+Implemented so far:
 
-Interfaces and functionality may change.
+- **Experiment Operator (ExOp)**
+  - Provides a tested `alpha2` API for the `SimulationExperiment` Custom Resource Definition (CRD)
+  - Supports creation and lifecycle handling of CR instances
+
+Not yet implemented:
+
+- Functional experiment execution
+- Scenario orchestration
+- Distributed replication management
+- Production-ready feature set
+
+Interfaces and behavior may change without notice.
 
 ---
 
@@ -40,4 +46,4 @@ More: [ResearchGate Profile](https://www.researchgate.net/profile/Daniel-Seuffer
 
 ## License
 
-Licensed under the **Apache License 2.0**. See `LICENSE` for details.
+Licensed under the **Apache License 2.0**. See `LICENSE`.
