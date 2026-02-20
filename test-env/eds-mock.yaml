@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eds-mock
+  labels:
+    app: eds-mock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eds-mock
+  template:
+    metadata:
+      labels:
+        app: eds-mock
+    spec:
+      containers:
+        - name: eds-mock
+          image: eds-mock:sm-e2e
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NATS_URL
+              value: nats://nats:4222
+            - name: AVAILABILITY_SUBJECT
+              value: cbse.eds.scenarios.available
+            - name: PROJECT_NAME
+              value: sm-eds-e2e
+            - name: BATCH_ID_PREFIX
+              value: batch-sm-eds-e2e
+            - name: TOTAL_BATCHES
+              value: "2"
+            - name: SCENARIOS_PER_BATCH
+              value: "2"
+            - name: REQUEST_TIMEOUT_SECONDS
+              value: "5"
+            - name: RETRY_DELAY_SECONDS
+              value: "2"
+            - name: REQUEST_RETRIES
+              value: "60"
+            - name: CONNECT_RETRIES
+              value: "60"
+            - name: STARTUP_DELAY_SECONDS
+              value: "3"
+            - name: EDS_KEEP_ALIVE
+              value: "true"

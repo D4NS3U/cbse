@@ -16,6 +16,14 @@ data:
   SCENARIO_MANAGER_NATS_URL: nats://nats:4222
   SCENARIO_MANAGER_NATS_USER: ""
   SCENARIO_MANAGER_NATS_PASSWORD: ""
+  SCENARIO_MANAGER_EDS_AVAILABLE_SUBJECT: cbse.eds.scenarios.available
+  SCENARIO_MANAGER_EDS_BATCH_SUBJECT_TEMPLATE: cbse.{project}.eds.scenarios
+  SCENARIO_MANAGER_EDS_QUEUE_GROUP: scenario-manager-eds
+  SCENARIO_MANAGER_EDS_MAX_BATCH: "1000"
+  SCENARIO_MANAGER_EDS_STREAM: cbse_eds_scenarios
+  SCENARIO_MANAGER_EDS_CONSUMER: scenario-manager-eds-consumer
+  SCENARIO_MANAGER_EDS_ACK_WAIT: 2m
+  SCENARIO_MANAGER_EDS_MAX_ACK_PENDING: "1024"
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -69,12 +77,11 @@ spec:
         app: scenario-manager-test
     spec:
       serviceAccountName: scenario-manager
-      imagePullSecrets:
-        - name: harbor-pull
       containers:
         - name: scenario-manager
-          image: logsimharbor.informatik.unibw-muenchen.de/cbse/scenario-manager-test:v0.1
-          imagePullPolicy: Always
+          # Build and push/pull your current Scenario Manager image before applying.
+          image: scenario-manager-test:eds-e2e
+          imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
                 name: scenario-manager-config
