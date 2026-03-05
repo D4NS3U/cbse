@@ -109,7 +109,7 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 				return
 			}
 
-			if err := persistSimulationExperiment(ctx, se); err != nil {
+			if err := persistAddedSimulationExperiment(ctx, se); err != nil {
 				log.Printf("failed to persist SimulationExperiment %q: %v", se.Name, err)
 			}
 
@@ -133,7 +133,7 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 			oldPhase := oldSE.Status.Phase
 			newPhase := newSE.Status.Phase
 
-			if err := persistSimulationExperiment(ctx, newSE); err != nil {
+			if err := persistUpdatedSimulationExperiment(ctx, oldSE, newSE); err != nil {
 				log.Printf("failed to persist SimulationExperiment %q: %v", newSE.Name, err)
 			}
 
@@ -222,9 +222,9 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 	return nil
 }
 
-// persistSimulationExperiment writes a summary of the SimulationExperiment into
-// the core DB so the Scenario Manager can recover state after restarts.
-func persistSimulationExperiment(ctx context.Context, se *experimentalpha2.SimulationExperiment) error {
+// persistAddedSimulationExperiment writes the initial project row when a
+// SimulationExperiment is observed on add events.
+func persistAddedSimulationExperiment(ctx context.Context, se *experimentalpha2.SimulationExperiment) error {
 	if se == nil {
 		return fmt.Errorf("SimulationExperiment is nil")
 	}
@@ -235,7 +235,38 @@ func persistSimulationExperiment(ctx context.Context, se *experimentalpha2.Simul
 		Status:             se.Status.Phase,
 	}
 
-	return coredb.UpsertProject(ctx, project)
+	_, err := coredb.CreateProject(ctx, project)
+	return err
+}
+
+// persistUpdatedSimulationExperiment updates only mutable project fields that
+// changed on SimulationExperiment update events.
+func persistUpdatedSimulationExperiment(
+	ctx context.Context,
+	oldSE *experimentalpha2.SimulationExperiment,
+	newSE *experimentalpha2.SimulationExperiment,
+) error {
+	if oldSE == nil || newSE == nil {
+		return fmt.Errorf("SimulationExperiment update payload must not be nil")
+	}
+
+	oldComponentCount := countExperimentComponents(oldSE.Spec)
+	newComponentCount := countExperimentComponents(newSE.Spec)
+	oldStatus := oldSE.Status.Phase
+	newStatus := newSE.Status.Phase
+
+	var numberOfComponents *int
+	if oldComponentCount != newComponentCount {
+		numberOfComponents = &newComponentCount
+	}
+
+	var status *string
+	if oldStatus != newStatus {
+		status = &newStatus
+	}
+
+	_, err := coredb.UpdateProjectFields(ctx, newSE.Name, numberOfComponents, status)
+	return err
 }
 
 // countExperimentComponents returns how many optional components are configured

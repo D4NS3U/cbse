@@ -9,10 +9,23 @@ import (
 	"fmt"
 )
 
+const (
+	// DefaultScenarioState is assigned by Scenario Manager when EDS payloads
+	// do not carry a scenario state.
+	DefaultScenarioState = "Pending"
+	// DefaultScenarioComputedReps initializes the computed repetitions counter
+	// until downstream execution updates it.
+	DefaultScenarioComputedReps = 0
+	// DefaultScenarioContainerImage initializes the container image field when
+	// the EDS payload does not provide one.
+	DefaultScenarioContainerImage = ""
+)
+
 // ScenarioStatusRecord captures a single scenario entry destined for the
 // scenario status table.
 // Fields map directly to the scenario_status schema columns created in schema.go.
 type ScenarioStatusRecord struct {
+	ProjectID            int
 	State                string
 	Priority             int
 	NumberOfReps         int
@@ -39,7 +52,7 @@ func InsertScenarioStatusBatch(ctx context.Context, records []ScenarioStatusReco
 		return 0, fmt.Errorf("begin scenario status batch: %w", err)
 	}
 
-	insertQuery := fmt.Sprintf(`INSERT INTO %s (state, priority, number_of_reps, number_of_computed_reps, recipe_info, container_image, confidence_metric) VALUES ($1, $2, $3, $4, $5, $6, $7)`, scenarioStatusTableName())
+	insertQuery := fmt.Sprintf(`INSERT INTO %s (project_id, state, priority, number_of_reps, number_of_computed_reps, recipe_info, container_image, confidence_metric) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, scenarioStatusTableName())
 	stmt, err := tx.PrepareContext(ctx, insertQuery)
 	if err != nil {
 		_ = tx.Rollback()
@@ -49,6 +62,11 @@ func InsertScenarioStatusBatch(ctx context.Context, records []ScenarioStatusReco
 
 	inserted := 0
 	for i, record := range records {
+		if record.ProjectID <= 0 {
+			_ = tx.Rollback()
+			return inserted, fmt.Errorf("insert scenario status %d: project ID must be positive", i)
+		}
+
 		var recipeInfo interface{}
 		if len(record.RecipeInfo) > 0 {
 			recipeInfo = []byte(record.RecipeInfo)
@@ -61,6 +79,7 @@ func InsertScenarioStatusBatch(ctx context.Context, records []ScenarioStatusReco
 
 		if _, err := stmt.ExecContext(
 			ctx,
+			record.ProjectID,
 			record.State,
 			record.Priority,
 			record.NumberOfReps,
