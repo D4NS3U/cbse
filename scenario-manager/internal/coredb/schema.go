@@ -60,6 +60,10 @@ func createSchema(ctx context.Context) error {
 		return fmt.Errorf("create %s: %w", projectTable, err)
 	}
 
+	if err := ensureProjectTableColumns(ctx, projectTable); err != nil {
+		return err
+	}
+
 	scenarioStatusTable := scenarioStatusTableName()
 	createScenarioStatusTable := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 		id SERIAL PRIMARY KEY,
@@ -79,6 +83,22 @@ func createSchema(ctx context.Context) error {
 
 	if err := ensureScenarioStatusProjectLink(ctx, scenarioStatusTable, projectTable); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// ensureProjectTableColumns migrates older schema versions where the project
+// table existed before number_of_components and status were introduced.
+func ensureProjectTableColumns(ctx context.Context, projectTable string) error {
+	addComponents := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS number_of_components INTEGER NOT NULL DEFAULT 0`, projectTable)
+	if _, err := coreDBPool.ExecContext(ctx, addComponents); err != nil {
+		return fmt.Errorf("ensure %s.number_of_components column: %w", projectTable, err)
+	}
+
+	addStatus := fmt.Sprintf(`ALTER TABLE %s ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT ''`, projectTable)
+	if _, err := coreDBPool.ExecContext(ctx, addStatus); err != nil {
+		return fmt.Errorf("ensure %s.status column: %w", projectTable, err)
 	}
 
 	return nil

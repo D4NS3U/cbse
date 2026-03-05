@@ -4,8 +4,8 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-default}"
 PROJECT_NAME="${PROJECT_NAME:-sm-eds-e2e}"
 EXPECTED_SCENARIOS="${EXPECTED_SCENARIOS:-4}"
-SM_IMAGE="${SM_IMAGE:-}"
-EDS_IMAGE="${EDS_IMAGE:-}"
+SM_IMAGE="${SM_IMAGE:-logsimharbor.informatik.unibw-muenchen.de/cbse/scenario-manager-test:v0.2}"
+EDS_IMAGE="${EDS_IMAGE:-logsimharbor.informatik.unibw-muenchen.de/cbse/eds-test:v0.1}"
 SCENARIO_TABLE="${SCENARIO_TABLE:-scenario_status}"
 PROJECT_TABLE="${PROJECT_TABLE:-project}"
 
@@ -29,22 +29,46 @@ kubectl apply -n "${NAMESPACE}" -f "${ROOT_DIR}/test-env/nats-jetstream.yaml"
 echo "[2/10] Applying Scenario Manager resources"
 kubectl apply -n "${NAMESPACE}" -f "${ROOT_DIR}/test-env/manifests.yaml"
 
-if [[ -n "${SM_IMAGE}" ]]; then
-  echo "Updating Scenario Manager image to ${SM_IMAGE}"
-  kubectl set image deployment/scenario-manager-test \
-    -n "${NAMESPACE}" scenario-manager="${SM_IMAGE}"
-fi
+echo "Recreating Scenario Manager pod to avoid rolling-update overlap"
+kubectl scale deployment/scenario-manager-test -n "${NAMESPACE}" --replicas=0
+kubectl rollout status deployment/scenario-manager-test -n "${NAMESPACE}" --timeout=180s
+
+echo "Updating Scenario Manager image to ${SM_IMAGE}"
+kubectl set image deployment/scenario-manager-test \
+  -n "${NAMESPACE}" scenario-manager="${SM_IMAGE}"
+kubectl scale deployment/scenario-manager-test -n "${NAMESPACE}" --replicas=1
 
 echo "[3/10] Waiting for foundational deployments"
 kubectl rollout status deployment/scenario-manager-postgres -n "${NAMESPACE}" --timeout=120s
-kubectl rollout status deployment/nats -n "${NAMESPACE}" --timeout=120s
+kubectl rollout status deployment/sm-eds-nats -n "${NAMESPACE}" --timeout=120s
 kubectl rollout status deployment/scenario-manager-test -n "${NAMESPACE}" --timeout=180s
+
+nats_endpoints="$(
+  kubectl get endpoints -n "${NAMESPACE}" sm-eds-nats \
+    -o jsonpath='{range .subsets[*].addresses[*]}{.ip}{"\n"}{end}' \
+    | sed '/^$/d' | wc -l | tr -d '[:space:]'
+)"
+if [[ ! "${nats_endpoints}" =~ ^[0-9]+$ ]] || (( nats_endpoints < 1 )); then
+  echo "NATS service sm-eds-nats has no ready endpoints in namespace ${NAMESPACE}." >&2
+  kubectl get svc -n "${NAMESPACE}" sm-eds-nats >&2 || true
+  kubectl get endpoints -n "${NAMESPACE}" sm-eds-nats >&2 || true
+  exit 1
+fi
 
 echo "[4/10] Cleaning up prior test rows (best effort)"
 kubectl delete deployment -n "${NAMESPACE}" eds-mock --ignore-not-found >/dev/null 2>&1 || true
 kubectl exec -n "${NAMESPACE}" deploy/scenario-manager-postgres -- \
   psql -U scenariomanager -d scenarios -tAc \
   "DELETE FROM ${PROJECT_TABLE} WHERE project_name='${PROJECT_NAME}'" >/dev/null 2>&1 || true
+
+# Legacy-schema guard: older project tables may miss columns expected by the
+# current Scenario Manager. Keep this best-effort so fresh schemas are untouched.
+kubectl exec -n "${NAMESPACE}" deploy/scenario-manager-postgres -- \
+  psql -U scenariomanager -d scenarios -tAc \
+  "ALTER TABLE ${PROJECT_TABLE} ADD COLUMN IF NOT EXISTS number_of_components INTEGER NOT NULL DEFAULT 0" >/dev/null 2>&1 || true
+kubectl exec -n "${NAMESPACE}" deploy/scenario-manager-postgres -- \
+  psql -U scenariomanager -d scenarios -tAc \
+  "ALTER TABLE ${PROJECT_TABLE} ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT ''" >/dev/null 2>&1 || true
 
 echo "[5/10] Ensuring SimulationExperiment CRD exists"
 kubectl apply -f "${ROOT_DIR}/experiment-operator/config/crd/bases/experiment.cbse.terministic.de_simulationexperiments.yaml"
@@ -78,10 +102,8 @@ kubectl set env deployment/eds-mock -n "${NAMESPACE}" \
   PROJECT_NAME="${PROJECT_NAME}" \
   BATCH_ID_PREFIX="batch-${PROJECT_NAME}"
 
-if [[ -n "${EDS_IMAGE}" ]]; then
-  echo "Updating EDS mock image to ${EDS_IMAGE}"
-  kubectl set image deployment/eds-mock -n "${NAMESPACE}" eds-mock="${EDS_IMAGE}"
-fi
+echo "Updating EDS mock image to ${EDS_IMAGE}"
+kubectl set image deployment/eds-mock -n "${NAMESPACE}" eds-mock="${EDS_IMAGE}"
 
 kubectl rollout status deployment/eds-mock -n "${NAMESPACE}" --timeout=180s
 

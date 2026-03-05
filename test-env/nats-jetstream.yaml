@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: nats-config
+  name: sm-eds-nats-config
 data:
   nats-server.conf: |
     port: 4222
@@ -16,18 +16,18 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nats
+  name: sm-eds-nats
   labels:
-    app: nats
+    app: sm-eds-nats
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nats
+      app: sm-eds-nats
   template:
     metadata:
       labels:
-        app: nats
+        app: sm-eds-nats
     spec:
       containers:
         - name: nats
@@ -49,19 +49,19 @@ spec:
       volumes:
         - name: nats-config
           configMap:
-            name: nats-config
+            name: sm-eds-nats-config
         - name: jetstream-data
           emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: nats
+  name: sm-eds-nats
   labels:
-    app: nats
+    app: sm-eds-nats
 spec:
   selector:
-    app: nats
+    app: sm-eds-nats
   ports:
     - name: client
       port: 4222

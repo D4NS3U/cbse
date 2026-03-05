@@ -22,22 +22,24 @@ This test environment validates the Scenario Manager EDS communication path:
 - A reachable Kubernetes cluster context
 - `kubectl` configured for that cluster
 - Scenario Manager image available to the cluster
-  - default in `manifests.yaml`: `scenario-manager-test:eds-e2e`
+  - default in `manifests.yaml`: `logsimharbor.informatik.unibw-muenchen.de/cbse/scenario-manager-test:v0.2`
   - override at runtime with `SM_IMAGE=<your-image>`
 - EDS mock image available to the cluster
-  - default in `eds-mock.yaml`: `eds-mock:sm-e2e`
+  - default in `eds-mock.yaml`: `logsimharbor.informatik.unibw-muenchen.de/cbse/eds-test:v0.1`
   - override at runtime with `EDS_IMAGE=<your-image>`
 
-Build the Scenario Manager image from repo root:
+Build and push the Scenario Manager image from repo root:
 
 ```bash
-docker build -f scenario-manager/Dockerfile -t scenario-manager-test:eds-e2e .
+docker build -f scenario-manager/Dockerfile -t logsimharbor.informatik.unibw-muenchen.de/cbse/scenario-manager-test:v0.2 .
+docker push logsimharbor.informatik.unibw-muenchen.de/cbse/scenario-manager-test:v0.2
 ```
 
-Build the EDS mock image from repo root:
+Build and push the EDS mock image from repo root:
 
 ```bash
-docker build -f test-env/eds-mock/Dockerfile -t eds-mock:sm-e2e .
+docker build -f test-env/eds-mock/Dockerfile -t logsimharbor.informatik.unibw-muenchen.de/cbse/eds-test:v0.1 .
+docker push logsimharbor.informatik.unibw-muenchen.de/cbse/eds-test:v0.1
 ```
 
 ## Run
@@ -51,8 +53,8 @@ From repo root:
 Optional overrides:
 
 ```bash
-SM_IMAGE=<registry/scenario-manager:tag> \
-EDS_IMAGE=<registry/eds-mock:tag> \
+SM_IMAGE=logsimharbor.informatik.unibw-muenchen.de/cbse/scenario-manager-test:v0.2 \
+EDS_IMAGE=logsimharbor.informatik.unibw-muenchen.de/cbse/eds-test:v0.1 \
 PROJECT_NAME=sm-eds-e2e \
 EXPECTED_SCENARIOS=4 \
 ./test-env/run_eds_e2e.sh

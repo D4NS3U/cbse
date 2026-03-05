@@ -23,7 +23,7 @@ Why this exists:
 
 Environment variables:
     `NATS_URL`:
-        NATS endpoint (default: `nats://nats:4222`).
+        NATS endpoint (default: `nats://sm-eds-nats:4222`).
     `AVAILABILITY_SUBJECT`:
         Request/reply subject used for EDS availability handshake
         (default: `cbse.eds.scenarios.available`).
@@ -140,7 +140,7 @@ def load_config() -> Config:
 
     project = os.getenv("PROJECT_NAME", "sm-eds-e2e").strip() or "sm-eds-e2e"
     return Config(
-        nats_url=os.getenv("NATS_URL", "nats://nats:4222"),
+        nats_url=os.getenv("NATS_URL", "nats://sm-eds-nats:4222"),
         availability_subject=os.getenv(
             "AVAILABILITY_SUBJECT", "cbse.eds.scenarios.available"
         ),

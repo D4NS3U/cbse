@@ -13,7 +13,7 @@ data:
   SCENARIO_MANAGER_CORE_DB_PASSWORD: scenariomanager
   SCENARIO_MANAGER_CORE_DB_SCENARIO_STATUS_TABLE: scenario_status
   SCENARIO_MANAGER_CORE_DB_PROJECT_TABLE: project
-  SCENARIO_MANAGER_NATS_URL: nats://nats:4222
+  SCENARIO_MANAGER_NATS_URL: nats://sm-eds-nats:4222
   SCENARIO_MANAGER_NATS_USER: ""
   SCENARIO_MANAGER_NATS_PASSWORD: ""
   SCENARIO_MANAGER_EDS_AVAILABLE_SUBJECT: cbse.eds.scenarios.available
@@ -80,7 +80,7 @@ spec:
       containers:
         - name: scenario-manager
           # Build and push/pull your current Scenario Manager image before applying.
-          image: scenario-manager-test:eds-e2e
+          image: logsimharbor.informatik.unibw-muenchen.de/cbse/scenario-manager-test:v0.2
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

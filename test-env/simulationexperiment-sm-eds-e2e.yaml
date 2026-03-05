@@ -39,6 +39,6 @@ spec:
     port: 8081
   experimentalDesignService:
     design: "SM EDS integration test"
-    image: eds-mock:sm-e2e
+    image: logsimharbor.informatik.unibw-muenchen.de/cbse/eds-test:v0.1
     serviceType: ClusterIP
     port: 8082

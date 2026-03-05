@@ -16,11 +16,11 @@ spec:
     spec:
       containers:
         - name: eds-mock
-          image: eds-mock:sm-e2e
+          image: logsimharbor.informatik.unibw-muenchen.de/cbse/eds-test:v0.1
           imagePullPolicy: IfNotPresent
           env:
             - name: NATS_URL
-              value: nats://nats:4222
+              value: nats://sm-eds-nats:4222
             - name: AVAILABILITY_SUBJECT
               value: cbse.eds.scenarios.available
             - name: PROJECT_NAME

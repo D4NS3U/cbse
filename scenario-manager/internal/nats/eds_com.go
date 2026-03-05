@@ -205,7 +205,14 @@ func StartEDSCommsWithProcessor(ctx context.Context, processor EDSBatchProcessor
 	go func() {
 		<-ctx.Done()
 		_ = availableSub.Unsubscribe()
-		_ = batchSub.Unsubscribe()
+		// Intentionally do not unsubscribe batchSub here.
+		//
+		// nats.go marks consumers it created via QueueSubscribe as deletable and
+		// removes the durable consumer on Unsubscribe(). During a rolling restart,
+		// an old pod unsubscribing can delete the shared durable consumer that a
+		// new pod just created, causing EDS batches to remain in JetStream
+		// unconsumed. Let process exit/connection close clean up local
+		// subscriptions without deleting the durable consumer.
 	}()
 
 	return nil
