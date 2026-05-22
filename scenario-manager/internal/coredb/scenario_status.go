@@ -12,6 +12,7 @@ import (
 const (
 	// DefaultScenarioState is assigned by Scenario Manager when EDS payloads
 	// do not carry a scenario state.
+	// This should be changed to ready, as this reflects the real scenario status lifecycle in our papers created -> scheduled -> Starting Runners -> Processing -> Post Processing (with loop back to Starting Runners) -> Finished
 	DefaultScenarioState = "Pending"
 	// DefaultScenarioComputedReps initializes the computed repetitions counter
 	// until downstream execution updates it.
