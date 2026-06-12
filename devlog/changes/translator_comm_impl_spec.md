@@ -42,41 +42,43 @@ The current `scenario_status` table is not sufficient for robust claiming and st
 Use exactly these state strings:
 
 1. `Created`
-2. `Translating`
-3. `Scheduled`
-4. `StartingRunners`
-5. `InProcessing`
-6. `InPreProcessing`
-7. `Finished`
-8. `Failed`
+2. `Scheduled`
+3. `StartingRunners`
+4. `InProcessing`
+5. `InPreProcessing`
+6. `Finished`
+7. `Failed`
 
 Notes:
 - Replace the current default state `Pending` with `Created`.
 - Do not use spaces in state names.
-- Translator communication is responsible only for `Created -> Translating -> Scheduled`, plus failure recovery.
+- The canonical lifecycle is `Created -> Scheduled -> StartingRunners -> InProcessing -> PostProcessing -> Finished`, with `StartingRunners` repeating if a post-processing branch returns work to the runner startup path.
+- Translator communication is responsible for the `Created -> Scheduled` handoff and failure recovery around that claim.
+- `Scheduled` is the durable in-flight state for translation work. It means SM has claimed the scenario and may still need to resend the translation request until the Translator responds or the retry budget is exhausted.
+- Retry handling is time-based. If no ready message arrives before the stale timeout, SM may return the scenario to `Created` and try again.
 
 ## State Transitions Covered By This Spec
 
 | Current State | Event | Next State |
 | --- | --- | --- |
-| `Created` | SM claims a scenario for translation | `Translating` |
-| `Translating` | Translator ready message accepted | `Scheduled` |
-| `Translating` | SM publish failure | `Created` |
-| `Translating` | stale timeout, attempts below max | `Created` |
-| `Translating` | stale timeout, attempts reached max | `Failed` |
+| `Created` | SM claims a scenario for translation | `Scheduled` |
+| `Scheduled` | Translator ready message accepted and container image persisted | `StartingRunners` |
+| `Scheduled` | SM publish failure before request delivery | `Created` |
+| `Scheduled` | stale timeout, attempts below max | `Created` |
+| `Scheduled` | stale timeout, attempts reached max | `Failed` |
 
 ## Ownership And Claiming
 
 There is no long-lived SQL row lock.
 
-The durable claim is the state transition to `Translating`.
+The durable claim is the state transition to `Scheduled`.
 
 Claim flow:
 1. Start a DB transaction.
 2. Select one candidate row with `state = 'Created'`.
 3. Use `FOR UPDATE SKIP LOCKED`.
 4. Update the selected row in the same transaction:
-   - `state = 'Translating'`
+   - `state = 'Scheduled'`
    - `translation_attempts = translation_attempts + 1`
    - `updated_at = NOW()`
 5. Commit.
@@ -91,12 +93,15 @@ If publish fails after commit:
 1. log the failure
 2. best-effort update the row back to `Created`
 3. set `updated_at = NOW()`
+4. this counts as a failed attempt for the current claim and will be retried only while `translation_attempts < MAX_ATTEMPTS`
 
-## Selector Contract
+## Selection Contract
 
-Implement a simple placeholder selector now and keep it replaceable later.
+`scenario-manager/internal/core/selector.go` owns SM-side scenario selection for any state transition that requires the Scenario Manager to take an action.
 
-Required behavior:
+In v1, the only implemented selection path is the `Created -> Scheduled` translation claim. Later work may extend the same area to other SM-driven transitions, such as scheduling jobs when entering `StartingRunners`.
+
+Required v1 behavior:
 - select only rows in `Created`
 - order by `priority DESC, id ASC`
 - claim one scenario per selector call
@@ -106,7 +111,7 @@ Recommended initial loop behavior:
 - poll interval: 5 seconds
 - max newly claimed scenarios per loop per SM process: 1
 
-This is intentionally conservative. Throughput can be raised later without changing the transport contract.
+This is intentionally conservative for v1. The selector layer is expected to grow additional responsibilities over time without changing the transport contract.
 
 ## NATS / JetStream Contract
 
@@ -242,13 +247,12 @@ If validation fails due to transient DB or infrastructure errors:
 
 When SM consumes a valid ready message:
 1. load the scenario row by `id`
-2. verify the row is in `Translating` or already `Scheduled`
-3. if state is `Translating`, update:
-   - `state = 'Scheduled'`
+2. verify the row is already `Scheduled`
+3. if the row is `Scheduled`, update:
    - `container_image = <payload.container_image>`
    - `updated_at = NOW()`
-4. if state is already `Scheduled` and the same `container_image` is already present, treat as duplicate and ACK
-5. if state is already `Scheduled` and `container_image` differs, log an inconsistency and ACK
+4. if `container_image` is already present and matches the payload, treat as duplicate and ACK
+5. if `container_image` is already present and differs, log an inconsistency and ACK
 6. if state is in any other value, log and ACK
 
 Reasoning:
@@ -261,13 +265,14 @@ Add a periodic recovery step in SM.
 
 Every `SCENARIO_MANAGER_TRANS_SELECT_INTERVAL`, before selecting new work:
 1. find rows where:
-   - `state = 'Translating'`
+   - `state = 'Scheduled'`
    - `updated_at < NOW() - STALE_TIMEOUT`
 2. for each stale row:
    - if `translation_attempts < MAX_ATTEMPTS`, set `state = 'Created'` and `updated_at = NOW()`
    - otherwise set `state = 'Failed'` and `updated_at = NOW()`
 
 No heartbeat protocol is part of v1. Timeout-based recovery is the only recovery mechanism.
+This recovery path covers both cases where the request was published but no ready message arrived, and cases where SM could not successfully complete the publish step. In both cases, `Scheduled` remains the retryable in-flight state.
 
 ## Startup Integration
 
@@ -286,7 +291,7 @@ Translator communication startup is a required dependency. Failure to initialize
 ### `scenario-manager/internal/core/selector.go`
 
 - `selectScenarioTrans(ctx context.Context) (*ScenarioForTranslation, error)`
-- `recoverStaleTranslatingScenarios(ctx context.Context) error`
+- `recoverStaleScheduledScenarios(ctx context.Context) error`
 
 `ScenarioForTranslation` should contain:
 - `ID int`
@@ -308,7 +313,7 @@ Translator communication startup is a required dependency. Failure to initialize
 - `ClaimNextScenarioForTranslation(ctx context.Context) (*ScenarioForTranslation, error)`
 - `MarkScenarioTranslationPublishFailed(ctx context.Context, scenarioID int) error`
 - `MarkScenarioScheduled(ctx context.Context, scenarioID int, projectID int, containerImage string) error`
-- `ResetStaleTranslatingScenarios(ctx context.Context, staleBefore time.Time, maxAttempts int) (reset int, failed int, err error)`
+- `ResetStaleScheduledScenarios(ctx context.Context, staleBefore time.Time, maxAttempts int) (reset int, failed int, err error)`
 
 ## Logging Requirements
 
@@ -338,7 +343,7 @@ The implementation is complete when all of the following are true:
 1. EDS-created scenarios enter the DB as `Created`.
 2. SM can claim exactly one `Created` scenario without duplicate claims across replicas.
 3. SM publishes a valid request message to the project-specific translator request subject.
-4. SM consumes a valid ready message and updates the scenario to `Scheduled`.
+4. SM consumes a valid ready message and preserves the scenario in `Scheduled` while persisting the container image.
 5. Duplicate ready messages do not corrupt state.
 6. A publish failure returns the scenario to `Created`.
-7. A stale `Translating` scenario is retried, then eventually marked `Failed` after the configured attempt limit.
+7. A stale `Scheduled` scenario is retried, then eventually marked `Failed` after the configured attempt limit.
