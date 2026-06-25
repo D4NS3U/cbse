@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document is the implementation-ready specification for the Scenario Manager (SM) to Translator handshake over NATS/JetStream.
+This document is the implementation-ready specification for the Scenario Manager (SM) to Translator communication workflow. The core workflow must be transport-neutral; NATS/JetStream is the v1 transport adapter.
 
 Scope of this spec:
 - executing the translator handoff for a scenario id supplied by higher-level SM orchestration
@@ -22,6 +22,7 @@ Out of scope:
 
 Primary implementation locations:
 - `scenario-manager/internal/nats/trans_com.go`
+- `scenario-manager/internal/core/communication.go`
 - `scenario-manager/internal/core/translator_handoff.go`
 - `scenario-manager/internal/core/scenario_manager.go`
 - `scenario-manager/internal/coredb/scenario_status.go`
@@ -36,7 +37,7 @@ The current `scenario_status` table is not sufficient for robust claiming and un
 | `created_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | creation timestamp |
 | `updated_at` | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` | last state transition time |
 | `translation_attempts` | `INTEGER NOT NULL DEFAULT 0` | retry counter |
-| `translation_request_published_at` | `TIMESTAMPTZ` | set after SM confirms the translation request was published to JetStream |
+| `translation_request_published_at` | `TIMESTAMPTZ` | set after SM confirms the translation request was accepted by the configured transport |
 
 `updated_at` must be set on every scenario state transition handled by SM.
 
@@ -82,10 +83,10 @@ There is no long-lived SQL row lock.
 
 The durable claim is the state transition to `Scheduled`.
 
-Translator communication does not choose scenarios. A future higher-level Scenario Manager loop supplies the scenario id that should start translation, then calls `ProcessScenarioTrans(ctx, scenarioID)` with that exact row id.
+Translator communication does not choose scenarios. A future higher-level Scenario Manager loop supplies the scenario id that should start translation, then calls `ProcessScenarioTrans(ctx, scenarioID, publisher)` with that exact row id and the configured translation request publisher.
 
 Claim flow:
-1. `ProcessScenarioTrans(ctx, scenarioID)` calls `ClaimScenarioForTranslation(ctx, scenarioID)`.
+1. `ProcessScenarioTrans(ctx, scenarioID, publisher)` calls `ClaimScenarioForTranslation(ctx, scenarioID)`.
 2. Start a DB transaction.
 3. Lock only the supplied scenario row with `FOR UPDATE`.
 4. If the row does not exist or its current state is not `Created`, return `(nil, nil)` from the claim helper. `ProcessScenarioTrans` must log that the handoff was skipped and return nil.
@@ -97,8 +98,8 @@ Claim flow:
 6. Return the claimed `ScenarioForTranslation`, including the incremented attempt number.
 7. Commit.
 8. Publish the translation request after commit.
-9. A publish is successful only after JetStream returns a successful `PubAck`.
-10. After a successful `PubAck`, call `MarkScenarioTranslationRequestPublished(ctx, scenarioID, attempt)` to set `translation_request_published_at = NOW()` for the exact claimed attempt.
+9. A publish is successful only after the configured transport confirms publish acceptance.
+10. After successful publish confirmation, call `MarkScenarioTranslationRequestPublished(ctx, scenarioID, attempt)` to set `translation_request_published_at = NOW()` for the exact claimed attempt.
 
 Reasoning:
 - The future main SM loop owns the orchestration that supplies the scenario id.
@@ -124,20 +125,21 @@ If publish fails after commit:
 
 The attempt counter is incremented when the scenario is claimed. A publish failure consumes the already-counted attempt and must not increment `translation_attempts` again.
 
-If SM receives a successful JetStream `PubAck` but `MarkScenarioTranslationRequestPublished` fails, do not call publish-failure recovery because the request may already be durably stored in JetStream. Log and return the DB error; unpublished-claim recovery may retry the scenario later. The `translation_attempt` field keeps late ready messages from older attempts from being accepted into the wrong DB state.
+If SM receives successful transport publish confirmation but `MarkScenarioTranslationRequestPublished` fails, do not call publish-failure recovery because the request may already be durably accepted by the transport. Log and return the DB error; unpublished-claim recovery may retry the scenario later. The `translation_attempt` field keeps late ready messages from older attempts from being accepted into the wrong DB state.
 
-If SM crashes after JetStream returns a successful `PubAck` but before `translation_request_published_at` is persisted, unpublished-claim recovery may retry the scenario later. The `translation_attempt` field keeps late ready messages from older attempts from being accepted into the wrong DB state.
+If SM crashes after transport publish confirmation but before `translation_request_published_at` is persisted, unpublished-claim recovery may retry the scenario later. The `translation_attempt` field keeps late ready messages from older attempts from being accepted into the wrong DB state.
 
 ## Translation Handoff Contract
 
-`ProcessScenarioTrans(ctx, scenarioID)` owns the translator handoff for a scenario id already supplied by higher-level SM orchestration.
+`ProcessScenarioTrans(ctx, scenarioID, publisher)` owns the translator handoff for a scenario id already supplied by higher-level SM orchestration.
 
 Required v1 behavior:
 - do not choose a scenario
 - do not scan for other `Created` rows
 - claim only the supplied `scenarioID`
 - publish only after a successful claim commit
-- mark the exact claimed attempt as published only after JetStream returns a successful `PubAck`
+- publish through a `TranslationRequestPublisher` implementation
+- mark the exact claimed attempt as published only after the publisher returns successful transport confirmation
 - recover the exact claimed attempt on publish failure
 - return nil when the supplied row is no longer claimable
 
@@ -145,11 +147,60 @@ Recommended placement:
 - keep `ProcessScenarioTrans` in `scenario-manager/internal/core/translator_handoff.go`
 - the future orchestration loop may call it from `scenario-manager/internal/core/scenario_manager.go`
 
-This preserves a clean boundary: future SM orchestration supplies the scenario id; translator communication executes the translation handoff for that exact id.
+This preserves a clean boundary: future SM orchestration supplies the scenario id; translator handoff executes the state transition and delegates transport delivery through a small core-owned communication interface.
+
+## Core Communication Abstractions
+
+The reusable communication interfaces must live in `scenario-manager/internal/core/communication.go` in package `core`.
+
+This file is the boundary between core orchestration and concrete transport adapters. It must stay lightweight, component-oriented, and free of NATS, JetStream, Kafka, or other broker-specific types.
+
+General pattern:
+- adapter startup methods accept `context.Context`
+- publishers return nil only after the transport confirms publish acceptance
+- consumers invoke core-owned handler functions and map handler outcomes to transport-specific ACK, retry, commit, or poison-message behavior
+- domain payloads stay close to their owning workflow unless multiple transports or components need to share them
+- reusable interfaces must not be defined in `internal/nats`
+
+Translator-specific interfaces:
+
+```go
+type TranslationRequestPublisher interface {
+	PublishTranslationRequest(ctx context.Context, scenario coredb.ScenarioForTranslation) error
+}
+
+type TranslatorReadyConsumer interface {
+	StartTranslatorReadyConsumer(ctx context.Context, handler TranslatorReadyHandler) error
+}
+
+type TranslatorReadyHandler func(ctx context.Context, ready TranslatorReadyMessage) TranslatorReadyHandlingResult
+```
+
+`TranslatorReadyMessage` and `TranslatorReadyHandlingResult` should be core-owned transport-neutral types. They must not expose NATS messages, JetStream metadata, Kafka records, offsets, or partition details.
+
+For v1, `ProcessScenarioTrans(ctx, scenarioID, publisher)` depends on `TranslationRequestPublisher`. The NATS implementation satisfies that interface by publishing to JetStream and waiting for `PubAck`.
+
+Reuse guidance for other components:
+- EDS can later move from `nats.EDSBatchProcessor` to a core-owned batch handler type in `communication.go`
+- PostProcessingService and future components should add narrow publisher or consumer interfaces only when core orchestration needs them
+- component-specific state machines and DB transitions stay in core/coredb; adapters only translate between broker messages and core handlers
+- each adapter owns its transport configuration, connection checks, publish confirmation, delivery acknowledgement, retry, and poison-message mapping
+
+### Future Kafka Compatibility
+
+Kafka support is not part of this implementation. It should be possible later by adding a Kafka adapter that implements the same core communication interfaces.
+
+Expected mapping:
+- NATS subjects map to Kafka topics and message keys
+- JetStream `PubAck` maps to Kafka producer delivery confirmation
+- JetStream ACK maps to Kafka offset commit
+- JetStream NAK or redelivery maps to a retry topic, delayed retry, or DLQ policy
+
+Kafka support must not change core DB state transitions, translator message schemas, stale-attempt handling, duplicate handling, or poison-message classification.
 
 ## NATS / JetStream Contract
 
-Use the same shared NATS server and JetStream account already used by EDS.
+NATS/JetStream is the v1 transport adapter for the core communication interfaces. Use the same shared NATS server and JetStream account already used by EDS.
 
 ### Subjects
 
@@ -200,7 +251,9 @@ Ack rules:
 - ACK malformed JSON, unknown JSON fields, validation failures, stale attempts, missing rows, and other permanent poison messages.
 - NAK only on transient DB or infrastructure failures.
 
-`StartTranslatorComms(ctx)` must mirror the EDS startup shape:
+These ACK/NAK rules are NATS adapter behavior. Core ready handlers return transport-neutral outcomes; the NATS adapter maps those outcomes to JetStream ACK, NAK, or poison-message ACK.
+
+`StartTranslatorComms(ctx)` must mirror the EDS startup shape and satisfy the core translator consumer interface:
 1. read config with `loadTranslatorConfig`
 2. verify the shared NATS connection exists and is connected
 3. create a JetStream context
@@ -209,6 +262,8 @@ Ack rules:
 6. flush the NATS connection
 7. log the ready subject, stream, durable consumer, and queue group
 8. on context cancellation, do not explicitly unsubscribe the JetStream durable subscription, matching the EDS rolling-restart behavior
+
+`PublishTranslationRequest` must satisfy `TranslationRequestPublisher`. It must publish to JetStream and return nil only after a successful `PubAck`, which is the v1 implementation of transport publish confirmation.
 
 ### Environment Variables
 
@@ -371,19 +426,20 @@ When invoked by higher-level SM orchestration for a known `scenarioID`:
 
 Do not recover or fail `Scheduled` rows where `translation_request_published_at IS NOT NULL`. Once the request is marked published, SM treats the Translator as actively responsible for the work until a ready message, heartbeat protocol, explicit Translator failure message, or cancellation protocol exists.
 
-No heartbeat protocol is part of v1. Timeout-based recovery applies only to the short SM-owned window between claiming a scenario and recording a successful JetStream publish.
+No heartbeat protocol is part of v1. Timeout-based recovery applies only to the short SM-owned window between claiming a scenario and recording successful transport publish confirmation.
 This recovery path mainly covers cases where SM stopped after claiming the scenario but before completing publish success or publish-failure handling. Immediate publish errors are handled by the publish-failure path above.
 
 This spec does not implement or schedule the future orchestration loop that decides which `scenarioID` should be passed to unpublished-claim recovery.
 
 ## Startup Integration
 
-`RunScenarioManager` must start translator communication in addition to EDS communication.
+`RunScenarioManager` must start the configured communication adapters in addition to the SimulationExperiment informer. NATS/JetStream is the default and only required v1 adapter.
 
 Startup order:
 1. start the SimulationExperiment informer
 2. start EDS communication
-3. start Translator ready-message consumption
+3. initialize the v1 NATS/JetStream translator communication adapter
+4. start Translator ready-message consumption through the core `TranslatorReadyConsumer` interface
 
 Translator communication startup is a required dependency. Failure to initialize it must terminate the process.
 
@@ -391,9 +447,26 @@ The future orchestration loop in `scenario_manager.go` is out of scope for this 
 
 ## Required Functions
 
+### `scenario-manager/internal/core/communication.go`
+
+This file must define the reusable communication boundary for core-owned orchestration. It must be in package `core`.
+
+Required translator interfaces:
+- `TranslationRequestPublisher`
+- `TranslatorReadyConsumer`
+- `TranslatorReadyHandler`
+
+Required transport-neutral translator message/result types:
+- `TranslatorReadyMessage`
+- `TranslatorReadyHandlingResult`
+
+The types in this file must not depend on NATS, JetStream, Kafka, or any broker-specific client type.
+
+EDS and future component communication should reuse this pattern. Do not refactor existing EDS code as part of this translator implementation, but future EDS modularization should move the current `nats.EDSBatchProcessor` style callback into a core-owned handler type.
+
 ### `scenario-manager/internal/core/translator_handoff.go`
 
-- `ProcessScenarioTrans(ctx context.Context, scenarioID int) error`
+- `ProcessScenarioTrans(ctx context.Context, scenarioID int, publisher TranslationRequestPublisher) error`
 - `RecoverUnpublishedTranslationClaim(ctx context.Context, scenarioID int) (stateChanged bool, finalState string, err error)`
 - `loadTranslatorHandoffConfig() translatorHandoffConfig`
 - `loadTranslatorMaxAttempts() int`
@@ -401,6 +474,8 @@ The future orchestration loop in `scenario_manager.go` is out of scope for this 
 `translatorHandoffConfig` should contain:
 - `MaxAttempts int`
 - `PublishRecoveryTimeout time.Duration`
+
+`ProcessScenarioTrans` must call `publisher.PublishTranslationRequest(ctx, *claimedScenario)` after the DB claim commits. If the publisher returns an error, execute the existing publish-failure recovery path. If the publisher returns nil, mark the exact claimed attempt as published.
 
 ### `scenario-manager/internal/coredb/scenario_status.go`
 
@@ -448,7 +523,7 @@ Status meanings:
 
 Errors from `MarkScenarioTranslatorReady` are reserved for transient DB or infrastructure failures.
 
-NATS ready handling must ACK `TranslatorReadyApplied`, `TranslatorReadyDuplicate`, `TranslatorReadyConflict`, `TranslatorReadyIgnoredStale`, and `TranslatorReadyPoison`. It must NAK only transient errors returned alongside the result.
+Ready handling must classify `TranslatorReadyApplied`, `TranslatorReadyDuplicate`, `TranslatorReadyConflict`, `TranslatorReadyIgnoredStale`, and `TranslatorReadyPoison` as successful terminal handling outcomes. The NATS adapter maps these outcomes to ACK. It maps transient errors to NAK.
 
 Coredb transition semantics:
 - public helpers reject non-positive IDs or attempts with an error before executing SQL
@@ -461,10 +536,15 @@ Coredb transition semantics:
 ### `scenario-manager/internal/nats/trans_com.go`
 
 - `StartTranslatorComms(ctx context.Context) error`
+- `StartTranslatorReadyConsumer(ctx context.Context, handler core.TranslatorReadyHandler) error`
 - `PublishTranslationRequest(ctx context.Context, scenario coredb.ScenarioForTranslation) error`
 - `handleTranslatorReady(ctx context.Context, msg *nats.Msg, cfg transConfig)`
 - `ensureTranslatorStream(js nats.JetStreamContext, cfg transConfig) error`
 - `loadTranslatorConfig() transConfig`
+
+The NATS translator communication implementation must satisfy the core `TranslationRequestPublisher` and `TranslatorReadyConsumer` interfaces.
+
+`StartTranslatorComms` may remain as the default startup helper used by `RunScenarioManager`, but the adapter must also expose the interface-shaped ready consumer method so core orchestration is not tied to the NATS helper name.
 
 `PublishTranslationRequest` must use JetStream publish semantics, wait for the server `PubAck`, and return nil only after a successful `PubAck`. If JetStream does not return a successful `PubAck`, return an error and do not mark `translation_request_published_at`.
 
@@ -503,4 +583,4 @@ The following are explicitly deferred and should not block v1:
 
 ## Completion Criteria
 
-The implementation is complete when SM can execute the translator handoff for a supplied scenario id, persist a successful JetStream `PubAck`, consume ready messages idempotently, apply failed-reschedule policy for publish failures and empty-image ready messages, recover a supplied unpublished claim by scenario id, and leave published active translations untouched until Translator replies or a future protocol is added.
+The implementation is complete when SM can execute the translator handoff for a supplied scenario id through a `TranslationRequestPublisher`, persist successful transport publish confirmation, consume ready messages idempotently through the configured adapter, apply failed-reschedule policy for publish failures and empty-image ready messages, recover a supplied unpublished claim by scenario id, and leave published active translations untouched until Translator replies or a future protocol is added.
