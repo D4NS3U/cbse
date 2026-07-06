@@ -1,3 +1,5 @@
+# This file is superseded by `translator_comm_impl_spec.md`.
+
 # Translator-Scenario Manager-Communication
 
 ## Mission statement
@@ -77,5 +79,4 @@ Planned state transitions:
 
 
 ### Missing Parts 
-
 

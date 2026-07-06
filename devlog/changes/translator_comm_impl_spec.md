@@ -179,6 +179,7 @@ General pattern:
 - domain payloads stay close to their owning workflow unless multiple transports or components need to share them
 - reusable interfaces must not be defined in `internal/nats`
 - `internal/communication` must not import `internal/core` or `internal/nats`
+- `internal/communication` may import `internal/coredb` for the v1 translation request publisher interface, because `coredb.ScenarioForTranslation` is the claimed DB projection owned by the handoff workflow and this dependency does not create an import cycle
 
 Ownership split:
 - `internal/nats` owns NATS connection checks, JetStream setup, subject parsing, strict raw JSON decoding, transport-level validation, publish confirmation, and ACK/NAK mapping.
@@ -417,6 +418,10 @@ The NATS adapter must validate all of the following before invoking core semanti
 5. payload `translation_attempt` is a positive integer
 6. string fields are trimmed before validation and before building `communication.TranslatorReadyMessage`
 
+Ready subject template matching is segment-by-segment after splitting on `.`. In v1, the only dynamic ready-subject segments are `{project}` and `{scenario_id}`; all other template segments are literals and must match exactly. The configured ready subject template must contain both dynamic segments exactly once. The NATS adapter gets `{scenario_id}` from the ready subject and validates it against `scenario_status.id`; `{project}` is transport routing context and is not resolved to `project.id` during ready-message handling.
+
+The request subject template has one dynamic segment, `{project}` or `%s`, supplied from `ScenarioForTranslation.Project`, which is loaded from the project table during the claim query and normalized only for the broker subject. The request subject does not contain `{scenario_id}`; the scenario id is carried as request payload field `id`.
+
 After transport validation, the NATS adapter builds `communication.TranslatorReadyMessage` from subject fields plus payload fields:
 - `Project` from subject `{project}`
 - `ScenarioID` from subject `{scenario_id}`
@@ -526,7 +531,7 @@ Required transport-neutral translator message/result types:
 - `TranslatorReadyMessage`
 - `TranslatorReadyHandlingResult`
 
-The types in this file must not depend on NATS, JetStream, Kafka, `internal/core`, or any broker-specific client type.
+The types in this file must not depend on NATS, JetStream, Kafka, `internal/core`, or any broker-specific client type. The package may import `internal/coredb` only for `coredb.ScenarioForTranslation` in `TranslationRequestPublisher`; do not add additional coredb dependencies unless the workflow explicitly needs them.
 
 EDS and future component communication should reuse this pattern. Do not refactor existing EDS code as part of this translator implementation, but future EDS modularization should move the current `nats.EDSBatchProcessor` style callback into a broker-neutral handler type.
 
