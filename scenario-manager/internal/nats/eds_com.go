@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/D4NS3U/cbse/scenario-manager/internal/coredb"
+	"github.com/D4NS3U/cbse/scenario-manager/internal/subject"
 	natsgo "github.com/nats-io/nats.go"
 )
 
@@ -473,26 +474,7 @@ func streamSubjectFromTemplate(template string) (string, bool) {
 }
 
 func sanitizeSubjectToken(value string) string {
-	if value == "" {
-		return value
-	}
-
-	normalized := strings.ToLower(value)
-	out := make([]rune, 0, len(normalized))
-	for _, r := range normalized {
-		switch {
-		case r >= 'a' && r <= 'z':
-			out = append(out, r)
-		case r >= '0' && r <= '9':
-			out = append(out, r)
-		case r == '-' || r == '_':
-			out = append(out, r)
-		default:
-			out = append(out, '-')
-		}
-	}
-
-	return string(out)
+	return subject.NormalizeToken(value)
 }
 
 // ensureEDSStream guarantees that the JetStream stream exists and is configured

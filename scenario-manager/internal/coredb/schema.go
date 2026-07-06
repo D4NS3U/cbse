@@ -69,9 +69,13 @@ func createSchema(ctx context.Context) error {
 		id SERIAL PRIMARY KEY,
 		project_id INTEGER NOT NULL REFERENCES %s(id) ON DELETE CASCADE,
 		state TEXT NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		priority INTEGER NOT NULL DEFAULT 0,
 		number_of_reps INTEGER NOT NULL DEFAULT 0,
 		number_of_computed_reps INTEGER NOT NULL DEFAULT 0,
+		translation_attempts INTEGER NOT NULL DEFAULT 0,
+		translation_request_published_at TIMESTAMPTZ,
 		recipe_info JSONB,
 		container_image TEXT,
 		confidence_metric DOUBLE PRECISION
