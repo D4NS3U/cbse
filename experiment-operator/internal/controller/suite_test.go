@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
+	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -60,6 +61,8 @@ var _ = BeforeSuite(func() {
 
 	var err error
 	err = experimentalpha2.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+	err = experimentalpha3.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
