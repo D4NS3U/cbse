@@ -1,4 +1,4 @@
-apiVersion: experiment.cbse.terministic.de/alpha1
+apiVersion: experiment.cbse.terministic.de/alpha3
 kind: SimulationExperiment
 metadata:
   labels:
@@ -7,7 +7,7 @@ metadata:
   name: simulationexperiment-sample
   namespace: default
 spec:
-  # TODO(user): Add fields here
+  defaultServiceType: ClusterIP
   detailDatabase:
     dbname: simulation_db
     host: 192.168.101.248
@@ -26,12 +26,18 @@ spec:
     args: ["-f", "/dev/null"]
     repository: translator-repo
     baseimage: translator-baseimage
+    port: 8080
   postProcessingService:
     image: busybox:latest
     command: ["tail"]
     args: ["-f", "/dev/null"]
-  experimentalDesign: >
-    This experiment runs multiple simulation scenarios
-    to benchmark system behavior under varying load profiles
-    and records performance metrics for analysis.
-
+    port: 8081
+  experimentalDesignService:
+    design: |
+      This experiment runs multiple simulation scenarios
+      to benchmark system behavior under varying load profiles
+      and records performance metrics for analysis.
+    image: busybox:latest
+    command: ["tail"]
+    args: ["-f", "/dev/null"]
+    port: 8082

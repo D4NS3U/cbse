@@ -22,7 +22,7 @@ import (
 	"net"
 	"time"
 
-	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
+	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,6 +39,11 @@ type SimulationExperimentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
+
+const (
+	simulationProjectNameEnvVar = "SIMULATIONPROJECTNAME"
+	simulationProjectLabelKey   = "experiment.cbse.terministic.de/project"
+)
 
 // Markers for Deployment, Service, Secret, and ConfigMap ownership
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
@@ -63,7 +68,7 @@ func (r *SimulationExperimentReconciler) Reconcile(ctx context.Context, req ctrl
 	log := logf.FromContext(ctx)
 
 	// 1. Fetch the SimulationExperiment instance
-	instance := &experimentalpha2.SimulationExperiment{}
+	instance := &experimentalpha3.SimulationExperiment{}
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
 		// Ignore not-found errors (object deleted)
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -202,8 +207,9 @@ func (r *SimulationExperimentReconciler) SetupWithManager(mgr ctrl.Manager) erro
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&experimentalpha2.SimulationExperiment{}).
+		For(&experimentalpha3.SimulationExperiment{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.ConfigMap{}).
@@ -220,7 +226,7 @@ func (r *SimulationExperimentReconciler) SetupWithManager(mgr ctrl.Manager) erro
 // setErrorStatus updates the SimulationExperiment status to Error and propagates failures.
 func (r *SimulationExperimentReconciler) setErrorStatus(
 	ctx context.Context,
-	instance *experimentalpha2.SimulationExperiment,
+	instance *experimentalpha3.SimulationExperiment,
 	message string,
 ) error {
 	instance.Status.Phase = "Error"
@@ -235,8 +241,8 @@ func (r *SimulationExperimentReconciler) setErrorStatus(
 // reconcileDatabase handles the creation of a database deployment and service
 func (r *SimulationExperimentReconciler) reconcileDatabase(
 	ctx context.Context,
-	instance *experimentalpha2.SimulationExperiment,
-	spec experimentalpha2.DatabaseSpec,
+	instance *experimentalpha3.SimulationExperiment,
+	spec experimentalpha3.DatabaseSpec,
 	suffix string,
 ) (ctrl.Result, error) {
 	// Host-based DB: smoke-test connectivity
@@ -262,10 +268,8 @@ func (r *SimulationExperimentReconciler) reconcileDatabase(
 	}
 	// Operation 1: Create or update the Deployment
 	op1, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
-		labels := map[string]string{"app": instance.Name + "-" + suffix}
-		if dep.Labels == nil {
-			dep.Labels = labels
-		}
+		labels := workloadLabels(instance.Name+"-"+suffix, instance.Name)
+		dep.Labels = labels
 		// Set controller reference to ensure garbage collection
 		if err := controllerutil.SetControllerReference(instance, dep, r.Scheme); err != nil {
 			return err
@@ -282,6 +286,7 @@ func (r *SimulationExperimentReconciler) reconcileDatabase(
 				{Name: "DB_PASSWORD", Value: spec.Password},
 			},
 		}
+		ctr.Env = append(ctr.Env, simulationProjectEnvVar())
 		// Add optional command and args
 		if len(spec.Command) > 0 {
 			ctr.Command = spec.Command
@@ -320,7 +325,7 @@ func (r *SimulationExperimentReconciler) reconcileDatabase(
 			Port:       spec.Port,
 			TargetPort: intstr.FromInt(int(spec.Port)),
 		}
-		if spec.ServiceType == experimentalpha2.ServiceTypeNodePort && spec.NodePort != nil {
+		if spec.ServiceType == experimentalpha3.ServiceTypeNodePort && spec.NodePort != nil {
 			port.NodePort = *spec.NodePort
 		}
 		svc.Spec.Selector = map[string]string{"app": instance.Name + "-" + suffix}
@@ -381,8 +386,8 @@ func (r *SimulationExperimentReconciler) reconcileDatabase(
 // reconcileTranslator handles Deployment and ConfigMap creation for the Translator
 func (r *SimulationExperimentReconciler) reconcileTranslator(
 	ctx context.Context,
-	instance *experimentalpha2.SimulationExperiment,
-	spec experimentalpha2.TranslatorSpec,
+	instance *experimentalpha3.SimulationExperiment,
+	spec experimentalpha3.TranslatorSpec,
 ) (ctrl.Result, error) {
 	// Prepare ConfigMap for Translator
 	cm := &corev1.ConfigMap{
@@ -427,10 +432,8 @@ func (r *SimulationExperimentReconciler) reconcileTranslator(
 		if err := controllerutil.SetControllerReference(instance, dep, r.Scheme); err != nil {
 			return err
 		}
-		labels := map[string]string{"app": instance.Name + "-translator"}
-		if dep.Labels == nil {
-			dep.Labels = labels
-		}
+		labels := workloadLabels(instance.Name+"-translator", instance.Name)
+		dep.Labels = labels
 		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		dep.Spec.Template.ObjectMeta.Labels = labels
 
@@ -451,6 +454,7 @@ func (r *SimulationExperimentReconciler) reconcileTranslator(
 				{Name: "BASEIMAGE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: cm.Name}, Key: "BASEIMAGE"}}},
 			},
 		}
+		ctr.Env = append(ctr.Env, simulationProjectEnvVar())
 		// Add optional command and args
 		if len(spec.Command) > 0 {
 			ctr.Command = spec.Command
@@ -489,7 +493,7 @@ func (r *SimulationExperimentReconciler) reconcileTranslator(
 			Port:       spec.Port,
 			TargetPort: intstr.FromInt(int(spec.Port)),
 		}
-		if spec.ServiceType == experimentalpha2.ServiceTypeNodePort && spec.NodePort != nil {
+		if spec.ServiceType == experimentalpha3.ServiceTypeNodePort && spec.NodePort != nil {
 			port.NodePort = *spec.NodePort
 		}
 		svc.Spec.Selector = map[string]string{"app": instance.Name + "-translator"}
@@ -511,8 +515,8 @@ func (r *SimulationExperimentReconciler) reconcileTranslator(
 // reconcilePPS handles the creation of the PostProcessingService Deployment
 func (r *SimulationExperimentReconciler) reconcilePPS(
 	ctx context.Context,
-	instance *experimentalpha2.SimulationExperiment,
-	spec experimentalpha2.PostProcessingSpec,
+	instance *experimentalpha3.SimulationExperiment,
+	spec experimentalpha3.PostProcessingSpec,
 ) (ctrl.Result, error) {
 	// Define Deployment object
 	dep := &appsv1.Deployment{
@@ -527,10 +531,8 @@ func (r *SimulationExperimentReconciler) reconcilePPS(
 		if err := controllerutil.SetControllerReference(instance, dep, r.Scheme); err != nil {
 			return err
 		}
-		labels := map[string]string{"app": instance.Name + "-postproc"}
-		if dep.Labels == nil {
-			dep.Labels = labels
-		}
+		labels := workloadLabels(instance.Name+"-postproc", instance.Name)
+		dep.Labels = labels
 		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		dep.Spec.Template.ObjectMeta.Labels = labels
 		// Single container using the specified image
@@ -538,6 +540,7 @@ func (r *SimulationExperimentReconciler) reconcilePPS(
 			Name:  "postprocessing",
 			Image: spec.Image,
 		}
+		ctr.Env = append(ctr.Env, simulationProjectEnvVar())
 		// Add optional command and args
 		if len(spec.Command) > 0 {
 			ctr.Command = spec.Command
@@ -576,7 +579,7 @@ func (r *SimulationExperimentReconciler) reconcilePPS(
 			Port:       spec.Port,
 			TargetPort: intstr.FromInt(int(spec.Port)),
 		}
-		if spec.ServiceType == experimentalpha2.ServiceTypeNodePort && spec.NodePort != nil {
+		if spec.ServiceType == experimentalpha3.ServiceTypeNodePort && spec.NodePort != nil {
 			port.NodePort = *spec.NodePort
 		}
 		svc.Spec.Selector = map[string]string{"app": instance.Name + "-postproc"}
@@ -598,8 +601,8 @@ func (r *SimulationExperimentReconciler) reconcilePPS(
 // reconcileExperimentalDesignService handles creation/update of the ExperimentalDesign ConfigMap or the ExperimentalDesignService
 func (r *SimulationExperimentReconciler) reconcileExperimentalDesignService(
 	ctx context.Context,
-	instance *experimentalpha2.SimulationExperiment,
-	spec experimentalpha2.ExperimentalDesignServiceSpec,
+	instance *experimentalpha3.SimulationExperiment,
+	spec experimentalpha3.ExperimentalDesignServiceSpec,
 ) (ctrl.Result, error) {
 	if spec.Design != "" {
 		cm := &corev1.ConfigMap{
@@ -639,17 +642,14 @@ func (r *SimulationExperimentReconciler) reconcileExperimentalDesignService(
 		if err := controllerutil.SetControllerReference(instance, pod, r.Scheme); err != nil {
 			return err
 		}
-		labels := map[string]string{"app": instance.Name + "-design"}
-		if pod.Labels == nil {
-			pod.Labels = labels
-		}
-		// Set pod labels directly
+		labels := workloadLabels(instance.Name+"-design", instance.Name)
 		pod.Labels = labels
 		// Single container using the specified image
 		ctr := corev1.Container{
 			Name:  "experimental-design",
 			Image: spec.Image,
 		}
+		ctr.Env = append(ctr.Env, simulationProjectEnvVar())
 		// Add optional command and args
 		if len(spec.Command) > 0 {
 			ctr.Command = spec.Command
@@ -689,7 +689,7 @@ func (r *SimulationExperimentReconciler) reconcileExperimentalDesignService(
 			Port:       spec.Port,
 			TargetPort: intstr.FromInt(int(spec.Port)),
 		}
-		if spec.ServiceType == experimentalpha2.ServiceTypeNodePort && spec.NodePort != nil {
+		if spec.ServiceType == experimentalpha3.ServiceTypeNodePort && spec.NodePort != nil {
 			port.NodePort = *spec.NodePort
 		}
 		svc.Spec.Selector = map[string]string{"app": instance.Name + "-design"}
@@ -712,7 +712,7 @@ func (r *SimulationExperimentReconciler) reconcileExperimentalDesignService(
 // allComponentsReady returns true when all Deployments and ConfigMaps are present and healthy.
 func (r *SimulationExperimentReconciler) allComponentsReady(
 	ctx context.Context,
-	instance *experimentalpha2.SimulationExperiment,
+	instance *experimentalpha3.SimulationExperiment,
 ) (bool, error) {
 	// Helper to check a Deployment with label app=<name>-<suffix>.
 	checkDep := func(suffix string) (bool, error) {
@@ -801,4 +801,22 @@ func (r *SimulationExperimentReconciler) allComponentsReady(
 	}
 	// All checks passed
 	return true, nil
+}
+
+func workloadLabels(appName, projectName string) map[string]string {
+	return map[string]string{
+		"app":                     appName,
+		simulationProjectLabelKey: projectName,
+	}
+}
+
+func simulationProjectEnvVar() corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: simulationProjectNameEnvVar,
+		ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{
+				FieldPath: fmt.Sprintf("metadata.labels['%s']", simulationProjectLabelKey),
+			},
+		},
+	}
 }

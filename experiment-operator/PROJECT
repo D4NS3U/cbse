@@ -16,17 +16,15 @@ resources:
   domain: cbse.terministic.de
   group: experiment
   kind: SimulationExperiment
-  path: github.com/D4NS3U/cbse/experiment-operator/api/alpha1
-  version: alpha1
+  path: github.com/D4NS3U/cbse/experiment-operator/api/alpha2
+  version: alpha2
 - api:
     crdVersion: v1
     namespaced: true
+  controller: true
   domain: cbse.terministic.de
   group: experiment
   kind: SimulationExperiment
-  path: github.com/D4NS3U/cbse/experiment-operator/api/alpha2
-  version: alpha2
-  webhooks:
-    conversion: true
-    webhookVersion: v1
+  path: github.com/D4NS3U/cbse/experiment-operator/api/alpha3
+  version: alpha3
 version: "3"

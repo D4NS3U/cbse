@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package alpha2
+package alpha3
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -22,9 +22,7 @@ import (
 
 // +kubebuilder:object:generate=true
 
-// SimulationExperimentSpec (alpha2) — BREAKING changes carried here
-// - ExperimentalDesign(string) -> ExperimentalDesignService(struct)
-// - Add Port to Translator and PostProcessingService
+// SimulationExperimentSpec (alpha3) preserves the current alpha2 schema.
 type SimulationExperimentSpec struct {
 	// +kubebuilder:validation:Required
 	DetailDatabase DatabaseSpec `json:"detailDatabase"`
@@ -55,7 +53,6 @@ const (
 	ServiceTypeLoadBalancer ServiceType = "LoadBalancer"
 )
 
-// DatabaseSpec is unchanged from alpha1 (keep wire-compat where possible).
 // +kubebuilder:validation:Required
 type DatabaseSpec struct {
 	// Either Image or Host must be specified (enforced by controller).
@@ -88,15 +85,12 @@ type DatabaseSpec struct {
 	Args []string `json:"args,omitempty"`
 }
 
-// TranslatorSpec now includes Port for service routing.
 // +kubebuilder:validation:Required
 type TranslatorSpec struct {
-	// This is the image that contains the Translator logic.
 	Image string `json:"image"`
 
 	Repository string `json:"repository"`
 
-	// Base image used to build executable model per scenario.
 	BaseImage string `json:"baseimage"`
 
 	// +kubebuilder:validation:Optional
@@ -123,7 +117,6 @@ type TranslatorSpec struct {
 	Args []string `json:"args,omitempty"`
 }
 
-// PostProcessingSpec now includes Port for service routing.
 // +kubebuilder:validation:Required
 type PostProcessingSpec struct {
 	Image string `json:"image"`
@@ -152,10 +145,7 @@ type PostProcessingSpec struct {
 	Args []string `json:"args,omitempty"`
 }
 
-// ExperimentalDesignServiceSpec replaces the former string.
-// Start minimal with Name to retain prior meaning; extensible later.
 type ExperimentalDesignServiceSpec struct {
-
 	// +kubebuilder:validation:MinLength=1
 	Design string `json:"design,omitempty"`
 	// +kubebuilder:validation:MinLength=1
@@ -183,7 +173,6 @@ type ExperimentalDesignServiceSpec struct {
 	Port int32 `json:"port,omitempty"`
 }
 
-// SimulationExperimentStatus is unchanged; keep wire-compat for clients.
 type SimulationExperimentStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Provisioning;InProgress;Completed;Failed;Error
 	Phase   string         `json:"phase,omitempty"`
@@ -197,6 +186,7 @@ type StatusMetrics struct {
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:path=simulationexperiments,shortName=simexp,scope=Namespaced
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"

@@ -311,6 +311,289 @@ spec:
             type: object
         type: object
     served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.metrics.scenarioCount
+      name: Scenarios
+      priority: 1
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: alpha3
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SimulationExperimentSpec (alpha3) preserves the current alpha2
+              schema.
+            properties:
+              defaultServiceType:
+                default: ClusterIP
+                enum:
+                - ClusterIP
+                - NodePort
+                - LoadBalancer
+                type: string
+              detailDatabase:
+                properties:
+                  args:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  command:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  dbname:
+                    type: string
+                  host:
+                    type: string
+                  image:
+                    description: Either Image or Host must be specified (enforced
+                      by controller).
+                    type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  password:
+                    type: string
+                  port:
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
+                  user:
+                    type: string
+                required:
+                - dbname
+                - password
+                - port
+                - user
+                type: object
+              experimentalDesignService:
+                properties:
+                  args:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  command:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  design:
+                    minLength: 1
+                    type: string
+                  image:
+                    minLength: 1
+                    type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  port:
+                    default: 8080
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
+                type: object
+              postProcessingService:
+                properties:
+                  args:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  command:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  image:
+                    type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  port:
+                    default: 8080
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
+                required:
+                - image
+                type: object
+              resultDatabase:
+                properties:
+                  args:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  command:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  dbname:
+                    type: string
+                  host:
+                    type: string
+                  image:
+                    description: Either Image or Host must be specified (enforced
+                      by controller).
+                    type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  password:
+                    type: string
+                  port:
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
+                  user:
+                    type: string
+                required:
+                - dbname
+                - password
+                - port
+                - user
+                type: object
+              translator:
+                properties:
+                  args:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  baseimage:
+                    type: string
+                  command:
+                    default: []
+                    items:
+                      type: string
+                    type: array
+                  image:
+                    type: string
+                  nodePort:
+                    format: int32
+                    maximum: 32767
+                    minimum: 30000
+                    type: integer
+                  port:
+                    default: 8080
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  repository:
+                    type: string
+                  serviceType:
+                    default: ClusterIP
+                    enum:
+                    - ClusterIP
+                    - NodePort
+                    - LoadBalancer
+                    type: string
+                required:
+                - baseimage
+                - image
+                - repository
+                type: object
+            required:
+            - detailDatabase
+            - experimentalDesignService
+            - postProcessingService
+            - resultDatabase
+            - translator
+            type: object
+          status:
+            properties:
+              message:
+                type: string
+              metrics:
+                properties:
+                  scenarioCount:
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
+              phase:
+                enum:
+                - Pending
+                - Provisioning
+                - InProgress
+                - Completed
+                - Failed
+                - Error
+                type: string
+            type: object
+        type: object
+    served: true
     storage: true
     subresources:
       status: {}

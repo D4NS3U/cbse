@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
+	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	"github.com/D4NS3U/cbse/experiment-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -51,6 +52,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(experimentalpha2.AddToScheme(scheme))
+	utilruntime.Must(experimentalpha3.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -207,6 +209,13 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimulationExperiment")
+		os.Exit(1)
+	}
+	if err := (&controller.LegacySimulationExperimentReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "LegacySimulationExperiment")
 		os.Exit(1)
 	}
 	// nolint:goconst
