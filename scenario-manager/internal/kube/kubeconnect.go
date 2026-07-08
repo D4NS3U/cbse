@@ -5,7 +5,7 @@ package kube
 import (
 	"log"
 
-	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
+	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -47,7 +47,7 @@ func KubeConnect() bool {
 		log.Printf("add core scheme: %v", err)
 		return false
 	}
-	if err := experimentalpha2.AddToScheme(scheme); err != nil {
+	if err := experimentalpha3.AddToScheme(scheme); err != nil {
 		log.Printf("add simulation experiment scheme: %v", err)
 		return false
 	}
