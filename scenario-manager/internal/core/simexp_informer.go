@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
+	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/coredb"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -41,7 +41,7 @@ const (
 // are populated only for updates that include a phase transition.
 type SimulationExperimentEvent struct {
 	Type       SimulationExperimentEventType
-	Experiment *experimentalpha2.SimulationExperiment
+	Experiment *experimentalpha3.SimulationExperiment
 	OldPhase   string
 	NewPhase   string
 }
@@ -53,9 +53,9 @@ type SimulationExperimentEvent struct {
 //   - Builds an in-cluster REST config, registers core and SimulationExperiment
 //     schemes, and spins up a controller-runtime cache.
 //   - Attaches event handlers that emit SimulationExperimentEvent values for:
-//       * creation (SimulationExperimentCreated)
-//       * deletion (SimulationExperimentDeleted)
-//       * phase transitions into InProgress, Completed, Failed, or Error
+//   - creation (SimulationExperimentCreated)
+//   - deletion (SimulationExperimentDeleted)
+//   - phase transitions into InProgress, Completed, Failed, or Error
 //   - Sends a deep copy of the object to the caller-provided handler so user
 //     code does not mutate the cached object.
 //   - Persists a summary of each SimulationExperiment into the core DB project
@@ -84,7 +84,7 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("add core scheme: %w", err)
 	}
-	if err := experimentalpha2.AddToScheme(scheme); err != nil {
+	if err := experimentalpha3.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("add simulation experiment scheme: %w", err)
 	}
 
@@ -95,7 +95,7 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 	}
 
 	// Ask the cache for an informer that watches SimulationExperiment objects.
-	informer, err := cache.GetInformer(ctx, &experimentalpha2.SimulationExperiment{})
+	informer, err := cache.GetInformer(ctx, &experimentalpha3.SimulationExperiment{})
 	if err != nil {
 		return fmt.Errorf("get SimulationExperiment informer: %w", err)
 	}
@@ -103,7 +103,7 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 	informer.AddEventHandler(kcache.ResourceEventHandlerFuncs{
 		// AddFunc reports new SimulationExperiment objects.
 		AddFunc: func(obj interface{}) {
-			se, ok := obj.(*experimentalpha2.SimulationExperiment)
+			se, ok := obj.(*experimentalpha3.SimulationExperiment)
 			if !ok {
 				log.Printf("unexpected add object type: %T", obj)
 				return
@@ -123,8 +123,8 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 		// UpdateFunc only reacts to phase changes, emitting a specific event when
 		// the SimulationExperiment enters a notable phase.
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			oldSE, okOld := oldObj.(*experimentalpha2.SimulationExperiment)
-			newSE, okNew := newObj.(*experimentalpha2.SimulationExperiment)
+			oldSE, okOld := oldObj.(*experimentalpha3.SimulationExperiment)
+			newSE, okNew := newObj.(*experimentalpha3.SimulationExperiment)
 			if !okOld || !okNew {
 				log.Printf("unexpected update object types: %T -> %T", oldObj, newObj)
 				return
@@ -180,14 +180,14 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 		// DeleteFunc reports deleted SimulationExperiments, handling both standard
 		// delete notifications and tombstones delivered after missed updates.
 		DeleteFunc: func(obj interface{}) {
-			se, ok := obj.(*experimentalpha2.SimulationExperiment)
+			se, ok := obj.(*experimentalpha3.SimulationExperiment)
 			if !ok {
 				tombstone, ok := obj.(kcache.DeletedFinalStateUnknown)
 				if !ok {
 					log.Printf("unexpected delete object type: %T", obj)
 					return
 				}
-				se, ok = tombstone.Obj.(*experimentalpha2.SimulationExperiment)
+				se, ok = tombstone.Obj.(*experimentalpha3.SimulationExperiment)
 				if !ok {
 					log.Printf("unexpected tombstone object type: %T", tombstone.Obj)
 					return
@@ -224,7 +224,7 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 
 // persistAddedSimulationExperiment writes the initial project row when a
 // SimulationExperiment is observed on add events.
-func persistAddedSimulationExperiment(ctx context.Context, se *experimentalpha2.SimulationExperiment) error {
+func persistAddedSimulationExperiment(ctx context.Context, se *experimentalpha3.SimulationExperiment) error {
 	if se == nil {
 		return fmt.Errorf("SimulationExperiment is nil")
 	}
@@ -243,8 +243,8 @@ func persistAddedSimulationExperiment(ctx context.Context, se *experimentalpha2.
 // changed on SimulationExperiment update events.
 func persistUpdatedSimulationExperiment(
 	ctx context.Context,
-	oldSE *experimentalpha2.SimulationExperiment,
-	newSE *experimentalpha2.SimulationExperiment,
+	oldSE *experimentalpha3.SimulationExperiment,
+	newSE *experimentalpha3.SimulationExperiment,
 ) error {
 	if oldSE == nil || newSE == nil {
 		return fmt.Errorf("SimulationExperiment update payload must not be nil")
@@ -271,7 +271,7 @@ func persistUpdatedSimulationExperiment(
 
 // countExperimentComponents returns how many optional components are configured
 // in the SimulationExperiment spec.
-func countExperimentComponents(spec experimentalpha2.SimulationExperimentSpec) int {
+func countExperimentComponents(spec experimentalpha3.SimulationExperimentSpec) int {
 	count := 0
 
 	if databaseSpecDefined(spec.DetailDatabase) {
@@ -294,7 +294,7 @@ func countExperimentComponents(spec experimentalpha2.SimulationExperimentSpec) i
 }
 
 // databaseSpecDefined reports whether a database spec has any configuration set.
-func databaseSpecDefined(spec experimentalpha2.DatabaseSpec) bool {
+func databaseSpecDefined(spec experimentalpha3.DatabaseSpec) bool {
 	return spec.Image != "" ||
 		spec.Host != "" ||
 		spec.DBName != "" ||
@@ -308,7 +308,7 @@ func databaseSpecDefined(spec experimentalpha2.DatabaseSpec) bool {
 }
 
 // translatorSpecDefined reports whether a translator spec has any configuration set.
-func translatorSpecDefined(spec experimentalpha2.TranslatorSpec) bool {
+func translatorSpecDefined(spec experimentalpha3.TranslatorSpec) bool {
 	return spec.Image != "" ||
 		spec.Repository != "" ||
 		spec.BaseImage != "" ||
@@ -320,7 +320,7 @@ func translatorSpecDefined(spec experimentalpha2.TranslatorSpec) bool {
 }
 
 // postProcessingSpecDefined reports whether a post-processing spec has any configuration set.
-func postProcessingSpecDefined(spec experimentalpha2.PostProcessingSpec) bool {
+func postProcessingSpecDefined(spec experimentalpha3.PostProcessingSpec) bool {
 	return spec.Image != "" ||
 		spec.Port != 0 ||
 		len(spec.Command) > 0 ||
@@ -330,7 +330,7 @@ func postProcessingSpecDefined(spec experimentalpha2.PostProcessingSpec) bool {
 }
 
 // experimentalDesignServiceDefined reports whether an experimental design service spec has any configuration set.
-func experimentalDesignServiceDefined(spec experimentalpha2.ExperimentalDesignServiceSpec) bool {
+func experimentalDesignServiceDefined(spec experimentalpha3.ExperimentalDesignServiceSpec) bool {
 	return spec.Design != "" ||
 		spec.Image != "" ||
 		spec.Port != 0 ||

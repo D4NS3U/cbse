@@ -4,7 +4,7 @@
 
 Update the existing `scenario-manager` codebase so it supports `SimulationExperiment` resources in API version `experiment.cbse.terministic.de/alpha3`.
 
-This is an API-version cutover, not a schema redesign. The `alpha3` `SimulationExperiment` shape is effectively the same as `alpha2` for the fields currently consumed by `scenario-manager`, so the implementation work is primarily replacing versioned imports and types, updating Kubernetes client and informer wiring, and aligning tests and documentation with `alpha3`.
+This is an API-version cutover, not a schema redesign. The `alpha3` `SimulationExperiment` shape is effectively the same as `alpha2` for the fields currently consumed by `scenario-manager`, so the implementation work is primarily replacing versioned imports and types, updating Kubernetes client and informer wiring, and aligning documentation and lightweight verification with `alpha3`.
 
 The target outcome is that every `scenario-manager` path that reads, lists, watches, or persists `SimulationExperiment` data operates against `alpha3` resources only.
 
@@ -19,6 +19,8 @@ The target outcome is that every `scenario-manager` path that reads, lists, watc
   persistence into the core DB stays the same.
 - Do not introduce field-mapping or conversion logic between `alpha2` and `alpha3`.
 - Do not add dual-version watch support in this change.
+- Do not add new test coverage or refactor testability as part of this change.
+- Do not fix the existing Kubernetes integration test behavior unless it blocks compilation of the alpha3 cutover.
 
 ### Kubernetes client and listing
 
@@ -53,33 +55,34 @@ The target outcome is that every `scenario-manager` path that reads, lists, watc
 - Internal informer helper functions and component-count helpers change from `alpha2` type parameters to `alpha3` type parameters.
 - No CR spec field additions or removals are required for `scenario-manager` in this change.
 
-## Test Plan
+## Verification Plan
 
-- Update Kubernetes integration coverage so a successful client setup and list operation validates `alpha3` scheme registration.
-- Add or update informer-oriented tests so add, update, and delete processing works with `alpha3` objects.
-- Verify phase transitions still emit the same event types for the same status changes.
-- Verify project persistence still behaves the same for `alpha3` resources:
-  add creates a project row;
-  updates change status and component count when applicable;
-  delete removes the project row.
-- Run `go test ./...` in `scenario-manager`.
-- Verify no `alpha2` `SimulationExperiment` imports remain in `scenario-manager` after implementation.
+Tests are intentionally out of scope for this cutover. Do not add new informer tests, do not update Kubernetes integration tests, and do not require `go test ./...` as the acceptance command for this change.
+
+Required verification:
+
+- Run Go tests for packages that do not require in-cluster Kubernetes access.
+- Run `go test ./internal/kube` only in a cluster-capable environment.
+- Verify no migration-relevant `alpha2` imports remain in `scenario-manager` after implementation:
+  `rg "api/alpha2|experimentalpha2" scenario-manager`
+- Confirm the code compiles after changing all `SimulationExperiment` client, list, informer, event, and helper types to `alpha3`.
 
 ## Assumptions
 
 - `scenario-manager` moves to `alpha3` only in this change.
 - Existing `alpha2` resources in a cluster are out of scope for this implementation.
 - The `alpha3` schema preserves the `alpha2` fields currently used by `scenario-manager`.
+- New or expanded automated test coverage is out of scope for this implementation.
 - Operator-side runtime env-var injection work is related system context, but it is not a primary implementation requirement for this `scenario-manager` cutover.
 
 ## Must-Edit Components
 
-- `devlog/changes/update_to_alpha3_api/update_to_alpha3_api_implspe.md`
 - `scenario-manager/internal/kube/kubeconnect.go`
 - `scenario-manager/internal/kube/simulationexperiments.go`
 - `scenario-manager/internal/core/simexp_informer.go`
-- `scenario-manager/internal/kube/kubeconnect_test.go`
 
-## Likely Additional Test Component
+## Deferred Work
 
-- Add a dedicated informer test file next to `scenario-manager/internal/core/simexp_informer.go` if current coverage is not enough to validate `alpha3` event handling end to end.
+- Add informer-oriented tests for create, update, delete, and phase-transition event handling with `alpha3` objects.
+- Add or update persistence tests for project creation, status/component-count updates, and delete behavior with `alpha3` resources.
+- Clean up `KubeConnect` testability so local `go test ./...` can skip Kubernetes integration cleanly when no in-cluster config is available.
