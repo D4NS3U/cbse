@@ -28,8 +28,18 @@ This change should not introduce advanced scheduling. It should not try to optim
 
 The result of this change should be a small, modular selection component that can be called by the Scenario Manager and later replaced or extended without changing the rest of the translation workflow.
 
- ## Change Location
+## Change Location
+The implementation should stay inside the `scenario-manager` component. The AI coding agent should add the new selector as a small Scenario Manager lifecycle component, not as part of EDS ingestion, Translator message formatting, or Experiment Operator logic.
+
+Create a new file `scenario-manager/internal/core/selector.go` for the main selector logic. This file should contain the orchestration code that asks the Core DB for the next actionable scenario and dispatches the correct next step based on the scenario state. The selector should use FIFO behavior based on the `scenario_status.id` column, sorted in ascending order (`1, 2, 3, ...`). For scenarios in `Created`, it should call the existing Translator handoff flow. For scenarios in `StartingRunners`, it should call a placeholder `createSimulationRunnerJob()` function. For scenarios in `PostProcessing`, it should call a placeholder `doPostProcessing()` function.
+
+Extend `scenario-manager/internal/coredb/scenario_status.go` with the database helper needed by the selector. This helper should return the next actionable scenario candidate from the scenario status table. The returned information should include at least the scenario ID and its current state. The query should only consider states that the selector can act on in this first version: `Created`, `StartingRunners`, and `PostProcessing`. It should sort by `id ASC` and return only the first matching row. This helper should not perform workflow actions itself; it should only read from the database.
+
+Update `scenario-manager/internal/core/scenario_manager.go` so the selector becomes part of Scenario Manager startup. After the existing informer and EDS communication have started, Scenario Manager should initialize the existing Translator communication adapter, start the Translator ready consumer with the existing `HandleTranslatorReady` handler, and then start the selector loop. The startup log message should be adjusted so it no longer says that Scenario Manager is only waiting for a future work loop.
+
+Reuse the existing Translator communication code in `scenario-manager/internal/nats/trans_com.go`. The AI coding agent should not change Translator request subjects, ready subjects, message payloads, or NATS/JetStream semantics as part of this implementation. The selector should use the existing `ProcessScenarioTrans(...)` function for `Created` scenarios instead of introducing a new translation workflow.
+
+No changes are expected in the Experiment Operator, EDS communication logic, Translator communication logic, NATS API types, Kubernetes API types, or external APIs for this step.
 
 
  ## Logic Description
-
