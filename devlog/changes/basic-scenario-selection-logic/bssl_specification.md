@@ -84,6 +84,8 @@ StartBasicScenarioSelector(ctx context.Context, publisher communication.Translat
 
 The loop should run `processNextScenario(ctx, publisher)` once immediately after startup and then once every `5s`. Each loop iteration processes at most one scenario. If there is no actionable scenario, the iteration is a no-op.
 
+The selector loop has no data-driven shutdown condition in v1. It must not stop merely because all currently stored scenarios are in terminal states. If all scenarios are `Finished` or `Failed`, `NextActionableScenario` returns `nil, nil`, the current tick is a no-op, and the loop waits for the next tick. The loop stops only when `ctx` is cancelled. Future project-level completion logic may detect that all scenarios for a `SimulationExperiment` are terminal, but that must not terminate the process-wide selector loop.
+
 The selector must not terminate the Scenario Manager for ordinary per-iteration failures. Database lookup errors, stale state updates, placeholder failures, and Translator handoff errors should be logged and then the loop should continue on the next tick unless `ctx` has been cancelled.
 
 The selector must not hold a long-lived lock. It selects a candidate row, dispatches the state-specific action, and then returns. Any durable state ownership must be represented by state transitions in the database, not by in-memory locks.
@@ -116,6 +118,18 @@ func NextActionableScenario(ctx context.Context) (*ScenarioActionCandidate, erro
 The helper must not update rows. It must not claim scenarios. It must not use `FOR UPDATE`. It is only the selector's read-side candidate lookup.
 
 The selection order is FIFO by `scenario_status.id`. The implementation must not use `priority`, `created_at`, `updated_at`, project name, number of repetitions, or any runtime estimate for this first version.
+
+Create one partial index for the selector lookup:
+
+```sql
+CREATE INDEX IF NOT EXISTS scenario_status_actionable_id_idx
+ON scenario_status (id)
+WHERE state IN ('Created', 'StartingRunners', 'PostProcessing');
+```
+
+This index exists because the selector repeatedly asks for the lowest `scenario_status.id` among actionable states. PostgreSQL maintains the index automatically as rows are inserted or their `state` changes. The implementation must not add an application-side background thread or manual index refresh logic.
+
+Do not create separate partial indexes for `Created`, `StartingRunners`, and `PostProcessing` in this BSSL step. The selector performs one unified FIFO lookup across all actionable states, so one partial index containing all actionable rows is the intended v1 optimization.
 
 ### Per-Iteration Dispatch
 
@@ -260,7 +274,14 @@ state = 'StartingRunners'
 updated_at = NOW()
 ```
 
-`MarkScenarioFailed` should update only non-terminal rows. It must not change rows already in `Finished` or `Failed`.
+`MarkScenarioFailed` should update only the exact row where:
+
+```sql
+id = scenarioID
+AND state NOT IN ('Finished', 'Failed')
+```
+
+It must not change rows already in `Finished` or `Failed`.
 
 It should set:
 
