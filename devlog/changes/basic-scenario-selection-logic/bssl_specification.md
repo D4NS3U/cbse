@@ -252,7 +252,7 @@ func MarkScenarioRequiresMoreRuns(ctx context.Context, scenarioID int) (bool, er
 func MarkScenarioFailedFrom(ctx context.Context, scenarioID int, expectedState string) (bool, error)
 ```
 
-Each helper should reject non-positive scenario IDs before executing SQL. `MarkScenarioFailedFrom` should also reject an empty `expectedState`, `Finished`, and `Failed`.
+Each helper should reject non-positive scenario IDs before executing SQL. `MarkScenarioFailedFrom` should also reject an empty `expectedState`, any unknown state, and terminal states `Finished` and `Failed`.
 
 `MarkScenarioInProcessing` is the durable claim for runner startup. It should update only the exact row where:
 
@@ -296,6 +296,8 @@ state = 'StartingRunners'
 updated_at = NOW()
 ```
 
+`MarkScenarioFailedFrom` is a generic state-guarded failure primitive. It does not decide whether a workflow has exhausted retries, whether an external side effect belongs to the current attempt, or whether a component owns a scenario strongly enough to fail it. It only records a terminal failure when the caller has already made that workflow-specific decision.
+
 `MarkScenarioFailedFrom` should update only the exact row where:
 
 ```sql
@@ -303,7 +305,7 @@ id = scenarioID
 AND state = expectedState
 ```
 
-It must not change rows already in `Finished` or `Failed`, and it must not change rows that have moved into any other working state after the selector read them.
+It must not change rows already in `Finished` or `Failed`, and it must not change rows that have moved into any other working state after the caller read or claimed them.
 
 It should set:
 
@@ -314,11 +316,13 @@ updated_at = NOW()
 
 All four helpers should return `true, nil` when a row was updated and `false, nil` when no row matched the guard. A zero-row update is a stale or already-handled condition, not a hard error. SQL execution failures should return `false, error`.
 
+Component-specific workflows may call `MarkScenarioFailedFrom` only when an exact current-state guard is sufficient for correctness. If a workflow needs additional stale-work guards, such as `translation_attempts`, a runner job identity, or a post-processing claim token, it must use an existing specific helper or add a more specific helper rather than calling `MarkScenarioFailedFrom` directly.
+
 The selector should log zero-row updates with the scenario ID, expected old state, and intended new state, then continue. It must not retry the same scenario inside the same tick.
 
 ### Failure Handling
 
-BSSL uses `Failed` as the terminal failure state for errors that occur in selector-owned workflow steps.
+BSSL uses `Failed` as the terminal failure state for errors that occur in workflow steps the v1 selector directly executes. `MarkScenarioFailedFrom` remains generic, but BSSL v1 should call it only for failures in placeholder steps where the selector has enough local ownership context to make a terminal-failure decision.
 
 The selector should move a scenario to `Failed` when:
 
@@ -333,24 +337,28 @@ The selector should not move a scenario to `Failed` when:
 - a guarded update returns `false, nil`
 - `ctx` is cancelled
 
-Before moving any scenario to `Failed`, the selector must check `ctx.Err()`. If the context is cancelled, cancellation takes precedence over the workflow error and the selector must not write a failure state. If the context is still active, failure updates must use `MarkScenarioFailedFrom` with the state the selector expects to own.
+Before moving any scenario to `Failed`, the selector must check `ctx.Err()`. If the context is cancelled, cancellation takes precedence over the workflow error and the selector must not write a failure state. If the context is still active, BSSL-owned failure updates must use `MarkScenarioFailedFrom` with the state the selector directly owns for that placeholder step.
 
-Translator-specific failures remain owned by the existing Translator handoff and ready-message handling logic. In particular, `Scheduled` scenarios must not be selected or failed by BSSL.
+Translator-specific failures remain owned by the existing Translator handoff and ready-message handling logic. The BSSL selector must not independently fail `Scheduled`; Translator workflow may still move `Scheduled -> Failed` through its existing attempt-aware helpers.
+
+Future runner execution and PostProcessingService integrations own their own failure decisions after they introduce durable ownership or claim rules. They may use `MarkScenarioFailedFrom` only when an exact state guard is enough for their ownership model; otherwise they must introduce claim-aware or attempt-aware helpers.
 
 Failure reasons are logged only. Do not add a new database column for failure reason, failure class, or failure timestamp in this BSSL step.
 
 ### Ignored States
 
-The selector must not select or mutate these states:
+The selector must not select these states as ordinary BSSL candidates or advance them through the FIFO selection loop:
 
 - `Scheduled`
 - `InProcessing`
 - `Finished`
 - `Failed`
 
-`Scheduled` is owned by Translator handoff and Translator ready-message handling.
+This ignored-state rule does not prohibit component-owned workflows from making guarded terminal failure transitions. It means BSSL should not discover these rows through `NextActionableScenario` or treat them as normal next-step candidates.
 
-`InProcessing` is entered by BSSL only as the durable runner-start claim and next canonical runner state. The selector must not select `InProcessing` rows. After a scenario is in `InProcessing`, future runner execution and runner completion logic own the next transition.
+`Scheduled` is owned by Translator handoff and Translator ready-message handling. The selector must not select `Scheduled` rows, and BSSL must not make independent `Scheduled -> Failed` decisions. Retry-aware Translator helpers remain the authoritative path for `Scheduled -> Created` and `Scheduled -> Failed`.
+
+`InProcessing` is entered by BSSL only as the durable runner-start claim and next canonical runner state. The selector must not select `InProcessing` rows on later iterations. After a scenario is in `InProcessing`, future runner execution and runner completion logic own the next transition, except for the v1 runner-start placeholder failure path immediately after BSSL has claimed `StartingRunners -> InProcessing`.
 
 `Finished` and `Failed` are terminal states.
 
@@ -379,8 +387,11 @@ Core DB helper tests should verify:
 - `MarkScenarioInProcessing` only updates `StartingRunners -> InProcessing`
 - `MarkScenarioFinished` only updates `PostProcessing -> Finished`
 - `MarkScenarioRequiresMoreRuns` only updates `PostProcessing -> StartingRunners`
-- `MarkScenarioFailedFrom` updates only rows that still match the expected non-terminal state
-- guarded helpers return `false, nil` for stale state guards
+- `MarkScenarioFailedFrom` updates only rows that still match the expected known non-terminal state
+- `MarkScenarioFailedFrom` returns `false, nil` for stale state guards
+- `MarkScenarioFailedFrom` rejects empty, unknown, `Finished`, and `Failed` expected states
+- the other guarded helpers return `false, nil` for stale state guards
+- Translator-specific failure tests remain on the existing attempt-aware Translator helpers, not on `MarkScenarioFailedFrom`
 
 Selector tests should use fakes or replaceable function variables for the publisher and placeholders. They should verify:
 
