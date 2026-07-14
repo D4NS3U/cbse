@@ -12,13 +12,6 @@ import (
 	"github.com/D4NS3U/cbse/scenario-manager/internal/translatorconfig"
 )
 
-// translatorHandoffConfig groups the small set of shared settings that core
-// needs for per-scenario translator handoff and unpublished-claim recovery.
-type translatorHandoffConfig struct {
-	MaxAttempts            int
-	PublishRecoveryTimeout time.Duration
-}
-
 // ProcessScenarioTrans executes the translator handoff for exactly one supplied
 // scenario id.
 //
@@ -34,7 +27,7 @@ func ProcessScenarioTrans(ctx context.Context, scenarioID int, publisher communi
 		return fmt.Errorf("translation request publisher must not be nil")
 	}
 
-	cfg := loadTranslatorHandoffConfig()
+	maxAttempts := translatorconfig.LoadMaxAttempts()
 	claimed, err := coredb.ClaimScenarioForTranslation(ctx, scenarioID)
 	if err != nil {
 		return err
@@ -48,7 +41,7 @@ func ProcessScenarioTrans(ctx context.Context, scenarioID int, publisher communi
 
 	if err := publisher.PublishTranslationRequest(ctx, *claimed); err != nil {
 		log.Printf("Translator publish failure for scenario %d attempt %d (project=%q class=publish): %v", claimed.ID, claimed.TranslationAttempt, claimed.Project, err)
-		stateChanged, finalState, recoveryErr := coredb.MarkScenarioTranslationPublishFailed(ctx, claimed.ID, claimed.TranslationAttempt, cfg.MaxAttempts)
+		stateChanged, finalState, recoveryErr := coredb.MarkScenarioTranslationPublishFailed(ctx, claimed.ID, claimed.TranslationAttempt, maxAttempts)
 		if recoveryErr != nil {
 			return recoveryErr
 		}
@@ -74,27 +67,39 @@ func ProcessScenarioTrans(ctx context.Context, scenarioID int, publisher communi
 	return nil
 }
 
-// RecoverUnpublishedTranslationClaim checks whether the supplied scenario id is
-// still stuck in the short unpublished Scheduled window that Scenario Manager
-// owns before publish confirmation is recorded.
-//
-// This helper is intentionally callable and scenario-scoped so a future higher
-// level loop can decide which ids to inspect. It never scans for other rows.
-// When no exact row matches the recovery guards, the function returns
-// stateChanged=false without treating that as an error.
-func RecoverUnpublishedTranslationClaim(ctx context.Context, scenarioID int) (bool, string, error) {
-	cfg := loadTranslatorHandoffConfig()
-	claimedBefore := time.Now().Add(-cfg.PublishRecoveryTimeout)
-
-	stateChanged, finalState, err := coredb.RecoverUnpublishedTranslationClaim(ctx, scenarioID, claimedBefore, cfg.MaxAttempts)
-	if err != nil {
-		log.Printf("Unpublished-claim recovery failed for scenario %d (class=unpublished-claim recovery): %v", scenarioID, err)
+// RecoverUnpublishedTranslationClaim applies recovery to the exact Scheduled
+// attempt discovered by BSSL. The caller supplies the cutoff as well as the
+// attempt so the guarded update uses precisely the same eligibility snapshot as
+// discovery; this helper never reads the clock or reloads the recovery timeout.
+func RecoverUnpublishedTranslationClaim(
+	ctx context.Context,
+	scenarioID int,
+	expectedAttempt int,
+	claimedBefore time.Time,
+) (bool, string, error) {
+	if ctx == nil {
+		return false, "", fmt.Errorf("unpublished-claim recovery context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
 		return false, "", err
 	}
-	if stateChanged {
-		log.Printf("Recovered unpublished translation claim for scenario %d (old=%s new=%s).", scenarioID, coredb.ScenarioStateScheduled, finalState)
+	if scenarioID <= 0 {
+		return false, "", fmt.Errorf("scenario ID must be positive")
 	}
-	return stateChanged, finalState, nil
+	if expectedAttempt <= 0 {
+		return false, "", fmt.Errorf("expected translation attempt must be positive")
+	}
+	if claimedBefore.IsZero() {
+		return false, "", fmt.Errorf("claimed-before threshold must be set")
+	}
+
+	return coredb.RecoverUnpublishedTranslationClaim(
+		ctx,
+		scenarioID,
+		expectedAttempt,
+		claimedBefore,
+		translatorconfig.LoadMaxAttempts(),
+	)
 }
 
 // HandleTranslatorReady applies the semantic Translator ready workflow after a
@@ -106,11 +111,11 @@ func RecoverUnpublishedTranslationClaim(ctx context.Context, scenarioID int) (bo
 // ACK them; transient persistence failures return Retry so adapters can request
 // redelivery.
 func HandleTranslatorReady(ctx context.Context, ready communication.TranslatorReadyMessage) communication.TranslatorReadyHandlingResult {
-	cfg := loadTranslatorHandoffConfig()
+	maxAttempts := translatorconfig.LoadMaxAttempts()
 	ready.ContainerImage = strings.TrimSpace(ready.ContainerImage)
 
 	if ready.ContainerImage == "" {
-		stateChanged, finalState, err := coredb.MarkScenarioTranslationAttemptFailed(ctx, ready.ScenarioID, ready.TranslationAttempt, cfg.MaxAttempts)
+		stateChanged, finalState, err := coredb.MarkScenarioTranslationAttemptFailed(ctx, ready.ScenarioID, ready.TranslationAttempt, maxAttempts)
 		if err != nil {
 			log.Printf("Translator ready recovery failed for scenario %d attempt %d (project=%q class=DB): %v", ready.ScenarioID, ready.TranslationAttempt, ready.Project, err)
 			return communication.TranslatorReadyHandlingResult{
@@ -154,17 +159,5 @@ func HandleTranslatorReady(ctx context.Context, ready communication.TranslatorRe
 	return communication.TranslatorReadyHandlingResult{
 		Status: communication.TranslatorReadyHandled,
 		Reason: string(result.Status),
-	}
-}
-
-// loadTranslatorHandoffConfig reads the shared translator retry and unpublished
-// claim recovery settings needed by core handoff helpers.
-//
-// The values are intentionally sourced from translatorconfig so core and the
-// transport adapter both use the same max-attempt and recovery-timeout policy.
-func loadTranslatorHandoffConfig() translatorHandoffConfig {
-	return translatorHandoffConfig{
-		MaxAttempts:            translatorconfig.LoadMaxAttempts(),
-		PublishRecoveryTimeout: translatorconfig.LoadPublishRecoveryTimeout(),
 	}
 }

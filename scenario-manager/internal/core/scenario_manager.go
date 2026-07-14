@@ -10,16 +10,21 @@ import (
 	"github.com/D4NS3U/cbse/scenario-manager/internal/nats"
 )
 
-// RunScenarioManager starts the SimulationExperiment informer and then waits
-// for the shared context to be cancelled.
+// RunScenarioManager starts Scenario Manager's context-owned integrations and
+// its one joinable Basic Scenario Selection Logic (BSSL) worker, then waits for
+// the shared context to be cancelled.
 //
 // Startup order:
 //  1. Start the SimulationExperiment informer, which tracks project lifecycle
 //     events used by Scenario Manager.
 //  2. Start EDS communication over NATS/JetStream with a custom batch processor
 //     that enforces in-process sequential handling of incoming scenario batches.
+//  3. Start Translator communication, including its ready-message consumer.
+//  4. Reuse that Translator adapter as the publisher for one BSSL worker.
+//  5. Report readiness, wait for shared-context cancellation, join BSSL, and
+//     only then report final shutdown.
 //
-// Both startup steps are considered required dependencies. Any initialization
+// Every startup step is a required dependency. Any initialization
 // failure is treated as fatal and terminates the process immediately.
 func RunScenarioManager(ctx context.Context) {
 	if err := StartSimulationExperimentInformer(ctx, handleSimulationExperimentEvent); err != nil {
@@ -30,11 +35,24 @@ func RunScenarioManager(ctx context.Context) {
 		log.Fatalf("Failed to start EDS communication: %v", err)
 	}
 
-	// The component currently has no explicit work loop beyond informer callbacks
-	// and NATS subscriptions, so it blocks until global shutdown.
-	log.Println("Scenario Manager is ready; awaiting future work loop.")
+	translatorComms, err := nats.StartTranslatorComms(ctx, HandleTranslatorReady)
+	if err != nil {
+		log.Fatalf("Failed to start Translator communication: %v", err)
+	}
+
+	selectorDone, err := StartBasicScenarioSelector(ctx, translatorComms)
+	if err != nil {
+		log.Fatalf("Failed to start Basic Scenario Selection Logic: %v", err)
+	}
+
+	log.Println("Scenario Manager is ready; Basic Scenario Selection Logic worker started.")
 	<-ctx.Done()
-	log.Printf("Scenario Manager shutting down: %v", ctx.Err())
+
+	// The informer and NATS consumers retain their existing context-driven
+	// lifecycle. BSSL supplies a join handle because final shutdown must not be
+	// reported while its active context-aware operation is still unwinding.
+	<-selectorDone
+	log.Printf("Scenario Manager shutdown complete: %v", ctx.Err())
 }
 
 // handleSimulationExperimentEvent is the current callback used by the

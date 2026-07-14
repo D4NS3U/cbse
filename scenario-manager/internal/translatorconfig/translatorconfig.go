@@ -1,10 +1,10 @@
 // Package translatorconfig centralizes translator-workflow configuration that
 // must be shared by multiple packages without creating import cycles.
 //
-// Both the core handoff logic and the concrete NATS adapter need the same retry
-// and unpublished-claim recovery settings. Keeping the parsing here lets those
-// packages stay decoupled from each other while still agreeing on defaults and
-// validation behavior.
+// Core handoff logic and the concrete NATS adapter share the translation-attempt
+// policy. The selector separately loads the unconfirmed-publish recovery timeout
+// once at worker startup. Keeping both parsers here preserves one set of
+// defaults without coupling core orchestration to the broker adapter.
 package translatorconfig
 
 import (
@@ -54,7 +54,7 @@ func LoadMaxAttempts() int {
 	return DefaultMaxAttempts
 }
 
-// LoadPublishRecoveryTimeout parses the shared unpublished-claim recovery
+// LoadPublishRecoveryTimeout parses the selector's unpublished-claim recovery
 // timeout from the environment.
 //
 // The value must be a positive Go duration string accepted by

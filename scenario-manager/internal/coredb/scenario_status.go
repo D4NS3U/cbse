@@ -1,5 +1,6 @@
 // Package coredb centralizes persistence for the Scenario Manager. This file
-// adds Scenario Status table helpers that support batch ingestion from EDS.
+// contains the Scenario Status reads and guarded lifecycle updates shared by
+// ingestion, Translator communication, and scenario selection.
 package coredb
 
 import (
@@ -12,6 +13,13 @@ import (
 )
 
 const (
+	// These predicates stay as literal SQL so PostgreSQL can prove that the
+	// candidate queries match the partial indexes created in schema.go. Turning
+	// the state names into query parameters can prevent that match when the
+	// database chooses a generic prepared-query plan.
+	actionableScenarioPredicate     = `state IN ('Created', 'StartingRunners', 'PostProcessing')`
+	unpublishedTranslationPredicate = `state = 'Scheduled' AND translation_request_published_at IS NULL`
+
 	// DefaultScenarioState is assigned by Scenario Manager when EDS payloads
 	// do not carry a scenario state.
 	DefaultScenarioState = "Created"
@@ -39,8 +47,7 @@ const (
 	// ScenarioStateFinished is the terminal success state in the canonical
 	// lifecycle.
 	ScenarioStateFinished = "Finished"
-	// ScenarioStateFailed is the terminal failure state used when translation
-	// attempts are exhausted.
+	// ScenarioStateFailed is the workflow-generic terminal failure state.
 	ScenarioStateFailed = "Failed"
 )
 
@@ -70,6 +77,21 @@ type ScenarioForTranslation struct {
 	TranslationAttempt int
 	RecipeInfo         json.RawMessage
 	ConfidenceMetric   *float64
+}
+
+// ScenarioActionCandidate is the intentionally small projection used by the
+// selector. Selection does not need recipe, project, timing, or priority data.
+type ScenarioActionCandidate struct {
+	ID    int
+	State string
+}
+
+// TranslationRecoveryCandidate identifies the exact Scheduled translation
+// attempt found by recovery discovery. Carrying the attempt with the ID lets
+// the later update reject a row that was reclaimed between discovery and use.
+type TranslationRecoveryCandidate struct {
+	ID                 int
+	TranslationAttempt int
 }
 
 // TranslatorReadyStatus classifies terminal DB outcomes for ready handling
@@ -166,6 +188,79 @@ func InsertScenarioStatusBatch(ctx context.Context, records []ScenarioStatusReco
 	}
 
 	return inserted, nil
+}
+
+// NextActionableScenario returns the globally lowest positive Scenario Status
+// ID whose current state is owned by the basic selector. It only observes the
+// row; the selected workflow handler performs the guarded state claim later.
+func NextActionableScenario(ctx context.Context) (*ScenarioActionCandidate, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	if err := ensureCoreDBPool(); err != nil {
+		return nil, fmt.Errorf("find next actionable scenario: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, state
+		FROM %s
+		WHERE id > 0
+			AND %s
+		ORDER BY id ASC
+		LIMIT 1`,
+		scenarioStatusTableName(),
+		actionableScenarioPredicate,
+	)
+
+	candidate := &ScenarioActionCandidate{}
+	if err := coreDBPool.QueryRowContext(ctx, query).Scan(&candidate.ID, &candidate.State); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find next actionable scenario: %w", err)
+	}
+
+	return candidate, nil
+}
+
+// NextStaleUnpublishedTranslationClaim returns the globally lowest positive
+// Scheduled row whose publish confirmation is missing and whose durable claim
+// is strictly older than claimedBefore. Discovery does not modify or lock it.
+func NextStaleUnpublishedTranslationClaim(ctx context.Context, claimedBefore time.Time) (*TranslationRecoveryCandidate, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	if claimedBefore.IsZero() {
+		return nil, fmt.Errorf("claimed-before threshold must be set")
+	}
+	if err := ensureCoreDBPool(); err != nil {
+		return nil, fmt.Errorf("find next stale unpublished translation claim: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, translation_attempts
+		FROM %s
+		WHERE id > 0
+			AND %s
+			AND updated_at < $1
+		ORDER BY id ASC
+		LIMIT 1`,
+		scenarioStatusTableName(),
+		unpublishedTranslationPredicate,
+	)
+
+	candidate := &TranslationRecoveryCandidate{}
+	if err := coreDBPool.QueryRowContext(ctx, query, claimedBefore).Scan(
+		&candidate.ID,
+		&candidate.TranslationAttempt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find next stale unpublished translation claim: %w", err)
+	}
+
+	return candidate, nil
 }
 
 // ClaimScenarioForTranslation claims exactly one supplied scenario id for the
@@ -511,18 +606,28 @@ func MarkScenarioTranslatorReady(ctx context.Context, scenarioID int, translatio
 }
 
 // RecoverUnpublishedTranslationClaim recovers exactly one unpublished Scheduled
-// claim when higher-level orchestration decides to check that scenario id.
+// claim when higher-level orchestration decides to check that scenario ID and
+// translation attempt.
 //
 // The update targets only rows still in Scheduled, still missing a publish
-// marker, and older than claimedBefore. Zero affected rows mean that the row
-// either no longer matches the unpublished-claim window or has already been
-// advanced by newer work, which is a normal no-op outcome.
-func RecoverUnpublishedTranslationClaim(ctx context.Context, scenarioID int, claimedBefore time.Time, maxAttempts int) (bool, string, error) {
-	if err := ensureCoreDBPool(); err != nil {
-		return false, "", err
+// marker, still on the discovered attempt, and older than claimedBefore. Zero
+// affected rows mean newer work already superseded discovery, which is a normal
+// no-op rather than a database failure.
+func RecoverUnpublishedTranslationClaim(
+	ctx context.Context,
+	scenarioID int,
+	expectedAttempt int,
+	claimedBefore time.Time,
+	maxAttempts int,
+) (bool, string, error) {
+	if ctx == nil {
+		return false, "", fmt.Errorf("context must not be nil")
 	}
 	if scenarioID <= 0 {
 		return false, "", fmt.Errorf("scenario ID must be positive")
+	}
+	if expectedAttempt <= 0 {
+		return false, "", fmt.Errorf("expected translation attempt must be positive")
 	}
 	if claimedBefore.IsZero() {
 		return false, "", fmt.Errorf("claimed-before threshold must be set")
@@ -530,18 +635,22 @@ func RecoverUnpublishedTranslationClaim(ctx context.Context, scenarioID int, cla
 	if maxAttempts <= 0 {
 		return false, "", fmt.Errorf("max attempts must be positive")
 	}
+	if err := ensureCoreDBPool(); err != nil {
+		return false, "", fmt.Errorf("recover unpublished translation claim for scenario %d: %w", scenarioID, err)
+	}
 
 	query := fmt.Sprintf(`
 		UPDATE %s
 		SET state = CASE
-				WHEN translation_attempts < $3 THEN $4
-				ELSE $5
+				WHEN translation_attempts < $4 THEN $5
+				ELSE $6
 			END,
 			updated_at = NOW()
 		WHERE id = $1
 			AND state = $2
+			AND translation_attempts = $3
 			AND translation_request_published_at IS NULL
-			AND updated_at < $6
+			AND updated_at < $7
 		RETURNING state`,
 		scenarioStatusTableName(),
 	)
@@ -552,6 +661,7 @@ func RecoverUnpublishedTranslationClaim(ctx context.Context, scenarioID int, cla
 		query,
 		scenarioID,
 		ScenarioStateScheduled,
+		expectedAttempt,
 		maxAttempts,
 		ScenarioStateCreated,
 		ScenarioStateFailed,
@@ -565,4 +675,145 @@ func RecoverUnpublishedTranslationClaim(ctx context.Context, scenarioID int, cla
 	}
 
 	return true, finalState, nil
+}
+
+// MarkScenarioInProcessing claims runner startup before the selector invokes
+// the runner placeholder. A false result means another worker changed the row
+// after candidate discovery.
+func MarkScenarioInProcessing(ctx context.Context, scenarioID int) (bool, error) {
+	return markScenarioState(
+		ctx,
+		scenarioID,
+		ScenarioStateStartingRunners,
+		ScenarioStateInProcessing,
+		"mark scenario in processing",
+	)
+}
+
+// MarkScenarioFinished records the successful terminal result of the
+// post-processing decision, but only while the row remains PostProcessing.
+func MarkScenarioFinished(ctx context.Context, scenarioID int) (bool, error) {
+	return markScenarioState(
+		ctx,
+		scenarioID,
+		ScenarioStatePostProcessing,
+		ScenarioStateFinished,
+		"mark scenario finished",
+	)
+}
+
+// MarkScenarioRequiresMoreRuns returns a PostProcessing row to runner startup
+// without changing its repetition or confidence fields.
+func MarkScenarioRequiresMoreRuns(ctx context.Context, scenarioID int) (bool, error) {
+	return markScenarioState(
+		ctx,
+		scenarioID,
+		ScenarioStatePostProcessing,
+		ScenarioStateStartingRunners,
+		"mark scenario as requiring more runs",
+	)
+}
+
+// MarkScenarioFailedFrom applies a terminal failure only when the row still has
+// the exact non-terminal state owned by the caller. The allowlist is deliberately
+// case-sensitive; trimming or accepting future states could overwrite work that
+// this version of Scenario Manager does not own.
+func MarkScenarioFailedFrom(ctx context.Context, scenarioID int, expectedState string) (bool, error) {
+	if ctx == nil {
+		return false, fmt.Errorf("context must not be nil")
+	}
+	if scenarioID <= 0 {
+		return false, fmt.Errorf("scenario ID must be positive")
+	}
+
+	switch expectedState {
+	case ScenarioStateCreated,
+		ScenarioStateScheduled,
+		ScenarioStateStartingRunners,
+		ScenarioStateInProcessing,
+		ScenarioStatePostProcessing:
+		// These are the canonical non-terminal states that callers may own.
+	default:
+		return false, fmt.Errorf("expected state %q is not a supported non-terminal state", expectedState)
+	}
+
+	return markScenarioState(
+		ctx,
+		scenarioID,
+		expectedState,
+		ScenarioStateFailed,
+		"mark scenario failed",
+	)
+}
+
+// markScenarioState performs one guarded lifecycle transition. It intentionally
+// uses no preliminary SELECT or transaction: PostgreSQL evaluates the ID and
+// expected-state guard together with the update, so concurrent losers receive a
+// harmless zero-row result.
+func markScenarioState(
+	ctx context.Context,
+	scenarioID int,
+	expectedState string,
+	nextState string,
+	operation string,
+) (bool, error) {
+	if ctx == nil {
+		return false, fmt.Errorf("context must not be nil")
+	}
+	if scenarioID <= 0 {
+		return false, fmt.Errorf("scenario ID must be positive")
+	}
+	if err := ensureCoreDBPool(); err != nil {
+		return false, fmt.Errorf(
+			"%s for scenario %d from %s to %s: %w",
+			operation,
+			scenarioID,
+			expectedState,
+			nextState,
+			err,
+		)
+	}
+
+	query := fmt.Sprintf(`
+		UPDATE %s
+		SET state = $2,
+			updated_at = NOW()
+		WHERE id = $1
+			AND state = $3`,
+		scenarioStatusTableName(),
+	)
+
+	result, err := coreDBPool.ExecContext(ctx, query, scenarioID, nextState, expectedState)
+	if err != nil {
+		return false, fmt.Errorf(
+			"%s for scenario %d from %s to %s: %w",
+			operation,
+			scenarioID,
+			expectedState,
+			nextState,
+			err,
+		)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf(
+			"inspect %s result for scenario %d from %s to %s: %w",
+			operation,
+			scenarioID,
+			expectedState,
+			nextState,
+			err,
+		)
+	}
+	if rows > 1 {
+		return false, fmt.Errorf(
+			"inspect %s result for scenario %d: guarded update changed %d rows",
+			operation,
+			scenarioID,
+			rows,
+		)
+	}
+
+	return rows == 1, nil
 }
