@@ -16,85 +16,252 @@ The implementation should favor clarity over cleverness. The AI coding agent sho
 
 
 ## Scope
-This change adds the first basic scenario selection logic to the Scenario Manager.
 
-Today, the Scenario Manager can receive scenarios from EDS and store them in the Core DB. It also already has a translator handoff workflow that can process one specific scenario when it is given a scenario ID. What is still missing is the simple decision step in between: choosing which stored scenario should be handled next.
+This change adds the first Basic Scenario Selection Logic (BSSL) to the Scenario Manager. BSSL is one process-wide worker that repeatedly finds at most one eligible scenario and advances one lifecycle step.
 
-The scope of this specification is to describe that first decision step. The Scenario Manager should be able to find scenarios that are ready for translation, select one suitable candidate, and pass it into the existing translator handoff flow. This first version is intentionally simple and predictable. It is meant to prove the basic workflow and create a clean place where more advanced selection logic can be added later.
+The words **must** and **must not** describe required behavior. **May** describes behavior that is optional without changing this contract.
 
-The selection logic should focus only on states that this first basic Scenario Manager loop can actively move forward: `Created`, `StartingRunners`, and `PostProcessing`. A `Created` scenario has been received and stored, but has not yet been sent to the Translator. Once such a scenario is selected, the existing translator handoff is responsible for claiming it, publishing the translation request, and updating the scenario state. `StartingRunners` and `PostProcessing` are handled only through explicit placeholder methods so the lifecycle can be wired without implementing the real runner and post-processing services yet. `StartingRunners` should follow the same claim-before-side-effect shape as translation by first moving the row to the existing in-flight state `InProcessing`, then invoking the runner-start placeholder. `PostProcessing` has no existing separate in-flight state in the current lifecycle, so its BSSL placeholder must remain side-effect-free; the real PostProcessingService integration must add a durable claim design before it performs external side effects.
+### Terms
 
-This change should not introduce advanced scheduling. It should not try to optimize cluster resources, balance load between projects, batch multiple scenarios, or make decisions based on simulation runtime estimates. Those topics are intentionally left for later versions of the scenario selection logic.
+| Term | Meaning in this specification |
+| --- | --- |
+| Ordinary candidate | A positive-ID row currently in `Created`, `StartingRunners`, or `PostProcessing`. |
+| Recovery candidate | A positive-ID `Scheduled` row whose translation publish confirmation is missing, whose claim is old enough for recovery, and whose translation attempt is returned with the row. |
+| Claim | A durable database state change completed before a component performs a possible external side effect. |
+| Guarded transition | One atomic update that succeeds only while the row still has the expected ID, state, and any workflow-specific attempt or age values. |
+| Stale result | A guarded operation that changes zero rows because another worker or newer workflow step changed the row first. It is a normal no-op, not a database failure. |
+| Placeholder | Local scaffold code that logs and returns a fixed result without calling the future runner or PostProcessingService. |
+| Terminal state | `Finished` or `Failed`; BSSL never selects these rows. |
+| Iteration | One recovery check followed, only when no recovery candidate exists, by one ordinary lookup and dispatch. |
 
-The result of this change should be a small, modular selection component that can be called by the Scenario Manager and later replaced or extended without changing the rest of the translation workflow.
+The existing code and database column use the word “unpublished.” More precisely, `translation_request_published_at IS NULL` means that Scenario Manager did not record publish confirmation. It does not prove that the broker never accepted the message. This specification therefore uses “unconfirmed publish” when explaining the behavior, while retaining existing function and column names.
+
+### Lifecycle and Ownership
+
+| State | Meaning | BSSL behavior | Owner of the next real step |
+| --- | --- | --- | --- |
+| `Created` | Eligible for a Translator claim. It may be newly ingested or returned for another translation attempt. | Ordinary candidate; delegate to the existing Translator handoff. | Existing Translator handoff. |
+| `Scheduled` | Translation is in flight. | Never an ordinary candidate. Only a stale unconfirmed publish may enter the narrow recovery path. | Translator handoff and Translator ready handling. |
+| `StartingRunners` | Translation supplied the runner image. | Ordinary candidate; claim it as `InProcessing`, then invoke the local runner placeholder. | Future runner integration. |
+| `InProcessing` | Runner work is considered in flight. | Ignored. BSSL does not recover or advance it. | Future runner execution and completion logic. |
+| `PostProcessing` | Runner completion logic requested a confidence decision. | Ordinary candidate; invoke the local post-processing placeholder and apply its result. | BSSL placeholder now; future PostProcessingService later. |
+| `Finished` | Terminal success. | Ignored. | No next step. |
+| `Failed` | Terminal failure. | Ignored. | No next step. |
+| Any unknown value | Invalid or future state not known to BSSL. | Ignored indefinitely and never changed. | Operator repair or a future implementation. |
+
+The lifecycle edges relevant to BSSL are:
+
+```text
+Created --existing Translator claim--> Scheduled
+Scheduled --existing ready handling--> StartingRunners
+Scheduled --stale unconfirmed recovery--> Created or Failed
+StartingRunners --BSSL runner claim--> InProcessing
+InProcessing --future runner completion--> PostProcessing
+PostProcessing --confidence reached--> Finished
+PostProcessing --more runs required--> StartingRunners
+InProcessing or PostProcessing --owned placeholder failure--> Failed
+```
+
+### Selection Boundaries
+
+Ordinary selection is one global lookup across the resolved Scenario Status table. It does not join the Project table and does not filter by project or `SimulationExperiment` phase. Rows from empty, pending, in-progress, completed, failed, or error projects participate equally.
+
+The ordinary lookup selects the lowest currently visible positive `scenario_status.id` across `Created`, `StartingRunners`, and `PostProcessing`. “FIFO” in this specification means this numeric ID order:
+
+- gaps caused by deleted rows are allowed;
+- it is not strict wall-clock or transaction-commit order;
+- an older `PostProcessing` row precedes a newer `Created` row;
+- project status, project name, `priority`, timestamps, repetition counts, confidence, image, and runtime estimates do not affect the order.
+
+A recovery candidate always takes precedence over all ordinary work, regardless of the two candidates’ IDs. One iteration considers at most one recovery candidate or one ordinary candidate. A stale result, lost race, or handler error consumes the iteration; BSSL must not fall through to a replacement row in the same iteration.
+
+The fixed five-second throttle limits one Scenario Manager process to at most 12 candidate actions per minute when operations complete quickly. Completing 1,000 candidate actions therefore takes at least about 83 minutes. One scenario may require several actions, and this BSSL version does not complete the full real lifecycle. Multiple replicas remain correct, but they commonly discover the same lowest-ID row and therefore do not multiply throughput predictably.
+
+This simple order intentionally permits head-of-line blocking:
+
+- a repeatedly failing lowest-ID ordinary row can delay every higher ID;
+- a continuing recovery backlog can delay all ordinary work;
+- BSSL has no skip, quarantine, per-row delay, fairness, or project balancing rule;
+- persistent invalid data requires operator repair.
+
+BSSL does not limit the number of rows already in `Scheduled` or `InProcessing`. It performs no capacity check or downstream backpressure check before selecting another row.
+
+### Placeholder Limitations
+
+The runner and post-processing paths are lifecycle scaffolding, not end-to-end simulation execution:
+
+- `StartingRunners -> InProcessing` occurs even though BSSL creates no Kubernetes Job or other runner.
+- A successfully invoked runner placeholder means only that the local placeholder returned nil. It does not prove a runner exists.
+- BSSL does not recover `InProcessing` after restart or cancellation. Such rows remain parked until future runner logic is implemented.
+- The production post-processing placeholder reads no confidence or repetition data and returns `true, nil`.
+- A directly encountered `PostProcessing` row therefore becomes `Finished` without a real confidence calculation.
+- `number_of_reps`, `number_of_computed_reps`, and `confidence_metric` remain unchanged.
+- These synthetic `InProcessing` and `Finished` outcomes must not be presented as evidence of real simulation execution.
+
+Enabling BSSL immediately acts on all pre-existing matching rows. There is no feature flag or staged activation.
+
+### Out of Scope
+
+BSSL must not add:
+
+- resource-aware, priority-based, project-aware, or runtime-based scheduling;
+- batching, concurrent per-process workers, leader election, or replica coordination;
+- real runner creation, runner monitoring, or `InProcessing -> PostProcessing` logic;
+- a real PostProcessingService call or durable post-processing claim;
+- recovery for published `Scheduled` work;
+- heartbeats, Translator failure messages, cancellation protocols, or an outbox;
+- new metrics, health endpoints, failure-reason columns, or log-rate limiting;
+- automatic migration, constraint repair, or backfill of an existing legacy Scenario Status table;
+- changes to EDS, Experiment Operator behavior, Kubernetes API types, NATS subjects, payloads, stream semantics, acknowledgements, or external APIs.
 
 ## Change Location
-The implementation should stay inside the `scenario-manager` component. The AI coding agent should add the new selector as a small Scenario Manager lifecycle component, not as part of EDS ingestion, Translator message formatting, or Experiment Operator logic.
 
-Create a new file `scenario-manager/internal/core/selector.go` for the main selector logic. This file should contain the orchestration code that asks the Core DB for the next actionable scenario and dispatches the correct next step based on the scenario state. The selector should use FIFO behavior based on the `scenario_status.id` column, sorted in ascending order (`1, 2, 3, ...`). For scenarios in `Created`, it should call the existing Translator handoff flow. For scenarios in `StartingRunners`, it should first claim the row by moving it to `InProcessing`, then call a placeholder `createSimulationRunnerJob()` function. For scenarios in `PostProcessing`, it should call a side-effect-free placeholder `doPostProcessing()` function.
+All implementation changes must remain inside `scenario-manager`.
 
-Extend `scenario-manager/internal/coredb/scenario_status.go` with the database helper needed by the selector. This helper should return the next actionable scenario candidate from the scenario status table. The returned information should include at least the scenario ID and its current state. The query should only consider states that the selector can act on in this first version: `Created`, `StartingRunners`, and `PostProcessing`. It should sort by `id ASC` and return only the first matching row. This helper should not perform workflow actions itself; it should only read from the database.
+1. Create `scenario-manager/internal/core/selector.go` for the selector instance, its private dependencies, fixed timing policy, joinable worker, recovery-first iteration, state dispatch, and placeholders.
+2. Create focused selector tests in `scenario-manager/internal/core/selector_test.go`.
+3. Update `scenario-manager/internal/core/scenario_manager.go` to start Translator communication, start BSSL, wait for its completion during shutdown, and update the function comments and ready/shutdown logs.
+4. Update `scenario-manager/internal/core/translator_handoff.go` so stale unconfirmed recovery accepts the discovered translation attempt and exact caller-provided cutoff. Split its configuration use so Translator handoff and ready/recovery logic load only the max-attempt policy; selector startup alone loads the publish recovery timeout.
+5. Extend `scenario-manager/internal/coredb/scenario_status.go` with both candidate lookups, attempt-exact recovery, and guarded state helpers. Update its file comments and make the `ScenarioStateFailed` comment describe workflow-generic terminal failure.
+6. Extend `scenario-manager/internal/coredb/schema.go` with fail-fast legacy-schema validation and the two table-specific partial indexes.
+7. Extend the existing environment-gated Core DB integration tests. Do not add a SQL-mocking dependency.
 
-Update `scenario-manager/internal/core/scenario_manager.go` so the selector becomes part of Scenario Manager startup. After the existing informer and EDS communication have started, Scenario Manager should initialize the existing Translator communication adapter, start the Translator ready consumer with the existing `HandleTranslatorReady` handler, and then start the selector loop. The startup log message should be adjusted so it no longer says that Scenario Manager is only waiting for a future work loop.
-
-Reuse the existing Translator communication code in `scenario-manager/internal/nats/trans_com.go`. The AI coding agent should not change Translator request subjects, ready subjects, message payloads, or NATS/JetStream semantics as part of this implementation. The selector should use the existing `ProcessScenarioTrans(...)` function for `Created` scenarios instead of introducing a new translation workflow.
-
-No changes are expected in the Experiment Operator, EDS communication logic, Translator communication logic, NATS API types, Kubernetes API types, or external APIs for this step.
+The implementation must reuse `scenario-manager/internal/nats/trans_com.go` without changing its subjects, message bodies, stream configuration, publish confirmation, ACK/NAK behavior, or public interfaces.
 
 ## Logic Description
 
-This section describes the exact runtime logic that should be implemented for the first Basic Scenario Selection Logic (BSSL). The implementation must be simple, deterministic, and explicit. It must not introduce resource-aware scheduling, priority sorting, batching, or new communication protocols.
+### Fixed Configuration
 
-The BSSL owns only the decision loop that finds the next actionable scenario and dispatches the next workflow step. It does not own EDS ingestion, Translator message formatting, Translator ready-message parsing, or real runner/post-processing service implementation.
+| Setting | Required value | Source and behavior |
+| --- | --- | --- |
+| Selector delay | `5s` | Private constant. No new environment variable. |
+| Iteration timeout | `30s` | Private constant. No new environment variable. |
+| Unconfirmed-publish recovery timeout | Default `1m` | Existing `SCENARIO_MANAGER_TRANS_PUBLISH_RECOVERY_TIMEOUT`. The selector loads it once during startup; invalid or non-positive values use the existing default. It is not reloaded or relogged per selector iteration. |
+| Maximum translation attempts | Default `3` | Existing `SCENARIO_MANAGER_TRANS_MAX_ATTEMPTS`. Invalid or non-positive values use the existing fallback behavior. |
+
+The selector must call `translatorconfig.LoadPublishRecoveryTimeout()` once during startup and retain the result. Unset configuration silently uses the default; invalid or non-positive configuration logs once during that selector startup and uses the default. No Translator handoff, ready handler, recovery helper, or selector iteration may reload this timeout. Those existing workflows may continue loading only the max-attempt policy when they need it.
+
+Each recovery cutoff is calculated by the Scenario Manager process and compared with `updated_at`, which PostgreSQL writes with `NOW()`. The deployment therefore assumes the application and database clocks are reasonably synchronized.
 
 ### Startup Sequence
 
-`RunScenarioManager(ctx)` should start the Scenario Manager dependencies in this order:
+`RunScenarioManager(ctx)` must start dependencies in this order:
 
-1. Start the `SimulationExperiment` informer with the existing `handleSimulationExperimentEvent` handler.
+1. Start the `SimulationExperiment` informer with `handleSimulationExperimentEvent`.
 2. Start EDS communication with the existing sequential EDS batch processor.
-3. Initialize the existing Translator communication adapter.
-4. Start the Translator ready consumer with the existing `HandleTranslatorReady` handler.
-5. Start the basic selector loop.
+3. Call `nats.StartTranslatorComms(ctx, HandleTranslatorReady)`, which initializes the adapter and starts its ready consumer.
+4. Reuse the returned `*nats.TranslatorComms` as the `communication.TranslationRequestPublisher`.
+5. Start the joinable BSSL worker.
+6. Log that Scenario Manager is ready and that the BSSL worker has started.
+7. Wait for `ctx.Done()`.
+8. Wait for the BSSL completion channel to close.
+9. Log final Scenario Manager shutdown.
 
-The implementation should use the existing NATS Translator communication implementation. The preferred startup call is `nats.StartTranslatorComms(ctx, HandleTranslatorReady)`, because it initializes the process-scoped Translator adapter and starts the ready-message consumer. The returned adapter must be reused as the `communication.TranslationRequestPublisher` passed into the selector loop.
+The completion channel joins only the new BSSL worker. The informer and existing EDS and Translator consumers retain their current context-driven lifecycle and are not given new join handles in this change.
 
-Future note: when the real PostProcessingService integration is implemented, Scenario Manager startup must also initialize a process-scoped PostProcessingService communication adapter before the selector loop starts. This BSSL step must not implement that adapter yet; `doPostProcessing(...)` remains a local placeholder.
+Informer, EDS, Translator communication, and selector startup errors are fatal and must preserve the existing startup style. A database error from the worker’s first iteration is not a startup error.
 
-Startup failures for the informer, EDS communication, Translator communication, or selector initialization are fatal. The Scenario Manager should log the failure and terminate, matching the current startup behavior for required dependencies.
-
-After startup succeeds, the Scenario Manager should log that it is ready and that the basic selector loop is running. The old startup log message that says the process is awaiting a future work loop must be removed or replaced.
-
-### Selector Loop
-
-Create the selector implementation in `scenario-manager/internal/core/selector.go`.
-
-The selector should expose a startup function with this behavior:
+The selector startup API must be:
 
 ```go
-StartBasicScenarioSelector(ctx context.Context, publisher communication.TranslationRequestPublisher) error
+func StartBasicScenarioSelector(
+	ctx context.Context,
+	publisher communication.TranslationRequestPublisher,
+) (<-chan struct{}, error)
 ```
 
-`StartBasicScenarioSelector` should:
+`StartBasicScenarioSelector` must:
 
-1. Reject a nil `publisher` with an error.
-2. Start one background goroutine for the selector loop.
-3. Return nil after the goroutine has been started.
-4. Stop the goroutine cleanly when `ctx.Done()` is closed.
+1. Reject a nil `ctx`.
+2. Reject a context whose `Err()` is already non-nil.
+3. Reject a nil publisher interface.
+4. Load and retain the publish recovery timeout once.
+5. Construct one selector instance with production dependencies.
+6. Start exactly one background worker for that successful call.
+7. Return a receive-only completion channel.
+8. Close the completion channel exactly once when the worker exits.
 
-The loop should run `processNextScenario(ctx, publisher)` once immediately after startup and then once every `5s`. Each loop iteration processes at most one scenario. If there is no actionable scenario, the iteration is a no-op.
+If validation fails, the function must return a nil completion channel and an error without starting a goroutine. The function is not idempotent and must not implement process-global singleton state. `RunScenarioManager` is responsible for calling it exactly once.
 
-The selector loop has no data-driven shutdown condition in v1. It must not stop merely because all currently stored scenarios are in terminal states. If all scenarios are `Finished` or `Failed`, `NextActionableScenario` returns `nil, nil`, the current tick is a no-op, and the loop waits for the next tick. The loop stops only when `ctx` is cancelled. Future project-level completion logic may detect that all scenarios for a `SimulationExperiment` are terminal, but that must not terminate the process-wide selector loop.
+The ready log confirms only that the worker was launched. The first iteration runs inside the worker and may fail without terminating Scenario Manager.
 
-The selector must not terminate the Scenario Manager for ordinary per-iteration failures. Database lookup errors, stale state updates, placeholder failures, and Translator handoff errors should be logged and then the loop should continue on the next tick unless `ctx` has been cancelled.
+### Private Selector and Testability
 
-The selector must not hold a long-lived lock. It selects a candidate row, dispatches the state-specific action, and then returns. Any durable state ownership must be represented by state transitions in the database, not by in-memory locks.
+The core package must use one unexported selector instance and one unexported dependency bundle. The selector instance must retain:
 
-Context cancellation is not a scenario failure. If `ctx.Err()` is non-nil before a state handler starts, after a state handler returns, or while handling an error, the selector must log and return without moving the scenario to `Failed`. This keeps the Core DB as the durable workflow truth across Scenario Manager restarts.
+- the publisher;
+- the loaded recovery timeout;
+- fixed selector timing configuration;
+- the production dependency bundle.
 
-### Actionable Scenario Lookup
+The dependency bundle must provide:
 
-Extend `scenario-manager/internal/coredb/scenario_status.go` with a read-only helper:
+- a clock used to calculate `claimedBefore`;
+- a context-aware wait hook used between completed iterations;
+- recovery discovery and exact recovery functions;
+- the ordinary candidate lookup;
+- the existing translation handoff;
+- all guarded state-update functions;
+- the runner and post-processing placeholders.
+
+The wait dependency must have the logical shape `wait(ctx context.Context, delay time.Duration) error`. The worker must call it with the long-lived root worker context and the fixed selector delay, never with the iteration child context that was just cancelled.
+
+Production dependencies delegate to the existing core and Core DB functions. Tests supply instance-scoped fakes and a caller-controlled wait channel. The implementation must not use mutable package-global function variables for test replacement.
+
+Every production or fake dependency invoked by the worker must honor context cancellation. The 30-second deadline bounds an iteration only when the active dependency returns after its context is cancelled.
+
+The per-iteration method must provide this behavior:
+
+```go
+func (s *basicScenarioSelector) processNextScenario(ctx context.Context) error
+```
+
+The concrete private type and field names may differ, but they must preserve this instance-scoped design and behavior.
+
+### Worker Timing, Timeout, and Shutdown
+
+The worker must run serially:
+
+1. Start the first iteration immediately inside the worker.
+2. Derive a child context with a `30s` timeout for that iteration.
+3. Cancel the child context after the iteration returns.
+4. Log a non-cancellation iteration error once at the worker boundary.
+5. Using the root worker context, wait five full seconds after the iteration completes, fails, finds no work, or times out.
+6. Start the next iteration only after that wait.
+
+The delay is measured after completion, not on a wall-clock ticker. Missed intervals are not queued or replayed. Iterations must never overlap, and the worker must not launch a goroutine per iteration.
+
+If the root context is cancelled:
+
+- during the wait, return immediately;
+- during an iteration, propagate cancellation through the child context and wait for the context-aware call to return;
+- do not start another iteration;
+- close the completion channel before `RunScenarioManager` logs final shutdown.
+
+`context.Canceled` and `context.DeadlineExceeded` are workflow cancellation, not scenario failure. A timeout may leave a durable claim for later component-owned recovery, but BSSL must not add an independent `Failed` transition.
+
+### Per-Iteration Algorithm
+
+One iteration must execute this exact order:
+
+1. If `ctx.Err()` is non-nil, return without querying.
+2. Calculate one `claimedBefore` value as `now().Add(-publishRecoveryTimeout)`.
+3. Call `NextStaleUnpublishedTranslationClaim(ctx, claimedBefore)`.
+4. If discovery returns an error, end the iteration. Do not run ordinary lookup.
+5. Re-check `ctx.Err()`.
+6. If a recovery candidate exists, call exact recovery with its ID, its discovered translation attempt, and the same `claimedBefore`; then end the iteration for success, stale result, cancellation, or error.
+7. Only when no recovery candidate exists, call `NextActionableScenario(ctx)`.
+8. If ordinary lookup returns an error or no candidate, end the iteration.
+9. Re-check `ctx.Err()` before starting the state handler.
+10. Dispatch exactly one handler for `Created`, `StartingRunners`, or `PostProcessing`.
+11. If an unexpected state reaches dispatch, log it and leave the row unchanged.
+12. Return after that handler; do not select another row in the same iteration.
+
+An idle iteration must not emit a log line.
+
+### Ordinary Candidate Lookup
+
+Add this exact projection and public Core DB helper:
 
 ```go
 type ScenarioActionCandidate struct {
@@ -105,145 +272,240 @@ type ScenarioActionCandidate struct {
 func NextActionableScenario(ctx context.Context) (*ScenarioActionCandidate, error)
 ```
 
-`NextActionableScenario` should:
-
-1. Ensure the Core DB pool is initialized.
-2. Query the scenario status table for rows whose `state` is one of:
-   - `Created`
-   - `StartingRunners`
-   - `PostProcessing`
-3. Sort candidates by `id ASC`.
-4. Return only the first row with `LIMIT 1`.
-5. Return `nil, nil` when no actionable row exists.
-6. Return an error only for invalid input, missing DB setup, or query failures.
-
-The helper must not update rows. It must not claim scenarios. It must not use `FOR UPDATE`. It is only the selector's read-side candidate lookup.
-
-The selection order is FIFO by the resolved Scenario Status table's `id` column. The default table name is `scenario_status`, but the implementation must continue to respect the existing `SCENARIO_MANAGER_CORE_DB_SCENARIO_STATUS_TABLE` override. The implementation must not use `priority`, `created_at`, `updated_at`, project name, number of repetitions, or any runtime estimate for this first version.
-
-Create one partial index for the selector lookup as part of Core DB schema setup in `scenario-manager/internal/coredb/schema.go`. The index should be created inside `createSchema(ctx)` after the Scenario Status table exists and after the existing Scenario Status schema maintenance has run, before `createSchema(ctx)` returns nil. The index creation SQL must use the resolved table name from `scenarioStatusTableName()` instead of hard-coding `scenario_status`, so deployments and tests that configure a custom Scenario Status table receive the same selector index.
-
-For the default table name, the resulting SQL should be equivalent to:
+The helper must validate a non-nil context before accessing the DB pool. It must execute this logical query against the resolved table:
 
 ```sql
-CREATE INDEX IF NOT EXISTS scenario_status_actionable_id_idx
-ON scenario_status (id)
-WHERE state IN ('Created', 'StartingRunners', 'PostProcessing');
+SELECT id, state
+FROM <resolved_scenario_status_table>
+WHERE id > 0
+  AND state IN ('Created', 'StartingRunners', 'PostProcessing')
+ORDER BY id ASC
+LIMIT 1;
 ```
 
-This index exists because the selector repeatedly asks for the lowest `id` in the resolved Scenario Status table among actionable states. PostgreSQL maintains the index automatically as rows are inserted or their `state` changes. The implementation must not add an application-side background thread or manual index refresh logic.
+The canonical states must remain literal, compile-controlled SQL values so PostgreSQL can match the query to the partial-index predicate even when it uses a generic prepared plan.
 
-Do not create separate partial indexes for `Created`, `StartingRunners`, and `PostProcessing` in this BSSL step. The selector performs one unified FIFO lookup across all actionable states, so one partial index containing all actionable rows is the intended v1 optimization.
+The helper must:
 
-### Per-Iteration Dispatch
+- use the existing resolved Scenario Status table name;
+- select only `id` and `state`;
+- return `nil, nil` for `sql.ErrNoRows`;
+- perform no update, transaction, `FOR UPDATE`, or other lock;
+- wrap DB errors with the operation name but not log them.
 
-`processNextScenario(ctx, publisher)` should execute this flow:
+### Recovery Candidate Lookup
 
-1. If `ctx` is cancelled, return immediately.
-2. Call `coredb.NextActionableScenario(ctx)`.
-3. If the result is `nil`, return nil.
-4. Switch on `candidate.State`.
-5. Dispatch exactly one state handler for that candidate.
-6. Return after the state handler finishes.
+Add this exact projection and public Core DB helper:
 
-The selector should handle only these states:
+```go
+type TranslationRecoveryCandidate struct {
+	ID                 int
+	TranslationAttempt int
+}
 
-```text
-Created
-StartingRunners
-PostProcessing
+func NextStaleUnpublishedTranslationClaim(
+	ctx context.Context,
+	claimedBefore time.Time,
+) (*TranslationRecoveryCandidate, error)
 ```
 
-If another state is returned unexpectedly, log it and do not change the row. This should not happen if `NextActionableScenario` is implemented correctly, but the selector should still be defensive.
+The helper must validate a non-nil context and reject a zero `claimedBefore` value before accessing the DB pool. It must execute this logical query against the resolved table:
+
+```sql
+SELECT id, translation_attempts
+FROM <resolved_scenario_status_table>
+WHERE id > 0
+  AND state = 'Scheduled'
+  AND translation_request_published_at IS NULL
+  AND updated_at < claimedBefore
+ORDER BY id ASC
+LIMIT 1;
+```
+
+The strict `<` boundary means a row whose `updated_at` equals the cutoff is not yet stale.
+
+The helper must:
+
+- return `nil, nil` for `sql.ErrNoRows`;
+- perform no update, transaction, `FOR UPDATE`, or other lock;
+- return the stored attempt with the ID;
+- wrap DB errors but not log them.
+
+A `Scheduled` row is expected to have a positive translation attempt because the existing claim increments the counter before entering `Scheduled`. Exact recovery must reject a non-positive expected attempt. Such invalid persistent data is an operator-repair condition.
+
+### Attempt-Exact Recovery
+
+Change the existing core recovery helper to accept the discovered attempt and cutoff:
+
+```go
+func RecoverUnpublishedTranslationClaim(
+	ctx context.Context,
+	scenarioID int,
+	expectedAttempt int,
+	claimedBefore time.Time,
+) (stateChanged bool, finalState string, err error)
+```
+
+Change the Core DB helper accordingly while retaining the maximum-attempt argument owned by the core workflow:
+
+```go
+func RecoverUnpublishedTranslationClaim(
+	ctx context.Context,
+	scenarioID int,
+	expectedAttempt int,
+	claimedBefore time.Time,
+	maxAttempts int,
+) (stateChanged bool, finalState string, err error)
+```
+
+The core helper must use the caller’s exact `claimedBefore`; it must not reload the recovery timeout or call `time.Now()`. It may continue loading the existing maximum-attempt policy, but it must use a max-attempt-only loader rather than the current combined loader. `ProcessScenarioTrans` and `HandleTranslatorReady` must likewise load only the max-attempt policy, because neither operation uses the recovery timeout.
+
+Both helpers must reject nil context, non-positive IDs, non-positive expected attempts, a zero cutoff, and non-positive maximum attempts before executing SQL.
+
+The Core DB update must guard:
+
+```sql
+id = scenarioID
+AND state = 'Scheduled'
+AND translation_attempts = expectedAttempt
+AND translation_request_published_at IS NULL
+AND updated_at < claimedBefore
+```
+
+It must atomically set:
+
+- `state = 'Created'` when `translation_attempts < maxAttempts`;
+- `state = 'Failed'` when `translation_attempts >= maxAttempts`;
+- `updated_at = NOW()`.
+
+It must not change `translation_attempts`, the publish marker, or any other column.
+
+The result contract is:
+
+- one changed row: return `true`, the resulting state, and nil;
+- zero rows: return `false, "", nil`; this is a stale or already-handled race;
+- SQL failure: return `false, "", error`.
+
+A recovery candidate consumes the iteration even when the update changes zero rows or returns an error. A successful `Scheduled -> Created` recovery must not translate the row in the same iteration.
+
+Published `Scheduled` rows, where the marker is non-null, must never be recovered by BSSL. They can remain stuck indefinitely until a future heartbeat, explicit failure, cancellation, or published-work timeout protocol exists.
+
+### Delivery and Crash Windows
+
+Translation delivery is at-least-once across the boundary between JetStream publish confirmation and the database publish marker. The request already carries both scenario ID and translation attempt. Late ready messages from an older attempt must remain harmless because the existing ready workflow compares the message attempt with the current DB attempt.
+
+| Interruption point | Durable state after restart | Required BSSL behavior |
+| --- | --- | --- |
+| Before `Created -> Scheduled` commits | `Created` | A later ordinary iteration may claim it. |
+| After the claim commits but before publish | `Scheduled`, marker null | Recover after the configured timeout, guarded by the exact attempt and cutoff. |
+| After JetStream PubAck but before marker persistence | `Scheduled`, marker null although the message may exist | Recovery may create a later attempt and duplicate Translator work. Old ready messages remain attempt-stale. |
+| After marker persistence | `Scheduled`, marker non-null | BSSL never recovers it, even if Translator never replies. |
+| After ready handling | `StartingRunners` | A later ordinary iteration claims runner startup. |
+| After `StartingRunners -> InProcessing` but before placeholder completion | `InProcessing` | BSSL leaves it parked; future runner recovery must own this case. |
+| After post-processing placeholder return but before its guarded update | `PostProcessing` | A later iteration safely repeats the side-effect-free placeholder. |
+
+No exactly-once claim is made. This BSSL step must not introduce an outbox or change the Translator wire contract.
 
 ### `Created` Handling
 
-When the selected scenario is in `Created`, the selector should call:
+For a `Created` candidate, call:
 
 ```go
 ProcessScenarioTrans(ctx, candidate.ID, publisher)
 ```
 
-The selector must not duplicate Translator handoff logic. It must not directly set `Created -> Scheduled`, increment `translation_attempts`, publish Translator messages, or mark Translator requests as published. All of that remains owned by the existing `ProcessScenarioTrans` workflow and the Core DB helpers it already uses.
+The selector must not duplicate or bypass any Translator behavior. `ProcessScenarioTrans` continues to own:
 
-Translation already implements the claim-before-side-effect pattern used by BSSL. `ClaimScenarioForTranslation` locks the exact `Created` row, moves it to the existing in-flight state `Scheduled`, increments `translation_attempts`, commits that durable claim, and only then does `ProcessScenarioTrans` publish the Translator request. `Scheduled` is not a temporary implementation-only state; it is the canonical in-flight translation state and the durable ownership marker for Translator work.
+- the exact `Created -> Scheduled` claim;
+- translation-attempt increment;
+- request publication;
+- publish-marker persistence;
+- publish-failure recovery;
+- maximum-attempt decisions.
 
-If `ProcessScenarioTrans` returns nil, the selector iteration is complete.
+A nil result completes the iteration. If the row became unclaimable after lookup, the existing handoff returns nil and that stale claim still consumes the iteration.
 
-If `ProcessScenarioTrans` returns an error, log the scenario ID and the error, then finish the iteration without forcing the scenario to `Failed`. Translator handoff already owns retry and max-attempt behavior:
-
-- publish failure below max attempts returns the row to `Created`
-- publish failure at max attempts moves the row to `Failed`
-- poison ready response below max attempts returns the row to `Created`
-- poison ready response at max attempts moves the row to `Failed`
-
-The selector must not override those existing decisions.
+Any returned error must end the iteration and be logged by the worker. The selector must never call `MarkScenarioFailedFrom` for a Translator handoff error. The existing Translator workflow alone decides whether the row remains `Scheduled`, returns to `Created`, or becomes `Failed`.
 
 ### `StartingRunners` Handling
 
-When the selected scenario is in `StartingRunners`, the selector should first claim runner startup by moving the scenario from `StartingRunners` to `InProcessing`:
+First claim the row:
 
 ```go
 MarkScenarioInProcessing(ctx, candidate.ID)
 ```
 
-If `MarkScenarioInProcessing` returns `false, nil`, the row was stale or already handled by another Scenario Manager instance. The selector should log the stale claim result and return without calling `createSimulationRunnerJob`.
+Required outcomes:
 
-If `ctx` is cancelled after the claim attempt, the selector should return without calling the placeholder and without moving the scenario to `Failed`.
+- `false, nil`: log a stale transition and end the iteration without invoking the placeholder;
+- `false, error`: end the iteration without invoking the placeholder or failing the scenario;
+- `true, nil`: re-check `ctx.Err()`, then invoke the placeholder only while the context remains active.
 
-After a successful claim, the selector should call the runner-start placeholder:
+The placeholder contract is:
 
 ```go
-createSimulationRunnerJob(ctx, candidate.ID) error
+createSimulationRunnerJob(ctx context.Context, scenarioID int) error
 ```
 
-The placeholder represents the future creation of the simulation runner Kubernetes Job or equivalent execution mechanism. In this BSSL implementation it should be small, local to the Scenario Manager core package, and explicit that real runner startup is deferred.
+For BSSL it must:
 
-For the initial placeholder behavior:
+1. Reject nil context and non-positive IDs.
+2. Return the context error when the context is already cancelled or timed out.
+3. Log that the synthetic runner placeholder was requested.
+4. Create no Job or external resource.
+5. Return nil.
 
-1. Validate that `scenarioID` is positive.
-2. Log that runner startup was requested for the scenario.
-3. Return nil.
+When the placeholder returns nil, leave the row in `InProcessing`. This means only that placeholder invocation completed.
 
-If `createSimulationRunnerJob` returns nil, the selector iteration is complete. The scenario is already in `InProcessing` because that state is the durable runner-start claim and the next canonical workflow state.
+When the placeholder returns an error:
 
-If `createSimulationRunnerJob` returns an error and `ctx` has not been cancelled, log the scenario ID and move the scenario to `Failed` with `MarkScenarioFailedFrom(ctx, candidate.ID, "InProcessing")`. If `ctx` has been cancelled, log and return without changing the scenario state.
+1. Ignore it as a scenario failure if the context is cancelled or timed out.
+2. Otherwise call `MarkScenarioFailedFrom(ctx, candidate.ID, coredb.ScenarioStateInProcessing)`.
+3. Treat a zero-row failure write as stale and finish the iteration.
+4. If the failure write itself errors, preserve both the placeholder error and persistence error in the returned/logged error; do not retry in the same iteration.
 
-The selector must not move `InProcessing` to `PostProcessing`. That transition belongs to future runner completion logic. BSSL only claims runner startup, invokes the placeholder, and records that the scenario is now in processing. When real runner startup is implemented, runner creation must remain after the `StartingRunners -> InProcessing` claim and should use an idempotent external identity such as a deterministic Kubernetes Job name based on `scenarioID`.
+BSSL must not move `InProcessing` to `PostProcessing`. Future real runner integration must retain claim-before-side-effect ordering, use an idempotent external identity such as a deterministic Job name, and add reconciliation for parked `InProcessing` rows.
 
 ### `PostProcessing` Handling
 
-When the selected scenario is in `PostProcessing`, the selector should call the post-processing placeholder:
+Call:
 
 ```go
-doPostProcessing(ctx, candidate.ID) (confidenceReached bool, err error)
+doPostProcessing(ctx context.Context, scenarioID int) (confidenceReached bool, err error)
 ```
 
-The placeholder represents the future call to the post-processing service that evaluates whether enough simulation repetitions have been computed to satisfy the scenario confidence requirement.
+For BSSL the placeholder must:
 
-In this BSSL implementation, `doPostProcessing` must remain side-effect-free. It may validate input, log the requested post-processing action, and return the placeholder confidence decision, but it must not call a real external PostProcessingService yet. The current canonical lifecycle has no separate existing state equivalent to translation's `Scheduled` or runner startup's `InProcessing` that can serve as a durable post-processing claim. The real PostProcessingService integration must introduce a durable claim design, such as a claim column or a new canonical in-flight state, before making external side-effecting calls.
+1. Reject nil context and non-positive IDs.
+2. Return the context error when already cancelled or timed out.
+3. Log that synthetic post-processing was requested.
+4. Make no external call and read no confidence or repetition data.
+5. Return `true, nil`.
 
-For the initial placeholder behavior:
+The handler must inspect `err` before the boolean. If `err != nil`, `confidenceReached` must be ignored even when true.
 
-1. Validate that `scenarioID` is positive.
-2. Log that post-processing was requested for the scenario.
-3. Return `true, nil` as the default placeholder result until the real post-processing service exists.
+For an error:
 
-The selector must check `err` before using `confidenceReached`. When `err != nil`, the selector must ignore the returned `confidenceReached` value entirely:
+- if the context is cancelled or timed out, make no state change;
+- otherwise call `MarkScenarioFailedFrom(ctx, candidate.ID, coredb.ScenarioStatePostProcessing)`;
+- a stale zero-row result ends the iteration;
+- if the failure write errors, preserve both errors and do not retry in the same iteration.
 
-- If `err != nil` and `ctx` has been cancelled, log and return without changing the scenario state.
-- If `err != nil` and `ctx` has not been cancelled, log the scenario ID and move the scenario to `Failed` with `MarkScenarioFailedFrom(ctx, candidate.ID, "PostProcessing")`.
+For a nil error:
 
-Only when `err == nil` should the selector implement both branches of the returned confidence decision:
+1. Re-check `ctx.Err()` before writing a result.
+2. If `confidenceReached == true`, call `MarkScenarioFinished`.
+3. If `confidenceReached == false`, call `MarkScenarioRequiresMoreRuns`.
+4. Treat a zero-row result as stale.
+5. Return a SQL error without marking the scenario `Failed`; the row remains `PostProcessing` for a later iteration.
 
-- If `confidenceReached == true`, update the scenario from `PostProcessing` to `Finished`.
-- If `confidenceReached == false`, update the scenario from `PostProcessing` to `StartingRunners`.
+The false branch must only move the row to `StartingRunners`. It must not invoke runner startup in the same iteration.
 
-The `false` branch models the lifecycle edge where required confidence has not been reached and more simulation runner work is needed. The selector should not immediately start the runner in the same iteration after moving the row back to `StartingRunners`; it should return and let a later selector tick pick up the scenario again.
+The future real PostProcessingService integration must add a durable claim token or canonical in-flight state before making an external side-effecting call.
 
-### Guarded State Updates
+### Guarded State Helpers
 
-Extend `scenario-manager/internal/coredb/scenario_status.go` with guarded state transition helpers:
+Add these helpers:
 
 ```go
 func MarkScenarioInProcessing(ctx context.Context, scenarioID int) (bool, error)
@@ -252,160 +514,258 @@ func MarkScenarioRequiresMoreRuns(ctx context.Context, scenarioID int) (bool, er
 func MarkScenarioFailedFrom(ctx context.Context, scenarioID int, expectedState string) (bool, error)
 ```
 
-Each helper should reject non-positive scenario IDs before executing SQL. `MarkScenarioFailedFrom` should also reject an empty `expectedState`, any unknown state, and terminal states `Finished` and `Failed`.
+Every helper must validate arguments before accessing the DB pool. A nil context or non-positive scenario ID is invalid.
 
-`MarkScenarioInProcessing` is the durable claim for runner startup. It should update only the exact row where:
+`MarkScenarioFailedFrom` must use this exact, case-sensitive allowlist:
 
-```sql
-id = scenarioID
-AND state = 'StartingRunners'
+```text
+Created
+Scheduled
+StartingRunners
+InProcessing
+PostProcessing
 ```
 
-It should set:
+It must reject empty strings, whitespace variants, unknown states, `Finished`, and `Failed`. Callers must pass the existing Core DB state constants rather than repeating string literals. Although the helper recognizes every canonical non-terminal state, BSSL may call it only with `InProcessing` or `PostProcessing`.
+
+Each helper must execute one atomic `UPDATE` with an ID and expected-state predicate. It must not perform a preceding `SELECT`, use a transaction, or lock a row.
+
+| Helper | Required transition |
+| --- | --- |
+| `MarkScenarioInProcessing` | `StartingRunners -> InProcessing` |
+| `MarkScenarioFinished` | `PostProcessing -> Finished` |
+| `MarkScenarioRequiresMoreRuns` | `PostProcessing -> StartingRunners` |
+| `MarkScenarioFailedFrom` | `expectedState -> Failed` |
+
+Every successful update must change only:
 
 ```sql
-state = 'InProcessing'
+state = <new state>,
 updated_at = NOW()
 ```
 
-`MarkScenarioFinished` should update only the exact row where:
+It must leave project, creation time, priority, repetitions, translation attempts, publish marker, recipe, container image, and confidence unchanged.
 
-```sql
-id = scenarioID
-AND state = 'PostProcessing'
-```
+All helpers return:
 
-It should set:
+- `true, nil` for one changed row;
+- `false, nil` for a stale zero-row result;
+- `false, error` for SQL or result-inspection failure.
 
-```sql
-state = 'Finished'
-updated_at = NOW()
-```
+Core DB helpers must wrap errors and must not log. The core selector owns logs and must not retry a guarded update within the same iteration.
 
-`MarkScenarioRequiresMoreRuns` should update only the exact row where:
+### Failure and Cancellation Rules
 
-```sql
-id = scenarioID
-AND state = 'PostProcessing'
-```
+| Condition | Required outcome |
+| --- | --- |
+| Recovery discovery or exact recovery error | Log operational error, end iteration, do not run ordinary dispatch, do not fail a scenario. |
+| Ordinary lookup error | Log operational error, end iteration, do not fail a scenario. |
+| Translator handoff error | Let existing Translator workflow own state; never call generic failure helper. |
+| Runner claim error or stale result | Do not invoke runner placeholder and do not fail the row. |
+| Runner placeholder error with active context | Attempt guarded `InProcessing -> Failed`. |
+| Post-processing placeholder error with active context | Attempt guarded `PostProcessing -> Failed`. |
+| Successful-result transition error | Leave current state for later retry; do not convert the persistence error into `Failed`. |
+| Any context cancellation or iteration deadline | Make no selector-owned failure decision. |
+| Any stale zero-row transition | Log stale result and end iteration. |
+| No candidate | Silent no-op. |
 
-It should set:
+Before any selector-owned `Failed` write, check `ctx.Err()`. Persistence errors must never themselves trigger a second failure update.
 
-```sql
-state = 'StartingRunners'
-updated_at = NOW()
-```
+### Logging
 
-`MarkScenarioFailedFrom` is a generic state-guarded failure primitive. It does not decide whether a workflow has exhausted retries, whether an external side effect belongs to the current attempt, or whether a component owns a scenario strongly enough to fail it. It only records a terminal failure when the caller has already made that workflow-specific decision.
+Use the existing Go logger with a consistent key-value style; do not add a logging dependency. Action and error logs must include, when available:
 
-`MarkScenarioFailedFrom` should update only the exact row where:
+- `operation`;
+- `scenario_id`;
+- expected old state;
+- intended or resulting state;
+- translation attempt for recovery;
+- an error class such as validation, DB, translation, placeholder, timeout, cancellation, or stale.
 
-```sql
-id = scenarioID
-AND state = expectedState
-```
-
-It must not change rows already in `Finished` or `Failed`, and it must not change rows that have moved into any other working state after the caller read or claimed them.
-
-It should set:
-
-```sql
-state = 'Failed'
-updated_at = NOW()
-```
-
-All four helpers should return `true, nil` when a row was updated and `false, nil` when no row matched the guard. A zero-row update is a stale or already-handled condition, not a hard error. SQL execution failures should return `false, error`.
-
-Component-specific workflows may call `MarkScenarioFailedFrom` only when an exact current-state guard is sufficient for correctness. If a workflow needs additional stale-work guards, such as `translation_attempts`, a runner job identity, or a post-processing claim token, it must use an existing specific helper or add a more specific helper rather than calling `MarkScenarioFailedFrom` directly.
-
-The selector should log zero-row updates with the scenario ID, expected old state, and intended new state, then continue. It must not retry the same scenario inside the same tick.
-
-### Failure Handling
-
-BSSL uses `Failed` as the terminal failure state for errors that occur in workflow steps the v1 selector directly executes. `MarkScenarioFailedFrom` remains generic, but BSSL v1 should call it only for failures in placeholder steps where the selector has enough local ownership context to make a terminal-failure decision.
-
-The selector should move a scenario to `Failed` when:
-
-- `createSimulationRunnerJob` returns an error after the selector successfully claimed `StartingRunners -> InProcessing`, and `ctx` has not been cancelled
-- `doPostProcessing` returns an error for a `PostProcessing` scenario, and `ctx` has not been cancelled
-
-The selector should not move a scenario to `Failed` when:
-
-- no actionable scenario exists
-- `NextActionableScenario` returns a DB error
-- `ProcessScenarioTrans` returns an error
-- a guarded update returns `false, nil`
-- `ctx` is cancelled
-
-Before moving any scenario to `Failed`, the selector must check `ctx.Err()`. If the context is cancelled, cancellation takes precedence over the workflow error and the selector must not write a failure state. If the context is still active, BSSL-owned failure updates must use `MarkScenarioFailedFrom` with the state the selector directly owns for that placeholder step.
-
-Translator-specific failures remain owned by the existing Translator handoff and ready-message handling logic. The BSSL selector must not independently fail `Scheduled`; Translator workflow may still move `Scheduled -> Failed` through its existing attempt-aware helpers.
-
-Future runner execution and PostProcessingService integrations own their own failure decisions after they introduce durable ownership or claim rules. They may use `MarkScenarioFailedFrom` only when an exact state guard is enough for their ownership model; otherwise they must introduce claim-aware or attempt-aware helpers.
-
-Failure reasons are logged only. Do not add a new database column for failure reason, failure class, or failure timestamp in this BSSL step.
-
-### Ignored States
-
-The selector must not select these states as ordinary BSSL candidates or advance them through the FIFO selection loop:
-
-- `Scheduled`
-- `InProcessing`
-- `Finished`
-- `Failed`
-
-This ignored-state rule does not prohibit component-owned workflows from making guarded terminal failure transitions. It means BSSL should not discover these rows through `NextActionableScenario` or treat them as normal next-step candidates.
-
-`Scheduled` is owned by Translator handoff and Translator ready-message handling. The selector must not select `Scheduled` rows, and BSSL must not make independent `Scheduled -> Failed` decisions. Retry-aware Translator helpers remain the authoritative path for `Scheduled -> Created` and `Scheduled -> Failed`.
-
-`InProcessing` is entered by BSSL only as the durable runner-start claim and next canonical runner state. The selector must not select `InProcessing` rows on later iterations. After a scenario is in `InProcessing`, future runner execution and runner completion logic own the next transition, except for the v1 runner-start placeholder failure path immediately after BSSL has claimed `StartingRunners -> InProcessing`.
-
-`Finished` and `Failed` are terminal states.
+Do not assert exact log sentences in tests. Do not log recipe JSON, confidence inputs, credentials, raw broker payloads, or other sensitive data. Idle iterations must not log.
 
 ### Concurrency and Stale Rows
 
-The selector may run in more than one Scenario Manager replica in the future. The v1 implementation should remain correct under stale reads even though it does not implement advanced distributed scheduling.
+BSSL must remain correct when more than one Scenario Manager replica runs:
 
-The design relies on guarded updates and existing exact-row claims:
+- each replica may read the same recovery or ordinary candidate;
+- translation’s existing exact claim decides one winner for `Created`;
+- exact ID, attempt, marker, and cutoff guards decide one recovery winner;
+- `StartingRunners -> InProcessing` decides one runner-placeholder winner;
+- multiple replicas may invoke the post-processing placeholder because it is side-effect-free, but only one guarded result transition wins;
+- failure updates require the expected state and cannot overwrite a newer state;
+- every losing replica consumes its current iteration and must not select another row.
 
-- `Created` rows are safely claimed by `ProcessScenarioTrans` through the existing `ClaimScenarioForTranslation` transaction.
-- `StartingRunners` rows are claimed by moving to `InProcessing` only if the row is still in `StartingRunners`; only the selector instance that successfully claims the row calls the runner-start placeholder.
-- `PostProcessing` rows move to `Finished` or `StartingRunners` only if the row is still in `PostProcessing`; the BSSL post-processing placeholder is side-effect-free because no durable post-processing claim exists yet.
-- Failure updates require an expected current state, so stale failures do not alter terminal rows or rows that have already moved into a different working state.
+The selector must hold no long-lived database or in-memory lock. Durable ownership exists only through database state and attempt guards. BSSL adds no leader election or cross-replica memory coordination.
 
-If another process changes a row after `NextActionableScenario` reads it, the guarded update should affect zero rows. The selector should log that stale outcome and continue on the next tick.
+### Schema Validation and Compatibility
+
+`CheckingDependencies` already calls `coredb.EnsureTablesAvailable` before `RunScenarioManager`. BSSL must extend that existing startup path so invalid legacy schemas fail before the selector starts.
+
+Schema setup must first determine whether the resolved Scenario Status table already exists:
+
+- when it does not exist, create it once with the complete current schema, project foreign key, and constraints shown below;
+- when it already exists, do not run the existing `ensureScenarioStatusProjectLink` mutation or any other `ALTER TABLE` repair against it; validate it read-only and fail startup when it is incompatible;
+- after successful creation or validation, create the two additive BSSL indexes.
+
+Existing Project-table maintenance may remain unchanged. The no-auto-migration rule in this section applies to the Scenario Status table.
+
+The resolved table must satisfy this compatibility contract:
+
+| Column | Compatible PostgreSQL type | Required constraint or default |
+| --- | --- | --- |
+| `id` | `INTEGER` | The only primary-key column, non-null, and generated by a serial- or identity-backed sequence. |
+| `project_id` | `INTEGER` | Non-null and protected by a foreign key to the resolved Project table's `id`, with `ON DELETE CASCADE`. |
+| `state` | `TEXT` | Non-null. |
+| `created_at` | `TIMESTAMPTZ` | Non-null with a default whose normalized catalog expression is `now()` or `CURRENT_TIMESTAMP`. |
+| `updated_at` | `TIMESTAMPTZ` | Non-null with a default whose normalized catalog expression is `now()` or `CURRENT_TIMESTAMP`. |
+| `priority` | `INTEGER` | Non-null with default `0`. |
+| `number_of_reps` | `INTEGER` | Non-null with default `0`. |
+| `number_of_computed_reps` | `INTEGER` | Non-null with default `0`. |
+| `translation_attempts` | `INTEGER` | Non-null with default `0`. |
+| `translation_request_published_at` | `TIMESTAMPTZ` | Nullable. |
+| `recipe_info` | `JSONB` | Nullable. |
+| `container_image` | `TEXT` | Nullable. |
+| `confidence_metric` | `DOUBLE PRECISION` | Nullable. |
+
+The resolved Project table must provide a non-null integer primary-key `id` generated by a serial- or identity-backed sequence and a non-null text `project_name`, matching the existing insert, lookup, and Translator join. Existing maintenance may continue ensuring its `number_of_components INTEGER NOT NULL DEFAULT 0` and `status TEXT NOT NULL DEFAULT ''` columns.
+
+Validation must also prove that every existing Scenario Status row has a non-null `project_id` and that no row references a missing Project row. A declared foreign key alone is insufficient because a nullable legacy column can still contain null values.
+
+The validator must inspect PostgreSQL catalogs, not only column names:
+
+- `pg_get_serial_sequence(resolvedScenarioTable, 'id')` and `pg_get_serial_sequence(resolvedProjectTable, 'id')` must each return a sequence for serial- or identity-backed generation;
+- the primary key must contain only `id`;
+- normalized timestamp default expressions may be `now()` or `CURRENT_TIMESTAMP`;
+- normalized integer default expressions for the four default-zero columns must equal `0`, ignoring PostgreSQL-added casts and parentheses;
+- the foreign key must map only `project_id` to the resolved Project table's `id` with `ON DELETE CASCADE`.
+
+Do not automatically add, backfill, or reinterpret missing Translator-era columns. If validation fails, return a clear error that names the incompatible table and instructs the operator to migrate or recreate it. `EnsureTablesAvailable` must return false, and dependency startup must remain fatal.
+
+The BSSL indexes are additive. No down-migration is required. Enabling an older binary after index creation remains valid.
+
+### Partial Indexes
+
+Define compile-controlled SQL predicate constants in `coredb` and reuse the same predicate text in the lookup queries and index definitions.
+
+Create two normal, non-concurrent partial indexes after allowed Project-table maintenance and successful Scenario Status creation or read-only validation:
+
+1. Ordinary actionable lookup:
+
+```sql
+CREATE INDEX IF NOT EXISTS scenario_status_actionable_id_idx
+ON scenario_status (id)
+WHERE state IN ('Created', 'StartingRunners', 'PostProcessing');
+```
+
+2. Unconfirmed translation recovery lookup:
+
+```sql
+CREATE INDEX IF NOT EXISTS scenario_status_unpublished_translation_id_idx
+ON scenario_status (id)
+WHERE state = 'Scheduled'
+  AND translation_request_published_at IS NULL;
+```
+
+These examples use the default table. For a configured table such as `custom_status`, derive:
+
+```text
+custom_status_actionable_id_idx
+custom_status_unpublished_translation_id_idx
+```
+
+Derive each name from the resolved table’s unqualified base name so default and custom tables can coexist in one schema. The index is created in the same schema as its table. The resolved table identifier itself must still be used in the `ON` clause.
+
+The existing table-name environment variables remain trusted deployment configuration and must contain identifiers supported by the repository’s current SQL interpolation. Identifier hardening is outside this change.
+
+Use ordinary `CREATE INDEX IF NOT EXISTS`, not `CREATE INDEX CONCURRENTLY`. Startup therefore requires DDL permission and index creation may briefly block writes. Any creation error is fatal. A same-named existing index is assumed to have the correct definition; BSSL does not repair or replace it automatically.
+
+PostgreSQL maintains both indexes automatically. Do not add an application refresh task.
 
 ### Tests and Acceptance Criteria
 
-Add focused tests for the new selector and Core DB helpers.
+#### Selector Unit Tests
 
-Core DB helper tests should verify:
+Selector tests must always run without NATS, Kubernetes, or PostgreSQL. They must use the private dependency bundle, a fake publisher, a fake clock, and a caller-controlled wait hook. They must not use mutable global replacements or sleep for five real seconds.
 
-- `NextActionableScenario` returns the lowest `id` among `Created`, `StartingRunners`, and `PostProcessing`
-- `NextActionableScenario` ignores `Scheduled`, `InProcessing`, `Finished`, and `Failed`
-- `NextActionableScenario` returns `nil, nil` when there is no actionable row
-- `MarkScenarioInProcessing` only updates `StartingRunners -> InProcessing`
-- `MarkScenarioFinished` only updates `PostProcessing -> Finished`
-- `MarkScenarioRequiresMoreRuns` only updates `PostProcessing -> StartingRunners`
-- `MarkScenarioFailedFrom` updates only rows that still match the expected known non-terminal state
-- `MarkScenarioFailedFrom` returns `false, nil` for stale state guards
-- `MarkScenarioFailedFrom` rejects empty, unknown, `Finished`, and `Failed` expected states
-- the other guarded helpers return `false, nil` for stale state guards
-- Translator-specific failure tests remain on the existing attempt-aware Translator helpers, not on `MarkScenarioFailedFrom`
+Cover:
 
-Selector tests should use fakes or replaceable function variables for the publisher and placeholders. They should verify:
+- nil context, already-cancelled context, and nil publisher startup rejection;
+- no goroutine and nil completion channel after startup validation failure;
+- immediate first iteration inside the worker;
+- five-second post-completion delay through the controlled wait hook;
+- fixed 30-second child-context timeout;
+- root cancellation during an iteration and during the wait;
+- completion-channel closure and joined shutdown;
+- serial execution with no overlapping iterations;
+- no candidate as a silent no-op;
+- recovery discovery before ordinary lookup;
+- no recovery candidate falling through to ordinary lookup;
+- found, stale, failed, and successful recovery preventing ordinary lookup;
+- use of one clock value and one cutoff for discovery and exact recovery;
+- unexpected state causing no write;
+- `Created` calling only the configured translation handoff;
+- stale or failed runner claim never invoking the placeholder;
+- successful runner claim preceding the placeholder;
+- runner placeholder success leaving `InProcessing`;
+- runner placeholder failure, failure-write stale result, and failure-write error;
+- post-processing `true`, `false`, error, stale, and transition-error paths;
+- `confidenceReached` ignored whenever the placeholder returns an error;
+- cancellation or deadline before every selector-owned state write;
+- no state handler choosing a replacement candidate in the same iteration;
+- continuation on a later iteration after an ordinary operational error.
 
-- a `Created` candidate calls `ProcessScenarioTrans` through the configured publisher path
-- a `StartingRunners` candidate is claimed as `InProcessing` before `createSimulationRunnerJob` is called
-- successful runner startup leaves the scenario in `InProcessing`
-- runner startup failure moves the scenario from `InProcessing` to `Failed`
-- a `PostProcessing` candidate calls `doPostProcessing`
-- `confidenceReached == true` moves the scenario to `Finished`
-- `confidenceReached == false` moves the scenario to `StartingRunners`
-- post-processing failure moves the scenario from `PostProcessing` to `Failed`
-- DB lookup errors are logged and do not stop the loop permanently
-- one loop iteration processes at most one scenario
+Do not test exact log strings.
 
-Startup validation should verify by test or code review that Translator communication is initialized before the selector loop starts and that the selector receives a non-nil `communication.TranslationRequestPublisher`.
+#### PostgreSQL Integration Tests
 
-The implementation is complete when Scenario Manager can continuously look for the next actionable scenario, dispatch it according to its lifecycle state, reuse the existing Translator handoff for `Created`, claim runner startup before invoking its placeholder, call only a side-effect-free placeholder for post-processing, set successful scenarios to `Finished`, and degrade selector-owned failures to `Failed` only when the row still matches the expected state and the Scenario Manager context has not been cancelled.
+Follow the existing environment-gated Core DB integration-test convention. Add no SQL-mocking library. Tests must use isolated custom tables or an isolated schema and clean up their own data so unrelated rows cannot change ID-order assertions.
+
+Cover:
+
+- global mixed-state ordering across multiple projects and project statuses;
+- gaps in IDs, positive-ID filtering, ignored canonical states, and unknown states;
+- `nil, nil` when each lookup has no candidate;
+- nil-context and invalid-argument validation before DB access;
+- exact cutoff boundary for recovery;
+- lowest-ID recovery discovery returning the correct attempt;
+- published, fresh, non-`Scheduled`, and stale-attempt protection;
+- a discovered old attempt unable to recover a newer attempt;
+- below-limit recovery to `Created` and at/above-limit recovery to `Failed`;
+- a late ready message from a superseded attempt not changing the newer row;
+- every guarded transition and zero-row stale result;
+- the exact `MarkScenarioFailedFrom` allowlist;
+- successful updates changing only `state` and `updated_at`;
+- schema validation failures for missing required columns, nullable/invalid project links, and orphan rows;
+- default and custom index names, columns, predicates, and target tables;
+- repeated schema setup remaining idempotent.
+
+#### Verification Commands
+
+Run from `scenario-manager`:
+
+```text
+go test -race ./internal/core
+go test ./internal/core ./internal/coredb
+```
+
+The PostgreSQL cases may skip when the existing Core DB environment is not configured.
+
+Run `go test ./...` only in the intended Kubernetes test environment. Outside a cluster, the existing unrelated `internal/kube` test process exits through `KubeConnect` before it can skip; fixing that baseline behavior is outside BSSL.
+
+### Completion Criteria
+
+The implementation is complete when:
+
+- startup initializes Translator communication and one joinable selector worker in the required order;
+- shutdown cancels and joins that worker;
+- every iteration has a 30-second deadline and is followed by a five-second delay with no overlap or catch-up;
+- stale unconfirmed translation recovery uses one cutoff and the exact discovered attempt;
+- recovery always precedes ordinary global lowest-ID selection;
+- only one candidate is considered per iteration;
+- `Created` reuses the existing Translator handoff unchanged;
+- runner and post-processing paths exhibit the documented synthetic behavior;
+- every state update is guarded and persistence failures never become independent scenario failures;
+- schema incompatibility fails at startup with manual-remediation guidance;
+- both table-specific partial indexes exist for default and custom tables;
+- the focused unit and PostgreSQL integration tests cover the required behavior.
