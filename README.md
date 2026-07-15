@@ -10,22 +10,11 @@ CBSE is a research-driven framework investigating how container orchestration ca
 
 ⚠️ **Research Prototype – Early Development Stage**
 
-The repository currently does **not** provide a functional simulation execution framework.
+CBSE can define and provision an experiment's supporting Kubernetes services, receive scenarios from an Experimental Design Service, and send scenarios to a Translator. It does **not** yet run simulation containers, manage repetitions, or produce results.
 
-Implemented so far:
+The current public `SimulationExperiment` API is `alpha3`; new experiments must use this version. The codebase and its interfaces are still evolving.
 
-- **Experiment Operator (ExOp)**
-  - Provides a tested `alpha2` API for the `SimulationExperiment` Custom Resource Definition (CRD)
-  - Supports creation and lifecycle handling of CR instances
-
-Not yet implemented:
-
-- Functional experiment execution
-- Scenario orchestration
-- Distributed replication management
-- Production-ready feature set
-
-Interfaces and behavior may change without notice.
+For the full, plain-language overview of what is implemented, what is still missing, and the latest verification results, see [Project status](docs/project-status.md).
 
 ---
 
