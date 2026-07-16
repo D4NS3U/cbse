@@ -62,7 +62,7 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     exit 2
   }
 else
-  for variable in OPERATOR_IMAGE SM_IMAGE EDS_IMAGE; do
+  for variable in OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE; do
     value="${!variable:-}"
     [[ "${value}" == *@sha256:* ]] || {
       echo "${variable} must be an immutable digest reference when SKIP_BUILD=1" >&2

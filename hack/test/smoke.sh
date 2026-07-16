@@ -87,10 +87,11 @@ else
   OPERATOR_IMAGE="${OPERATOR_IMAGE}"
   SM_IMAGE="${SM_IMAGE}"
   EDS_IMAGE="${EDS_IMAGE}"
+  TRANS_IMAGE="${TRANS_IMAGE}"
 fi
-export OPERATOR_IMAGE SM_IMAGE EDS_IMAGE
-printf 'OPERATOR_IMAGE=%s\nSM_IMAGE=%s\nEDS_IMAGE=%s\n' \
-  "${OPERATOR_IMAGE}" "${SM_IMAGE}" "${EDS_IMAGE}" >"${artifact_dir}/images.env"
+export OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE
+printf 'OPERATOR_IMAGE=%s\nSM_IMAGE=%s\nEDS_IMAGE=%s\nTRANS_IMAGE=%s\n' \
+  "${OPERATOR_IMAGE}" "${SM_IMAGE}" "${EDS_IMAGE}" "${TRANS_IMAGE}" >"${artifact_dir}/images.env"
 
 crd="${root}/experiment-operator/config/crd/bases/experiment.cbse.terministic.de_simulationexperiments.yaml"
 crd_name="simulationexperiments.experiment.cbse.terministic.de"
@@ -148,6 +149,7 @@ sed \
   -e "s|CBSE_PROJECT|${project}|g" \
   -e "s|CBSE_RUN_ID|${run_id}|g" \
   -e "s|CBSE_SUPPORT_IMAGE|${EDS_IMAGE}|g" \
+  -e "s|CBSE_TRANS_IMAGE|${TRANS_IMAGE}|g" \
   "${root}/test/e2e/manifests/experiment.yaml" >"${artifact_dir}/experiment.yaml"
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -f "${artifact_dir}/experiment.yaml" >/dev/null
 

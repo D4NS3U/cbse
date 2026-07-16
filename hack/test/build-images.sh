@@ -62,6 +62,7 @@ build_image() {
 build_image exop OPERATOR_IMAGE "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator" "CBSE Experiment Operator"
 build_image sm SM_IMAGE "${root}/scenario-manager/Dockerfile" "${root}" "CBSE Scenario Manager"
 build_image eds-mock EDS_IMAGE "${root}/test-env/eds-mock/Dockerfile" "${root}" "CBSE EDS Mock"
+build_image trans-mock TRANS_IMAGE "${root}/test-env/trans-mock/Dockerfile" "${root}" "CBSE Translator Mock"
 printf 'REGISTRY=%s\nVERSION=%s\nCOMMIT=%s\nSOURCE_HASH=%s\nRUN_ID=%s\n' \
   "${registry}" "${version}" "${commit}" "${source_hash}" "${run_id}" >"${artifact_dir}/build-info.env"
 echo "Published test images; metadata: ${artifact_dir}"

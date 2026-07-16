@@ -26,9 +26,7 @@ spec:
     port: 5432
     serviceType: ClusterIP
   translator:
-    image: CBSE_SUPPORT_IMAGE
-    command: ["python", "-c"]
-    args: ["import time; time.sleep(3600)"]
+    image: CBSE_TRANS_IMAGE
     repository: smoke-repository
     baseimage: smoke-base
     port: 8080

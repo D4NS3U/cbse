@@ -18,7 +18,8 @@ metadata:
 spec:
   holderIdentity: ${run_id}
   leaseDurationSeconds: 3600
-  acquireTime: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  # Kubernetes Lease timestamps require microsecond precision on this API.
+  acquireTime: "$(date -u +%Y-%m-%dT%H:%M:%S.000000Z)"
 EOF
 
 if ! "${kubectl_bin}" --kubeconfig "${kubeconfig}" create -f "${tmp}" >/dev/null 2>&1; then

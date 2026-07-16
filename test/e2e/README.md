@@ -30,6 +30,7 @@ SKIP_BUILD=1 \
 OPERATOR_IMAGE=docker.io/d4ns3u/cbse-testing:exop.test.26.7.16@sha256:... \
 SM_IMAGE=docker.io/d4ns3u/cbse-testing:sm.test.26.7.16@sha256:... \
 EDS_IMAGE=docker.io/d4ns3u/cbse-testing:eds-mock.test.26.7.16@sha256:... \
+TRANS_IMAGE=docker.io/d4ns3u/cbse-testing:trans-mock.test.26.7.16@sha256:... \
 CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json \
 make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
 ```
