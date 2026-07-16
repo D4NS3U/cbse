@@ -1,0 +1,45 @@
+name: K3s full-stack smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cbse-k3s-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.event_name != 'pull_request'
+    runs-on: [self-hosted, linux, x64, cbse-k3s]
+    environment: cbse-k3s
+    timeout-minutes: 45
+    env:
+      KUBECONFIG: /home/d4ns3u/.kube/config
+      CBSE_REGISTRY: ${{ secrets.CBSE_REGISTRY }}
+      CBSE_REGISTRY_AUTH_FILE: /home/d4ns3u/.docker/cbse-robot-config.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            experiment-operator/go.sum
+            scenario-manager/go.sum
+            test/e2e/go.sum
+      - name: Run full-stack smoke suite
+        run: make test-smoke
+      - name: Upload smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cbse-smoke-${{ github.run_id }}
+          path: artifacts/test/
+          if-no-files-found: warn
+          retention-days: 14

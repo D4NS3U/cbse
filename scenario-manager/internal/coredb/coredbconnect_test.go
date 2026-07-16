@@ -1,8 +1,9 @@
+//go:build integration
+
 package coredb
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 )
@@ -32,21 +33,11 @@ func TestCoreDBConnectAndEnsureTables(t *testing.T) {
 	}
 
 	if len(errs) > 0 {
-			for _, err := range errs {
-				t.Logf("Core DB integration error: %s", err)
-			}
-			t.Fatalf("Core DB integration test failed with %d error(s)", len(errs))
+		for _, err := range errs {
+			t.Logf("Core DB integration error: %s", err)
 		}
-
-		t.Log("Core DB integration test succeeded.")
-}
-
-func requireEnv(t *testing.T, keys ...string) {
-	t.Helper()
-
-	for _, key := range keys {
-		if os.Getenv(key) == "" {
-			t.Skipf("Environment variable %s is not set; skipping Core DB integration test", key)
-		}
+		t.Fatalf("Core DB integration test failed with %d error(s)", len(errs))
 	}
+
+	t.Log("Core DB integration test succeeded.")
 }

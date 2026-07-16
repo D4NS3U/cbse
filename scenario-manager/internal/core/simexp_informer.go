@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 
 	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/coredb"
@@ -21,12 +23,13 @@ import (
 type SimulationExperimentEventType string
 
 const (
-	SimulationExperimentCreated    SimulationExperimentEventType = "SimulationExperimentCreated"
-	SimulationExperimentDeleted    SimulationExperimentEventType = "SimulationExperimentDeleted"
-	SimulationExperimentInProgress SimulationExperimentEventType = "SimulationExperimentInProgress"
-	SimulationExperimentCompleted  SimulationExperimentEventType = "SimulationExperimentCompleted"
-	SimulationExperimentFailed     SimulationExperimentEventType = "SimulationExperimentFailed"
-	SimulationExperimentErrored    SimulationExperimentEventType = "SimulationExperimentErrored"
+	scenarioManagerWatchNamespaceEnv                               = "SCENARIO_MANAGER_WATCH_NAMESPACE"
+	SimulationExperimentCreated      SimulationExperimentEventType = "SimulationExperimentCreated"
+	SimulationExperimentDeleted      SimulationExperimentEventType = "SimulationExperimentDeleted"
+	SimulationExperimentInProgress   SimulationExperimentEventType = "SimulationExperimentInProgress"
+	SimulationExperimentCompleted    SimulationExperimentEventType = "SimulationExperimentCompleted"
+	SimulationExperimentFailed       SimulationExperimentEventType = "SimulationExperimentFailed"
+	SimulationExperimentErrored      SimulationExperimentEventType = "SimulationExperimentErrored"
 
 	// Internal phase markers used to decide which transitions merit an event.
 	phaseInProgress = "InProgress"
@@ -46,8 +49,9 @@ type SimulationExperimentEvent struct {
 	NewPhase   string
 }
 
-// StartSimulationExperimentInformer initializes and runs a cluster-wide informer
-// for SimulationExperiment resources.
+// StartSimulationExperimentInformer initializes and runs an informer for
+// SimulationExperiment resources. It is cluster-wide by default and is
+// restricted when SCENARIO_MANAGER_WATCH_NAMESPACE is set.
 //
 // Behaviour:
 //   - Builds an in-cluster REST config, registers core and SimulationExperiment
@@ -89,7 +93,11 @@ func StartSimulationExperimentInformer(ctx context.Context, handler func(Simulat
 	}
 
 	// Create a controller-runtime cache backed by the in-cluster config.
-	cache, err := crcache.New(cfg, crcache.Options{Scheme: scheme})
+	cacheOptions := crcache.Options{Scheme: scheme}
+	if watchNamespace := strings.TrimSpace(os.Getenv(scenarioManagerWatchNamespaceEnv)); watchNamespace != "" {
+		cacheOptions.DefaultNamespaces = map[string]crcache.Config{watchNamespace: {}}
+	}
+	cache, err := crcache.New(cfg, cacheOptions)
 	if err != nil {
 		return fmt.Errorf("create informer cache: %w", err)
 	}

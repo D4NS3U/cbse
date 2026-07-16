@@ -15,7 +15,7 @@ The repository currently does **not** provide a functional simulation execution 
 Implemented so far:
 
 - **Experiment Operator (ExOp)**
-  - Provides a tested `alpha2` API for the `SimulationExperiment` Custom Resource Definition (CRD)
+  - Provides a tested `alpha3` API for the `SimulationExperiment` Custom Resource Definition (CRD)
   - Supports creation and lifecycle handling of CR instances
 
 Not yet implemented:
@@ -47,3 +47,22 @@ More: [ResearchGate Profile](https://www.researchgate.net/profile/Daniel-Seuffer
 ## License
 
 Licensed under the **Apache License 2.0**. See `LICENSE`.
+
+## Testing
+
+The repository exposes one test contract for developers, coding agents, and CI:
+
+```bash
+make test-fast
+```
+
+The production-like smoke suite uses the dedicated K3s cluster and freshly published `linux/amd64` images:
+
+```bash
+make test-smoke \
+  KUBECONFIG=/home/d4ns3u/.kube/config \
+  CBSE_REGISTRY=logsimharbor.informatik.unibw-muenchen.de/cbse \
+  CBSE_REGISTRY_AUTH_FILE=/path/to/cbse-robot-config.json
+```
+
+Harbor must present a valid TLS certificate. The pipeline intentionally has no insecure-registry mode. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See `test/e2e/README.md` for configuration and troubleshooting.

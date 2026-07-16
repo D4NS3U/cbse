@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/D4NS3U/cbse/scenario-manager/internal/coredb"
@@ -20,7 +22,8 @@ import (
 //  2. Start EDS communication over NATS/JetStream with a custom batch processor
 //     that enforces in-process sequential handling of incoming scenario batches.
 //  3. Start Translator communication, including its ready-message consumer.
-//  4. Reuse that Translator adapter as the publisher for one BSSL worker.
+//  4. Unless SCENARIO_MANAGER_SELECTOR_ENABLED=false, reuse that Translator
+//     adapter as the publisher for one BSSL worker.
 //  5. Report readiness, wait for shared-context cancellation, join BSSL, and
 //     only then report final shutdown.
 //
@@ -40,18 +43,26 @@ func RunScenarioManager(ctx context.Context) {
 		log.Fatalf("Failed to start Translator communication: %v", err)
 	}
 
-	selectorDone, err := StartBasicScenarioSelector(ctx, translatorComms)
-	if err != nil {
-		log.Fatalf("Failed to start Basic Scenario Selection Logic: %v", err)
+	selectorEnabled := !strings.EqualFold(strings.TrimSpace(os.Getenv("SCENARIO_MANAGER_SELECTOR_ENABLED")), "false")
+	var selectorDone <-chan struct{}
+	if selectorEnabled {
+		selectorDone, err = StartBasicScenarioSelector(ctx, translatorComms)
+		if err != nil {
+			log.Fatalf("Failed to start Basic Scenario Selection Logic: %v", err)
+		}
+		log.Println("Scenario Manager is ready; Basic Scenario Selection Logic worker started.")
+	} else {
+		log.Println("Scenario Manager is ready; Basic Scenario Selection Logic is disabled by configuration.")
 	}
 
-	log.Println("Scenario Manager is ready; Basic Scenario Selection Logic worker started.")
 	<-ctx.Done()
 
 	// The informer and NATS consumers retain their existing context-driven
 	// lifecycle. BSSL supplies a join handle because final shutdown must not be
 	// reported while its active context-aware operation is still unwinding.
-	<-selectorDone
+	if selectorDone != nil {
+		<-selectorDone
+	}
 	log.Printf("Scenario Manager shutdown complete: %v", ctx.Err())
 }
 

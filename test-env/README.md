@@ -1,5 +1,7 @@
 # EDS Integration Test (Scenario Manager)
 
+> Deprecated: this directory now contains compatibility fixtures only. `run_eds_e2e.sh` delegates to the maintained full-stack suite documented in `test/e2e/README.md`.
+
 This test environment validates the Scenario Manager EDS communication path:
 
 1. Scenario Manager starts and subscribes to EDS subjects.

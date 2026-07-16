@@ -1,4 +1,4 @@
-apiVersion: experiment.cbse.terministic.de/alpha2
+apiVersion: experiment.cbse.terministic.de/alpha3
 kind: SimulationExperiment
 metadata:
   name: sm-eds-e2e

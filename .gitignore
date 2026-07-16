@@ -2,3 +2,6 @@ experiment-operator/go-licenses.csv
 scenario-manager/go-licenses.csv
 cbse.code-workspace
 scenario-manager/.gocache/
+/artifacts/
+/bin/kubectl-*
+/.cache/

@@ -11,12 +11,12 @@ import (
 )
 
 const (
-	maxCoreDBAttempts       = 6
-	coreDBRetryDelay        = 10 * time.Second
-	maxNATSAttempts         = 6
-	natsRetryDelay          = 5 * time.Second
+	maxCoreDBAttempts = 6
+	coreDBRetryDelay  = 10 * time.Second
+	maxNATSAttempts   = 6
+	natsRetryDelay    = 5 * time.Second
 	// dependencyCheckTimeout caps overall startup checks to avoid hanging forever.
-	dependencyCheckTimeout  = 2 * time.Minute
+	dependencyCheckTimeout = 2 * time.Minute
 )
 
 // CheckingDependencies sequentially validates connectivity to the Core DB,
@@ -27,12 +27,12 @@ func CheckingDependencies(rootCtx context.Context) {
 	dependencyCtx, cancel := context.WithTimeout(rootCtx, dependencyCheckTimeout)
 	defer cancel()
 
-	if kube.KubeConnect() {
+	if err := kube.KubeConnect(); err == nil {
 		log.Println("Kubernetes client initialized.")
 	} else if kube.RunningInCluster() {
-		log.Fatalf("Running inside a Kubernetes cluster but failed to initialize the Kubernetes client.")
+		log.Fatalf("Running inside a Kubernetes cluster but failed to initialize the Kubernetes client: %v", err)
 	} else {
-		log.Println("Kubernetes client not initialized because no in-cluster configuration was detected.")
+		log.Printf("Kubernetes client not initialized because no in-cluster configuration was detected: %v", err)
 	}
 
 	for attempt := 1; attempt <= maxNATSAttempts; attempt++ {

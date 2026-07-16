@@ -1,3 +1,5 @@
+//go:build integration
+
 package kube
 
 import (
@@ -14,11 +16,11 @@ const (
 )
 
 func TestKubeConnectAndListSimulationExperiments(t *testing.T) {
-	if !KubeConnect() {
+	if err := KubeConnect(); err != nil {
 		if os.Getenv(requireInClusterTest) != "" {
-			t.Fatalf("KubeConnect failed while %s is set; ensure the test runs inside the cluster: runningInCluster=%v", requireInClusterTest, RunningInCluster())
+			t.Fatalf("KubeConnect failed while %s is set; ensure the test runs inside the cluster: runningInCluster=%v: %v", requireInClusterTest, RunningInCluster(), err)
 		}
-		t.Skipf("KubeConnect could not find an in-cluster configuration; skipping Kubernetes integration test (runningInCluster=%v)", RunningInCluster())
+		t.Skipf("KubeConnect could not find an in-cluster configuration; skipping Kubernetes integration test (runningInCluster=%v): %v", RunningInCluster(), err)
 	}
 
 	t.Log("Starting Kubernetes integration test...")

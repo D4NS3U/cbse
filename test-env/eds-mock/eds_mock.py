@@ -138,7 +138,11 @@ def load_config() -> Config:
     immediately runnable in-cluster without requiring additional setup.
     """
 
-    project = os.getenv("PROJECT_NAME", "sm-eds-e2e").strip() or "sm-eds-e2e"
+    project = (
+        os.getenv("PROJECT_NAME")
+        or os.getenv("SIMULATIONPROJECTNAME")
+        or "sm-eds-e2e"
+    ).strip() or "sm-eds-e2e"
     return Config(
         nats_url=os.getenv("NATS_URL", "nats://sm-eds-nats:4222"),
         availability_subject=os.getenv(

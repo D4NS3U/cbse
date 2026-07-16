@@ -1,0 +1,359 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: experiment-operator
+imagePullSecrets:
+  - name: registry-credentials
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: experiment-operator
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "services", "pods"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["experiment.cbse.terministic.de"]
+    resources: ["simulationexperiments", "simulationexperiments/finalizers", "simulationexperiments/status"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: experiment-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: experiment-operator
+subjects:
+  - kind: ServiceAccount
+    name: experiment-operator
+    namespace: CBSE_NAMESPACE
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: experiment-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: experiment-operator
+  template:
+    metadata:
+      labels:
+        app: experiment-operator
+    spec:
+      serviceAccountName: experiment-operator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          image: CBSE_OPERATOR_IMAGE
+          imagePullPolicy: IfNotPresent
+          args:
+            - --health-probe-bind-address=:8081
+          env:
+            - name: EXPERIMENT_OPERATOR_WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: health
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scenario-manager
+imagePullSecrets:
+  - name: registry-credentials
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scenario-manager
+rules:
+  - apiGroups: ["experiment.cbse.terministic.de"]
+    resources: ["simulationexperiments", "simulationexperiments/status"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scenario-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scenario-manager
+subjects:
+  - kind: ServiceAccount
+    name: scenario-manager
+    namespace: CBSE_NAMESPACE
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scenario-manager-config
+data:
+  SCENARIO_MANAGER_CORE_DB_DSN: postgres://core-db:5432/scenarios?sslmode=disable
+  SCENARIO_MANAGER_CORE_DB_SCENARIO_STATUS_TABLE: scenario_status
+  SCENARIO_MANAGER_CORE_DB_PROJECT_TABLE: project
+  SCENARIO_MANAGER_NATS_URL: nats://sm-eds-nats:4222
+  SCENARIO_MANAGER_NATS_USER: ""
+  SCENARIO_MANAGER_NATS_PASSWORD: ""
+  SCENARIO_MANAGER_EDS_AVAILABLE_SUBJECT: cbse.eds.scenarios.available
+  SCENARIO_MANAGER_EDS_BATCH_SUBJECT_TEMPLATE: cbse.{project}.eds.scenarios
+  SCENARIO_MANAGER_EDS_QUEUE_GROUP: scenario-manager-eds
+  SCENARIO_MANAGER_EDS_MAX_BATCH: "1000"
+  SCENARIO_MANAGER_EDS_STREAM: cbse_eds_scenarios
+  SCENARIO_MANAGER_EDS_CONSUMER: scenario-manager-eds-consumer
+  SCENARIO_MANAGER_EDS_ACK_WAIT: 2m
+  SCENARIO_MANAGER_EDS_MAX_ACK_PENDING: "1024"
+  SCENARIO_MANAGER_SELECTOR_ENABLED: "false"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scenario-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: scenario-manager
+  template:
+    metadata:
+      labels:
+        app: scenario-manager
+    spec:
+      serviceAccountName: scenario-manager
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scenario-manager
+          image: CBSE_SM_IMAGE
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: scenario-manager-config
+            - secretRef:
+                name: core-db-credentials
+          env:
+            - name: SCENARIO_MANAGER_WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 10m
+              memory: 48Mi
+            limits:
+              cpu: 500m
+              memory: 192Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: core-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: core-db
+  template:
+    metadata:
+      labels:
+        app: core-db
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_DB
+              value: scenarios
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: core-db-credentials
+                  key: SCENARIO_MANAGER_CORE_DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: core-db-credentials
+                  key: SCENARIO_MANAGER_CORE_DB_PASSWORD
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              cpu: 750m
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: core-db
+spec:
+  selector:
+    app: core-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+data:
+  nats-server.conf: |
+    port: 4222
+    http_port: 8222
+    jetstream {
+      store_dir: "/data/jetstream"
+      max_mem_store: 128MB
+      max_file_store: 512MB
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sm-eds-nats
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sm-eds-nats
+  template:
+    metadata:
+      labels:
+        app: sm-eds-nats
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nats
+          image: nats:2.11-alpine
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/etc/nats-config/nats-server.conf"]
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            tcpSocket:
+              port: client
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          livenessProbe:
+            tcpSocket:
+              port: client
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nats-config
+              readOnly: true
+            - name: data
+              mountPath: /data/jetstream
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: nats-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sm-eds-nats
+spec:
+  selector:
+    app: sm-eds-nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitor
+      port: 8222
+      targetPort: monitor
