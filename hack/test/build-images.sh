@@ -30,6 +30,10 @@ docker_config=()
 if [[ -n "${auth_file}" ]]; then
   [[ -r "${auth_file}" ]] || { echo "Registry auth file is not readable: ${auth_file}" >&2; exit 2; }
   auth_dir="$(mktemp -d)"
+  # Preserve Docker Desktop's contexts, builders, and CLI plugins while
+  # replacing only the credential file with the dedicated auth config.
+  source_docker_config="${DOCKER_CONFIG:-${HOME}/.docker}"
+  cp -R "${source_docker_config}/." "${auth_dir}/"
   cp "${auth_file}" "${auth_dir}/config.json"
   docker_config=(env "DOCKER_CONFIG=${auth_dir}")
   trap 'rm -rf "${auth_dir}"' EXIT
@@ -37,8 +41,8 @@ fi
 
 build_image() {
   local name="$1" image_var="$2" dockerfile="$3" context="$4" title="$5"
-  local canonical="${registry}/${name}.test.${version}"
-  local immutable="${registry}/${name}.test.${immutable_suffix}"
+  local canonical="${registry}:${name}.test.${version}"
+  local immutable="${registry}:${name}.test.${immutable_suffix}"
   local metadata="${artifact_dir}/${name}.metadata.json"
   "${docker_config[@]}" docker buildx build --platform linux/amd64 --pull --push \
     --progress=plain --file "${dockerfile}" \
@@ -50,13 +54,13 @@ build_image() {
   local digest
   digest="$(jq -r '.["containerimage.digest"] // empty' "${metadata}")"
   [[ "${digest}" == sha256:* ]] || { echo "Build did not report a digest for ${name}" >&2; return 1; }
-  printf '%s=%s@%s\n' "${image_var}" "${registry}/${name}.test.${version}" "${digest}" >>"${artifact_dir}/images.env"
+  printf '%s=%s@%s\n' "${image_var}" "${registry}:${name}.test.${version}" "${digest}" >>"${artifact_dir}/images.env"
   printf '%s canonical=%s immutable=%s digest=%s\n' "${name}" "${canonical}" "${immutable}" "${digest}" >>"${artifact_dir}/summary.txt"
 }
 
 : >"${artifact_dir}/images.env"
-build_image experiment-operator OPERATOR_IMAGE "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator" "CBSE Experiment Operator"
-build_image scenario-manager SM_IMAGE "${root}/scenario-manager/Dockerfile" "${root}" "CBSE Scenario Manager"
+build_image exop OPERATOR_IMAGE "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator" "CBSE Experiment Operator"
+build_image sm SM_IMAGE "${root}/scenario-manager/Dockerfile" "${root}" "CBSE Scenario Manager"
 build_image eds-mock EDS_IMAGE "${root}/test-env/eds-mock/Dockerfile" "${root}" "CBSE EDS Mock"
 printf 'REGISTRY=%s\nVERSION=%s\nCOMMIT=%s\nSOURCE_HASH=%s\nRUN_ID=%s\n' \
   "${registry}" "${version}" "${commit}" "${source_hash}" "${run_id}" >"${artifact_dir}/build-info.env"

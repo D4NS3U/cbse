@@ -11,6 +11,7 @@ WORKDIR /workspace
 COPY go.work go.work.sum ./
 COPY experiment-operator ./experiment-operator
 COPY scenario-manager ./scenario-manager
+COPY test/e2e ./test/e2e
 
 WORKDIR /workspace/scenario-manager
 

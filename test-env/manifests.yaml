@@ -80,7 +80,7 @@ spec:
       containers:
         - name: scenario-manager
           # Build and push/pull your current Scenario Manager image before applying.
-          image: docker.io/d4ns3u/cbse-testing:scenario-manager.test.26.7.16
+          image: docker.io/d4ns3u/cbse-testing:sm.test.26.7.16
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
