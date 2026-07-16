@@ -7,13 +7,16 @@ export GOCACHE
 KUBECTL_VERSION ?= v1.32.5
 KUBECTL ?= $(ROOT)/bin/kubectl-$(KUBECTL_VERSION)
 RUN_ID ?=
+CBSE_REGISTRY ?= docker.io/d4ns3u/cbse-testing
+TEST_IMAGE_VERSION ?= 26.7.16
 
-.PHONY: help test-fast test-smoke test-diagnose test-clean test-tools verify-generated
+.PHONY: help test-fast test-smoke publish-test-images test-diagnose test-clean test-tools verify-generated
 
 help:
 	@echo "CBSE test commands:"
 	@echo "  make test-fast"
-	@echo "  make test-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=registry/project"
+	@echo "  make publish-test-images TEST_IMAGE_VERSION=$(TEST_IMAGE_VERSION)"
+	@echo "  make test-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=$(CBSE_REGISTRY)"
 	@echo "  make test-diagnose RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 	@echo "  make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 
@@ -42,8 +45,14 @@ test-tools: $(KUBECTL)
 $(KUBECTL):
 	KUBECTL_VERSION=$(KUBECTL_VERSION) OUTPUT=$@ ./hack/test/install-kubectl.sh
 
+publish-test-images:
+	CBSE_REGISTRY="$(CBSE_REGISTRY)" TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" \
+	  CBSE_REGISTRY_AUTH_FILE="$(CBSE_REGISTRY_AUTH_FILE)" \
+	  ./hack/test/build-images.sh
+
 test-smoke: test-tools
-	KUBECTL="$(KUBECTL)" ./hack/test/smoke.sh
+	KUBECTL="$(KUBECTL)" CBSE_REGISTRY="$(CBSE_REGISTRY)" \
+	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" ./hack/test/smoke.sh
 
 test-diagnose: test-tools
 	@test -n "$(RUN_ID)" || { echo "RUN_ID is required" >&2; exit 2; }

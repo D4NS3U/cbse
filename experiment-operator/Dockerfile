@@ -26,8 +26,14 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ma
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM gcr.io/distroless/static:nonroot
+ARG IMAGE_VERSION=dev
+ARG VCS_REF=unknown
 WORKDIR /
 COPY --from=builder /workspace/manager .
+LABEL org.opencontainers.image.title="CBSE Experiment Operator" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/d4ns3u/cbse"
 USER 65532:65532
 
 ENTRYPOINT ["/manager"]

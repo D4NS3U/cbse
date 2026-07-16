@@ -61,8 +61,8 @@ The production-like smoke suite uses the dedicated K3s cluster and freshly publi
 ```bash
 make test-smoke \
   KUBECONFIG=/home/d4ns3u/.kube/config \
-  CBSE_REGISTRY=logsimharbor.informatik.unibw-muenchen.de/cbse \
-  CBSE_REGISTRY_AUTH_FILE=/path/to/cbse-robot-config.json
+  TEST_IMAGE_VERSION=26.7.16 \
+  CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json
 ```
 
-Harbor must present a valid TLS certificate. The pipeline intentionally has no insecure-registry mode. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See `test/e2e/README.md` for configuration and troubleshooting.
+The default repository is the private Docker Hub repository `docker.io/d4ns3u/cbse-testing`. Create the dedicated config with a Docker Hub personal access token; never commit it. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See `test/e2e/README.md` for configuration and troubleshooting.

@@ -7,8 +7,8 @@ This suite deploys the current Experiment Operator and Scenario Manager with rea
 - Go 1.24 or newer, Docker with Buildx, `curl`, `jq`, and OpenSSL.
 - A readable kubeconfig. Linux agents normally use `/home/d4ns3u/.kube/config`; set another explicit path when needed.
 - Access to the K3s API server at `https://192.168.101.245:6443`.
-- A valid-TLS OCI registry reachable from both the agent and K3s node.
-- A dedicated Docker `config.json` containing robot credentials in `CBSE_REGISTRY_AUTH_FILE`.
+- Access to the private Docker Hub repository `d4ns3u/cbse-testing` from both the agent and K3s node.
+- A dedicated Docker `config.json` containing a Docker Hub PAT in `CBSE_REGISTRY_AUTH_FILE`.
 
 The harness downloads kubectl v1.32.5 into the ignored root `bin/` directory.
 
@@ -17,18 +17,20 @@ The harness downloads kubectl v1.32.5 into the ignored root `bin/` directory.
 ```bash
 make test-smoke \
   KUBECONFIG=/home/d4ns3u/.kube/config \
-  CBSE_REGISTRY=logsimharbor.informatik.unibw-muenchen.de/cbse \
-  CBSE_REGISTRY_AUTH_FILE=/secure/cbse-robot-config.json
+  TEST_IMAGE_VERSION=26.7.16 \
+  CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json
 ```
+
+To create the dedicated authentication file, log in with a Docker Hub PAT using an isolated `DOCKER_CONFIG` directory and pass its `config.json` path. Do not use a credential helper for this file and do not commit it.
 
 To reuse already published images, every reference must include a digest:
 
 ```bash
 SKIP_BUILD=1 \
-OPERATOR_IMAGE=registry/project/operator@sha256:... \
-SM_IMAGE=registry/project/scenario-manager@sha256:... \
-EDS_IMAGE=registry/project/eds-support@sha256:... \
-CBSE_REGISTRY_AUTH_FILE=/secure/cbse-robot-config.json \
+OPERATOR_IMAGE=docker.io/d4ns3u/cbse-testing:experiment-operator.test.26.7.16@sha256:... \
+SM_IMAGE=docker.io/d4ns3u/cbse-testing:scenario-manager.test.26.7.16@sha256:... \
+EDS_IMAGE=docker.io/d4ns3u/cbse-testing:eds-mock.test.26.7.16@sha256:... \
+CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json \
 make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
 ```
 

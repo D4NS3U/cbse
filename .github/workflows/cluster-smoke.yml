@@ -22,8 +22,9 @@ jobs:
     timeout-minutes: 45
     env:
       KUBECONFIG: /home/d4ns3u/.kube/config
-      CBSE_REGISTRY: ${{ secrets.CBSE_REGISTRY }}
-      CBSE_REGISTRY_AUTH_FILE: /home/d4ns3u/.docker/cbse-robot-config.json
+      CBSE_REGISTRY: docker.io/d4ns3u/cbse-testing
+      TEST_IMAGE_VERSION: "26.7.16"
+      CBSE_REGISTRY_AUTH_FILE: /home/d4ns3u/.docker/cbse-testing-config.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

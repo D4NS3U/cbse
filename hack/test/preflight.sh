@@ -52,11 +52,13 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   command -v docker >/dev/null || { echo "docker is required to build current-source images" >&2; exit 2; }
   docker info >/dev/null || { echo "Docker daemon is not available" >&2; exit 2; }
   docker buildx version >/dev/null || { echo "Docker Buildx is required" >&2; exit 2; }
-  registry="${CBSE_REGISTRY:?CBSE_REGISTRY is required unless SKIP_BUILD=1}"
+  registry="${CBSE_REGISTRY:-docker.io/d4ns3u/cbse-testing}"
   registry_host="${registry%%/*}"
-  status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "https://${registry_host}/v2/" || true)"
+  probe_host="${registry_host}"
+  [[ "${probe_host}" == "docker.io" ]] && probe_host="registry-1.docker.io"
+  status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "https://${probe_host}/v2/" || true)"
   [[ "${status}" == "200" || "${status}" == "401" ]] || {
-    echo "Registry TLS/connectivity preflight failed for ${registry_host}; insecure TLS is not supported" >&2
+    echo "Registry TLS/connectivity preflight failed for ${probe_host}; insecure TLS is not supported" >&2
     exit 2
   }
 else
@@ -77,7 +79,7 @@ jq -e '.auths | type == "object" and length > 0' "${registry_auth_file}" >/dev/n
 }
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   jq -e --arg host "${registry_host}" \
-    '.auths | has($host) or has("https://" + $host) or has("https://" + $host + "/v1/")' \
+    '.auths | has($host) or has("https://" + $host) or has("https://" + $host + "/v1/") or ($host == "docker.io" and (has("https://index.docker.io/v1/") or has("https://registry-1.docker.io")))' \
     "${registry_auth_file}" >/dev/null || {
     echo "Registry auth file has no credentials for ${registry_host}" >&2
     exit 2

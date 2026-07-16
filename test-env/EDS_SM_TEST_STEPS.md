@@ -1,6 +1,10 @@
 # EDS <-> Scenario Manager Communication Test
 ## Detailed Step-by-Step Runbook
 
+> Historical runbook: use `make publish-test-images` and `make test-smoke` from
+> the repository root for current Docker Hub images. The commands below are
+> retained only as archival context and are not part of the supported pipeline.
+
 ## 1) What This Test Does
 This test validates the integration path between:
 

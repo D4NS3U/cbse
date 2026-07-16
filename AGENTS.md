@@ -23,8 +23,8 @@ make test-fast
 
 make test-smoke \
   KUBECONFIG=/home/d4ns3u/.kube/config \
-  CBSE_REGISTRY=logsimharbor.informatik.unibw-muenchen.de/cbse \
-  CBSE_REGISTRY_AUTH_FILE=/path/to/cbse-robot-config.json
+  TEST_IMAGE_VERSION=26.7.16 \
+  CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json
 ```
 
 Diagnostics and JUnit output are written below `artifacts/test/<run-id>/`; never add that directory to commits.

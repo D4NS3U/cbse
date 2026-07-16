@@ -77,31 +77,12 @@ KUBECTL="${kubectl_bin}" KUBECONFIG="${kubeconfig}" RUN_ID="${run_id}" \
 lock_acquired=1
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  commit="$(git -C "${root}" rev-parse --short=12 HEAD 2>/dev/null || echo no-git)"
-  source_hash="$({ git -C "${root}" ls-files -co --exclude-standard | LC_ALL=C sort | while IFS= read -r file; do git -C "${root}" hash-object "${file}"; done; } | git hash-object --stdin | cut -c1-12)"
-  image_tag="sha-${commit}-${source_hash}-${run_id}"
-  registry="${CBSE_REGISTRY%/}"
-  auth_dir="${tmp}/docker"
-  mkdir -p "${auth_dir}"
-  cp "${CBSE_REGISTRY_AUTH_FILE}" "${auth_dir}/config.json"
-
-  build_image() {
-    name="$1"
-    dockerfile="$2"
-    context="$3"
-    metadata="${tmp}/${name}-metadata.json"
-    ref="${registry}/${name}:${image_tag}"
-    DOCKER_CONFIG="${auth_dir}" docker buildx build --platform linux/amd64 --pull --push \
-      --progress=plain --file "${dockerfile}" --tag "${ref}" --metadata-file "${metadata}" "${context}" \
-      2>&1 | tee "${artifact_dir}/build-${name}.log" >&2
-    digest="$(jq -r '."containerimage.digest" // empty' "${metadata}")"
-    [[ "${digest}" == sha256:* ]] || { echo "Build did not report a digest for ${name}" >&2; return 1; }
-    printf '%s@%s' "${registry}/${name}" "${digest}"
-  }
-
-  OPERATOR_IMAGE="$(build_image experiment-operator "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator")"
-  SM_IMAGE="$(build_image scenario-manager "${root}/scenario-manager/Dockerfile" "${root}")"
-  EDS_IMAGE="$(build_image eds-test-support "${root}/test-env/eds-mock/Dockerfile" "${root}")"
+  CBSE_REGISTRY="${CBSE_REGISTRY:-docker.io/d4ns3u/cbse-testing}" \
+    TEST_IMAGE_VERSION="${TEST_IMAGE_VERSION:-26.7.16}" RUN_ID="${run_id}" \
+    CBSE_REGISTRY_AUTH_FILE="${CBSE_REGISTRY_AUTH_FILE}" CBSE_IMAGE_ARTIFACT_DIR="${artifact_dir}" \
+    "${root}/hack/test/build-images.sh"
+  # shellcheck disable=SC1091
+  source "${artifact_dir}/images.env"
 else
   OPERATOR_IMAGE="${OPERATOR_IMAGE}"
   SM_IMAGE="${SM_IMAGE}"

@@ -19,9 +19,17 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/scenario-manager ./cm
 
 FROM alpine:3.21
 
+ARG IMAGE_VERSION=dev
+ARG VCS_REF=unknown
+
 RUN addgroup -S app && adduser -S -G app app
 
 COPY --from=builder /out/scenario-manager /usr/local/bin/scenario-manager
+
+LABEL org.opencontainers.image.title="CBSE Scenario Manager" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/d4ns3u/cbse"
 
 USER app
 
