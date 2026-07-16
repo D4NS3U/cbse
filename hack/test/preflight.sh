@@ -5,6 +5,8 @@ kubectl_bin="${KUBECTL:?KUBECTL is required}"
 kubeconfig="${KUBECONFIG:?KUBECONFIG must point to the dedicated test-cluster config}"
 expected_server="${CBSE_EXPECTED_APISERVER:-https://192.168.101.245:6443}"
 expected_context="${CBSE_EXPECTED_CONTEXT:-default}"
+pull_secret_name="${CBSE_PULL_SECRET_NAME:-dockerhub-auth}"
+pull_secret_namespace="${CBSE_PULL_SECRET_NAMESPACE:-default}"
 
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 
@@ -48,6 +50,12 @@ for check in \
   [[ "${allowed}" == "yes" ]] || { echo "Missing Kubernetes permission: ${check}" >&2; exit 2; }
 done
 
+"${kubectl_bin}" --kubeconfig "${kubeconfig}" get secret "${pull_secret_name}" \
+  -n "${pull_secret_namespace}" -o jsonpath='{.type}' | grep -qx 'kubernetes.io/dockerconfigjson' || {
+  echo "Required pull Secret ${pull_secret_namespace}/${pull_secret_name} is missing or has the wrong type" >&2
+  exit 2
+}
+
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   command -v docker >/dev/null || { echo "docker is required to build current-source images" >&2; exit 2; }
   docker info >/dev/null || { echo "Docker daemon is not available" >&2; exit 2; }
@@ -71,12 +79,14 @@ else
   done
 fi
 
-registry_auth_file="${CBSE_REGISTRY_AUTH_FILE:?CBSE_REGISTRY_AUTH_FILE must point to a dedicated Docker config.json}"
-[[ -r "${registry_auth_file}" ]] || { echo "Registry auth file is not readable: ${registry_auth_file}" >&2; exit 2; }
-jq -e '.auths | type == "object" and length > 0' "${registry_auth_file}" >/dev/null || {
-  echo "CBSE_REGISTRY_AUTH_FILE is not a valid non-empty Docker config" >&2
-  exit 2
-}
+if [[ "${SKIP_BUILD:-0}" != "1" || -n "${CBSE_REGISTRY_AUTH_FILE:-}" ]]; then
+  registry_auth_file="${CBSE_REGISTRY_AUTH_FILE:?CBSE_REGISTRY_AUTH_FILE must point to a dedicated Docker config.json when building images}"
+  [[ -r "${registry_auth_file}" ]] || { echo "Registry auth file is not readable: ${registry_auth_file}" >&2; exit 2; }
+  jq -e '.auths | type == "object" and length > 0' "${registry_auth_file}" >/dev/null || {
+    echo "CBSE_REGISTRY_AUTH_FILE is not a valid non-empty Docker config" >&2
+    exit 2
+  }
+fi
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   jq -e --arg host "${registry_host}" \
     '.auths | has($host) or has("https://" + $host) or has("https://" + $host + "/v1/") or ($host == "docker.io" and (has("https://index.docker.io/v1/") or has("https://registry-1.docker.io")))' \

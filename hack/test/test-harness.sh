@@ -17,6 +17,7 @@ case "${args}" in
   *"config current-context"*) echo default ;;
   *"config view --minify"*) printf '%s' "${FAKE_SERVER:-https://192.168.101.245:6443}" ;;
   *"version -o json"*) printf '%s' '{"serverVersion":{"gitVersion":"v1.32.5+k3s1"}}' ;;
+  *"get secret"*) echo kubernetes.io/dockerconfigjson ;;
   *"auth can-i"*) echo yes ;;
   *"get namespace"*) exit 1 ;;
   *) echo "unexpected fake kubectl call: ${args}" >&2; exit 9 ;;

@@ -13,6 +13,8 @@ run_id="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 3)}"
 namespace="cbse-e2e-${run_id}"
 project="smoke-${run_id}"
 artifact_dir="${root}/artifacts/test/${run_id}"
+pull_secret_name="${CBSE_PULL_SECRET_NAME:-dockerhub-auth}"
+pull_secret_namespace="${CBSE_PULL_SECRET_NAMESPACE:-default}"
 tmp="$(mktemp -d)"
 lock_acquired=0
 namespace_created=0
@@ -122,11 +124,11 @@ db_password="$(openssl rand -hex 24)"
   --from-literal=SCENARIO_MANAGER_CORE_DB_USER=cbse_test \
   --from-literal="SCENARIO_MANAGER_CORE_DB_PASSWORD=${db_password}" \
   --dry-run=client -o yaml | "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -f - >/dev/null
-"${kubectl_bin}" --kubeconfig "${kubeconfig}" create secret generic registry-credentials -n "${namespace}" \
-  --type=kubernetes.io/dockerconfigjson --from-file=.dockerconfigjson="${CBSE_REGISTRY_AUTH_FILE}" \
-  --dry-run=client -o yaml | "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -f - >/dev/null
+"${kubectl_bin}" --kubeconfig "${kubeconfig}" get secret "${pull_secret_name}" -n "${pull_secret_namespace}" -o json \
+  | jq 'del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.managedFields, .metadata.ownerReferences)' \
+  | "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -n "${namespace}" -f - >/dev/null
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" patch serviceaccount default -n "${namespace}" \
-  --type=merge -p '{"imagePullSecrets":[{"name":"registry-credentials"}]}' >/dev/null
+  --type=merge -p "{\"imagePullSecrets\":[{\"name\":\"${pull_secret_name}\"}]}" >/dev/null
 
 "${kubectl_bin}" kustomize "${root}/test/e2e/manifests/base" >"${tmp}/stack.raw.yaml"
 sed \

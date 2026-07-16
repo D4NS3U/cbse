@@ -31,6 +31,8 @@ metadata:
   name: scenario-manager
   labels:
     app: scenario-manager
+imagePullSecrets:
+  - name: dockerhub-auth
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
