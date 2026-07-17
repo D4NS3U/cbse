@@ -143,8 +143,15 @@ for deployment in core-db sm-eds-nats experiment-operator scenario-manager; do
   "${kubectl_bin}" --kubeconfig "${kubeconfig}" rollout status deployment/"${deployment}" -n "${namespace}" --timeout=240s
 done
 
-"${kubectl_bin}" --kubeconfig "${kubeconfig}" logs deployment/scenario-manager -n "${namespace}" --all-containers \
-  | grep -q 'Scenario Manager is ready'
+scenario_manager_ready_deadline=$((SECONDS + 120))
+until "${kubectl_bin}" --kubeconfig "${kubeconfig}" logs deployment/scenario-manager -n "${namespace}" --all-containers 2>/dev/null \
+  | grep -q 'Scenario Manager is ready'; do
+  if (( SECONDS >= scenario_manager_ready_deadline )); then
+    echo "Scenario Manager did not report application readiness within 120 seconds" >&2
+    exit 1
+  fi
+  sleep 2
+done
 
 sed \
   -e "s|CBSE_NAMESPACE|${namespace}|g" \

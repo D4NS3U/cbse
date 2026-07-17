@@ -9,6 +9,7 @@ KUBECTL ?= $(ROOT)/bin/kubectl-$(KUBECTL_VERSION)
 RUN_ID ?=
 CBSE_REGISTRY ?= docker.io/d4ns3u/cbse-testing
 TEST_IMAGE_VERSION ?= 26.7.16
+CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,trans-mock
 
 .PHONY: help test-fast test-smoke publish-test-images test-diagnose test-clean test-tools verify-generated
 
@@ -47,6 +48,7 @@ $(KUBECTL):
 
 publish-test-images:
 	CBSE_REGISTRY="$(CBSE_REGISTRY)" TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" \
+	  CBSE_IMAGE_COMPONENTS="$(CBSE_IMAGE_COMPONENTS)" \
 	  CBSE_REGISTRY_AUTH_FILE="$(CBSE_REGISTRY_AUTH_FILE)" \
 	  ./hack/test/build-images.sh
 

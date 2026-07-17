@@ -39,7 +39,6 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
 	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	"github.com/D4NS3U/cbse/experiment-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
@@ -53,7 +52,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(experimentalpha2.AddToScheme(scheme))
 	utilruntime.Must(experimentalpha3.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -221,13 +219,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SimulationExperiment")
 		os.Exit(1)
 	}
-	if err := (&controller.LegacySimulationExperimentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "LegacySimulationExperiment")
-		os.Exit(1)
-	}
+	// Do not register the legacy alpha2 controller. The CRD serves alpha2 and
+	// alpha3 without a conversion webhook, so both endpoints expose the same
+	// underlying object. A separate alpha2 watcher would therefore also see
+	// alpha3 resources and could overwrite their status. Alpha3 is the active
+	// API and the only reconciliation authority.
 	// nolint:goconst
 	// if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 	// 	if err := webhookalpha2.SetupSimulationExperimentWebhookWithManager(mgr); err != nil {
