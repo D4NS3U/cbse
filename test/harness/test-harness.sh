@@ -36,25 +36,25 @@ common=(
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json"
 )
 
-env "${common[@]}" "${root}/hack/test/preflight.sh" >/dev/null
+env "${common[@]}" "${root}/test/harness/preflight.sh" >/dev/null
 
-if env "${common[@]}" FAKE_SERVER=https://wrong.example.test:6443 "${root}/hack/test/preflight.sh" >/dev/null 2>&1; then
+if env "${common[@]}" FAKE_SERVER=https://wrong.example.test:6443 "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted the wrong API server" >&2
   exit 1
 fi
 
-if env "${common[@]}" OPERATOR_IMAGE=registry.example.test/operator:latest "${root}/hack/test/preflight.sh" >/dev/null 2>&1; then
+if env "${common[@]}" OPERATOR_IMAGE=registry.example.test/operator:latest "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted a mutable image" >&2
   exit 1
 fi
 
-if env "${common[@]}" KUBECONFIG="${tmp}/missing" "${root}/hack/test/preflight.sh" >/dev/null 2>&1; then
+if env "${common[@]}" KUBECONFIG="${tmp}/missing" "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted a missing kubeconfig" >&2
   exit 1
 fi
 
 KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit \
-  CBSE_ARTIFACT_DIR="${tmp}/artifacts" "${root}/hack/test/diagnose.sh"
+  CBSE_ARTIFACT_DIR="${tmp}/artifacts" "${root}/test/harness/diagnose.sh"
 grep -q 'does not exist' "${tmp}/artifacts/cluster-state.txt"
 
 cat >"${tmp}/kubectl-lock" <<'EOF'
@@ -73,14 +73,14 @@ exit 9
 EOF
 chmod +x "${tmp}/kubectl-lock"
 KUBECTL="${tmp}/kubectl-lock" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=first-run \
-  FAKE_LOCK_STATE="${tmp}/lease-state" "${root}/hack/test/acquire-lock.sh"
+  FAKE_LOCK_STATE="${tmp}/lease-state" "${root}/test/harness/acquire-lock.sh"
 if KUBECTL="${tmp}/kubectl-lock" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=second-run \
-  FAKE_LOCK_STATE="${tmp}/lease-state" "${root}/hack/test/acquire-lock.sh" >/dev/null 2>&1; then
+  FAKE_LOCK_STATE="${tmp}/lease-state" "${root}/test/harness/acquire-lock.sh" >/dev/null 2>&1; then
   echo "a second run bypassed the lease" >&2
   exit 1
 fi
 
-KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit "${root}/hack/test/clean.sh"
-KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit "${root}/hack/test/clean.sh"
+KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit "${root}/test/harness/clean.sh"
+KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit "${root}/test/harness/clean.sh"
 
 echo "Harness self-tests passed."

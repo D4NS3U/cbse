@@ -66,8 +66,8 @@ component_enabled() {
 : >"${artifact_dir}/images.env"
 component_enabled exop && build_image exop OPERATOR_IMAGE "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator" "CBSE Experiment Operator"
 component_enabled sm && build_image sm SM_IMAGE "${root}/scenario-manager/Dockerfile" "${root}" "CBSE Scenario Manager"
-component_enabled eds-mock && build_image eds-mock EDS_IMAGE "${root}/test-env/eds-mock/Dockerfile" "${root}" "CBSE EDS Mock"
-component_enabled trans-mock && build_image trans-mock TRANS_IMAGE "${root}/test-env/trans-mock/Dockerfile" "${root}" "CBSE Translator Mock"
+component_enabled eds-mock && build_image eds-mock EDS_IMAGE "${root}/test/mocks/eds/Dockerfile" "${root}" "CBSE EDS Mock"
+component_enabled trans-mock && build_image trans-mock TRANS_IMAGE "${root}/test/mocks/translator/Dockerfile" "${root}" "CBSE Translator Mock"
 printf 'REGISTRY=%s\nVERSION=%s\nCOMMIT=%s\nSOURCE_HASH=%s\nRUN_ID=%s\n' \
   "${registry}" "${version}" "${commit}" "${source_hash}" "${run_id}" >"${artifact_dir}/build-info.env"
 echo "Published test images; metadata: ${artifact_dir}"

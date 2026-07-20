@@ -5,3 +5,4 @@ scenario-manager/.gocache/
 /artifacts/
 /bin/kubectl-*
 /.cache/
+__pycache__/

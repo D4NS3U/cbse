@@ -1,6 +1,6 @@
 # EDS Integration Test (Scenario Manager)
 
-> Deprecated: this directory now contains compatibility fixtures only. `run_eds_e2e.sh` delegates to the maintained full-stack suite documented in `test/e2e/README.md`.
+> Deprecated: these fixtures are retained only for compatibility. The wrapper delegates to the maintained full-stack suite documented in [`test/e2e/README.md`](../../e2e/README.md).
 
 This test environment validates the Scenario Manager EDS communication path:
 
@@ -48,7 +48,7 @@ The same command publishes the EDS mock and Experiment Operator images.
 From repo root:
 
 ```bash
-./test-env/run_eds_e2e.sh
+./test/compat/eds-sm/run_eds_e2e.sh
 ```
 
 Optional overrides:
@@ -58,5 +58,5 @@ SM_IMAGE=docker.io/d4ns3u/cbse-testing:sm.test.26.7.16@sha256:... \
 EDS_IMAGE=docker.io/d4ns3u/cbse-testing:eds-mock.test.26.7.16@sha256:... \
 PROJECT_NAME=sm-eds-e2e \
 EXPECTED_SCENARIOS=4 \
-./test-env/run_eds_e2e.sh
+./test/compat/eds-sm/run_eds_e2e.sh
 ```

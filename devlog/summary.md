@@ -10,7 +10,7 @@ The repository is a Go workspace for a Kubernetes-native, container-based simula
 
 - `experiment-operator`: a Kubebuilder/controller-runtime operator that defines and reconciles the `SimulationExperiment` custom resource.
 - `scenario-manager`: a separate runtime service that watches `SimulationExperiment` resources, stores project/scenario state in PostgreSQL, and accepts Experimental Design Service scenario batches through NATS JetStream.
-- `test-env`: a local/in-cluster integration environment with PostgreSQL, NATS JetStream, a Scenario Manager deployment, an EDS mock publisher, a sample `SimulationExperiment`, and a shell script that drives an end-to-end EDS-to-Scenario-Manager test.
+- `test/`: shared test infrastructure. The current smoke suite is in `test/e2e`, reusable harness scripts are in `test/harness`, mocks are in `test/mocks`, and the former EDS integration fixtures are retained under `test/compat/eds-sm`.
 
 The top-level `README.md` presents the repository as an early research prototype and says the operator is the only implemented piece. The codebase has moved beyond that description: the Scenario Manager now has real connectivity, persistence, informer, and EDS ingestion code. That said, functional simulation execution is still not present. The system can provision experiment-adjacent Kubernetes resources and ingest scenario metadata, but it does not yet schedule, execute, monitor, or complete simulation replications.
 
@@ -43,7 +43,7 @@ Top-level files and directories:
 - `cbse.code-workspace`: editor workspace file.
 - `experiment-operator/`: Kubernetes operator module.
 - `scenario-manager/`: Scenario Manager service module.
-- `test-env/`: integration test manifests, mock EDS container, and runbook/script.
+- `test/`: shared testing infrastructure and compatibility fixtures.
 - `.DS_Store`: currently untracked local filesystem artifact. I did not modify it.
 
 ## Go Workspace
@@ -662,23 +662,23 @@ There are no focused unit tests yet for:
 - Project create/update/delete behavior using a test database.
 - Informer event mapping with fake objects.
 
-## Test Environment
+## Historical Test Environment
 
-The `test-env` directory is the most concrete integration harness in the repository.
+The former `test-env` directory is now consolidated under `test/`; its compatibility fixtures live in `test/compat/eds-sm`.
 
 Important files:
 
-- `test-env/README.md`: overview of the EDS integration test.
-- `test-env/EDS_SM_TEST_STEPS.md`: detailed runbook.
-- `test-env/run_eds_e2e.sh`: shell script that orchestrates the e2e test.
-- `test-env/postgres-core-db.yaml`: PostgreSQL Deployment and Service.
-- `test-env/nats-jetstream.yaml`: NATS Deployment and Service with JetStream enabled.
-- `test-env/manifests.yaml`: Scenario Manager ConfigMap, ServiceAccount, RBAC, and Deployment.
-- `test-env/simulationexperiment-sm-eds-e2e.yaml`: sample `SimulationExperiment` used for the EDS test.
-- `test-env/eds-mock.yaml`: Kubernetes Deployment for the mock EDS.
-- `test-env/eds-mock/eds_mock.py`: Python EDS mock implementation.
-- `test-env/eds-mock/Dockerfile`: EDS mock image.
-- `test-env/eds-mock/requirements.txt`: Python dependency list.
+- `test/compat/eds-sm/README.md`: overview of the compatibility fixtures.
+- `test/compat/eds-sm/EDS_SM_TEST_STEPS.md`: archived runbook and migration note.
+- `test/compat/eds-sm/run_eds_e2e.sh`: compatibility wrapper for the smoke suite.
+- `test/compat/eds-sm/postgres-core-db.yaml`: legacy PostgreSQL Deployment and Service.
+- `test/compat/eds-sm/nats-jetstream.yaml`: legacy NATS Deployment and Service with JetStream enabled.
+- `test/compat/eds-sm/manifests.yaml`: legacy Scenario Manager ConfigMap, ServiceAccount, RBAC, and Deployment.
+- `test/compat/eds-sm/simulationexperiment-sm-eds-e2e.yaml`: legacy sample `SimulationExperiment`.
+- `test/compat/eds-sm/eds-mock.yaml`: legacy Kubernetes Deployment for the EDS mock.
+- `test/mocks/eds/eds_mock.py`: Python EDS mock implementation.
+- `test/mocks/eds/Dockerfile`: EDS mock image definition.
+- `test/mocks/eds/requirements.txt`: Python dependency list.
 
 ### EDS Mock
 
@@ -867,4 +867,3 @@ Highest-value next steps:
 ## Short Version
 
 You currently have a research prototype with a real Kubernetes operator and an increasingly real Scenario Manager. The operator provisions experiment dependencies and moves CR status into `InProgress`. The Scenario Manager watches experiment CRs, persists projects, accepts EDS scenario batches over NATS JetStream, and writes scenario rows into PostgreSQL. The strongest working story is EDS-to-Scenario-Manager ingestion. The main missing story is actual simulation execution.
-

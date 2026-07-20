@@ -37,7 +37,7 @@ finish() {
   if (( namespace_created == 1 )); then
     KUBECTL="${kubectl_bin}" KUBECONFIG="${kubeconfig}" RUN_ID="${run_id}" \
       CBSE_TEST_NAMESPACE="${namespace}" CBSE_ARTIFACT_DIR="${artifact_dir}" \
-      "${root}/hack/test/diagnose.sh"
+      "${root}/test/harness/diagnose.sh"
   fi
 
   result="passed"
@@ -67,7 +67,7 @@ EOF
 trap finish EXIT
 trap 'exit 130' INT TERM
 
-KUBECTL="${kubectl_bin}" KUBECONFIG="${kubeconfig}" "${root}/hack/test/preflight.sh" | tee "${artifact_dir}/preflight.txt"
+KUBECTL="${kubectl_bin}" KUBECONFIG="${kubeconfig}" "${root}/test/harness/preflight.sh" | tee "${artifact_dir}/preflight.txt"
 
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" create namespace cbse-test-system --dry-run=client -o yaml \
   | "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -f - >/dev/null
@@ -75,14 +75,14 @@ KUBECTL="${kubectl_bin}" KUBECONFIG="${kubeconfig}" "${root}/hack/test/preflight
   app.kubernetes.io/part-of=cbse cbse.terministic.de/test-infrastructure=true --overwrite >/dev/null
 
 KUBECTL="${kubectl_bin}" KUBECONFIG="${kubeconfig}" RUN_ID="${run_id}" \
-  "${root}/hack/test/acquire-lock.sh"
+  "${root}/test/harness/acquire-lock.sh"
 lock_acquired=1
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   CBSE_REGISTRY="${CBSE_REGISTRY:-docker.io/d4ns3u/cbse-testing}" \
     TEST_IMAGE_VERSION="${TEST_IMAGE_VERSION:-26.7.16}" RUN_ID="${run_id}" \
     CBSE_REGISTRY_AUTH_FILE="${CBSE_REGISTRY_AUTH_FILE}" CBSE_IMAGE_ARTIFACT_DIR="${artifact_dir}" \
-    "${root}/hack/test/build-images.sh"
+    "${root}/test/harness/build-images.sh"
   # shellcheck disable=SC1091
   source "${artifact_dir}/images.env"
 else

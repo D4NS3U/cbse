@@ -2,6 +2,7 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+TEST_DIR := $(ROOT)/test
 GOCACHE ?= $(ROOT)/.cache/go-build
 export GOCACHE
 KUBECTL_VERSION ?= v1.32.5
@@ -22,15 +23,15 @@ help:
 	@echo "  make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 
 test-fast: verify-generated
-	./hack/test/test-harness.sh
-	@unformatted="$$(gofmt -l $$(find experiment-operator scenario-manager test/e2e -name '*.go' -type f))"; \
+	$(TEST_DIR)/harness/test-harness.sh
+	@unformatted="$$(gofmt -l $$(find experiment-operator scenario-manager $(TEST_DIR)/e2e -name '*.go' -type f))"; \
 	if [[ -n "$${unformatted}" ]]; then echo "Unformatted Go files:"; echo "$${unformatted}"; exit 1; fi
 	cd experiment-operator && go vet ./...
 	cd scenario-manager && go vet ./...
 	cd scenario-manager && go test -tags=integration -run '^$$' ./...
 	cd experiment-operator && go test -tags=e2e -run '^$$' ./test/e2e
-	cd test/e2e && go vet -tags=e2e ./...
-	cd test/e2e && go test -tags=e2e -run '^$$' ./...
+	cd $(TEST_DIR)/e2e && go vet -tags=e2e ./...
+	cd $(TEST_DIR)/e2e && go test -tags=e2e -run '^$$' ./...
 	cd scenario-manager && go test -race ./...
 	$(MAKE) -C experiment-operator setup-envtest
 	cd experiment-operator && \
@@ -39,27 +40,27 @@ test-fast: verify-generated
 
 verify-generated:
 	$(MAKE) -C experiment-operator controller-gen
-	CONTROLLER_GEN="$(ROOT)/experiment-operator/bin/controller-gen" ./hack/test/verify-generated.sh
+	CONTROLLER_GEN="$(ROOT)/experiment-operator/bin/controller-gen" $(TEST_DIR)/harness/verify-generated.sh
 
 test-tools: $(KUBECTL)
 
 $(KUBECTL):
-	KUBECTL_VERSION=$(KUBECTL_VERSION) OUTPUT=$@ ./hack/test/install-kubectl.sh
+	KUBECTL_VERSION=$(KUBECTL_VERSION) OUTPUT=$@ $(TEST_DIR)/harness/install-kubectl.sh
 
 publish-test-images:
 	CBSE_REGISTRY="$(CBSE_REGISTRY)" TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" \
 	  CBSE_IMAGE_COMPONENTS="$(CBSE_IMAGE_COMPONENTS)" \
 	  CBSE_REGISTRY_AUTH_FILE="$(CBSE_REGISTRY_AUTH_FILE)" \
-	  ./hack/test/build-images.sh
+	  $(TEST_DIR)/harness/build-images.sh
 
 test-smoke: test-tools
 	KUBECTL="$(KUBECTL)" CBSE_REGISTRY="$(CBSE_REGISTRY)" \
-	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" ./hack/test/smoke.sh
+	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" $(TEST_DIR)/harness/smoke.sh
 
 test-diagnose: test-tools
 	@test -n "$(RUN_ID)" || { echo "RUN_ID is required" >&2; exit 2; }
-	KUBECTL="$(KUBECTL)" RUN_ID="$(RUN_ID)" ./hack/test/diagnose.sh
+	KUBECTL="$(KUBECTL)" RUN_ID="$(RUN_ID)" $(TEST_DIR)/harness/diagnose.sh
 
 test-clean: test-tools
 	@test -n "$(RUN_ID)" || { echo "RUN_ID is required" >&2; exit 2; }
-	KUBECTL="$(KUBECTL)" RUN_ID="$(RUN_ID)" ./hack/test/clean.sh
+	KUBECTL="$(KUBECTL)" RUN_ID="$(RUN_ID)" $(TEST_DIR)/harness/clean.sh
