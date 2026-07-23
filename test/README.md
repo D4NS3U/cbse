@@ -13,3 +13,5 @@ Component-local Go tests remain with their components (`experiment-operator/` an
 make test-fast
 make test-smoke KUBECONFIG=/path/to/config
 ```
+
+For a human-facing architecture overview and a guide to interpreting smoke artifacts, see [`docs/CBSE_TESTING_GUIDE.md`](../docs/CBSE_TESTING_GUIDE.md).

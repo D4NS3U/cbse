@@ -65,4 +65,4 @@ make test-smoke \
   CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json
 ```
 
-The default repository is the private Docker Hub repository `docker.io/d4ns3u/cbse-testing`. Create the dedicated config with a Docker Hub personal access token; never commit it. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See `test/README.md` for the test layout and `test/e2e/README.md` for smoke-suite configuration and troubleshooting.
+The default repository is the private Docker Hub repository `docker.io/d4ns3u/cbse-testing`. Create the dedicated config with a Docker Hub personal access token; never commit it. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See [`docs/CBSE_TESTING_GUIDE.md`](docs/CBSE_TESTING_GUIDE.md) for the current architecture, test layout, and artifact-reading guide.
