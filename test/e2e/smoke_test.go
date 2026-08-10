@@ -87,12 +87,21 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			))
 		}, 2*time.Minute, 2*time.Second).Should(Equal("1|5|InProgress"))
 
-		Eventually(func() string {
-			return queryDatabase(fmt.Sprintf(
-				"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.state='Created') FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
-				project,
-			))
-		}, 3*time.Minute, 2*time.Second).Should(Equal("4|4"))
+		if os.Getenv("CBSE_SELECTOR_ENABLED") == "1" {
+			Eventually(func() string {
+				return queryDatabase(fmt.Sprintf(
+					"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.translation_attempts > 0 AND ss.container_image IS NOT NULL) FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
+					project,
+				))
+			}, 4*time.Minute, 2*time.Second).Should(Equal("4|4"))
+		} else {
+			Eventually(func() string {
+				return queryDatabase(fmt.Sprintf(
+					"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.state='Created') FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
+					project,
+				))
+			}, 3*time.Minute, 2*time.Second).Should(Equal("4|4"))
+		}
 
 		writeDatabaseArtifact(queryDatabase(fmt.Sprintf(
 			"SELECT ss.id, ss.state, ss.priority, ss.number_of_reps, ss.recipe_info->>'seed' FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' ORDER BY ss.id",
@@ -120,6 +129,9 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 	})
 
 	It("garbage-collects owned resources and cascades persisted state", func() {
+		if os.Getenv("CBSE_RETAIN_RESOURCES") == "1" {
+			Skip("retained E2E run requested; leaving SimulationExperiment, owned resources, and database rows intact")
+		}
 		key := types.NamespacedName{Namespace: namespace, Name: project}
 		experiment := &experimentalpha3.SimulationExperiment{}
 		Expect(k8sClient.Get(ctx, key, experiment)).To(Succeed())

@@ -48,7 +48,9 @@ finish() {
 EOF
 
   if (( namespace_created == 1 )); then
-    if (( status == 0 )) || [[ "${CBSE_KEEP_ON_FAILURE:-0}" != "1" ]]; then
+    if [[ "${CBSE_KEEP_NAMESPACE:-0}" == "1" ]]; then
+      echo "Retained test run namespace: ${namespace}" >&2
+    elif (( status == 0 )) || [[ "${CBSE_KEEP_ON_FAILURE:-0}" != "1" ]]; then
       "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete namespace "${namespace}" --wait=true --timeout=180s >/dev/null 2>&1
     else
       echo "Retained failed run namespace: ${namespace}" >&2
@@ -136,6 +138,7 @@ sed \
   -e "s|CBSE_RUN_ID|${run_id}|g" \
   -e "s|CBSE_OPERATOR_IMAGE|${OPERATOR_IMAGE}|g" \
   -e "s|CBSE_SM_IMAGE|${SM_IMAGE}|g" \
+  -e "s|SCENARIO_MANAGER_SELECTOR_ENABLED: \"false\"|SCENARIO_MANAGER_SELECTOR_ENABLED: \"${CBSE_SELECTOR_ENABLED:-false}\"|g" \
   "${tmp}/stack.raw.yaml" >"${artifact_dir}/stack.yaml"
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -n "${namespace}" -f "${artifact_dir}/stack.yaml" >/dev/null
 

@@ -37,6 +37,22 @@ make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
 
 `CBSE_KEEP_ON_FAILURE=1` retains a failed namespace. Inspect it with `make test-diagnose RUN_ID=<id>` and remove it with `make test-clean RUN_ID=<id>`. Neither cleanup path removes the shared CRD.
 
+To retain the namespace after a successful run for manual inspection, set `CBSE_KEEP_NAMESPACE=1`. This is opt-in; without it, successful runs are cleaned automatically:
+
+```bash
+CBSE_KEEP_NAMESPACE=1 make test-smoke KUBECONFIG=/path/to/config
+```
+
+The command prints the run ID. Inspect it with `make test-diagnose RUN_ID=<id>` and remove it with `make test-clean RUN_ID=<id>` when finished.
+
+For a retained E2E environment that also leaves the `SimulationExperiment`, owned EDS/translator/design workloads, and database rows intact, with the Basic Scenario Selection Logic and translator handoff enabled, use the dedicated target:
+
+```bash
+make test-e2e-retained KUBECONFIG=/path/to/config
+```
+
+This intentionally skips only the final garbage-collection assertion. The preceding provisioning, persistence, and idempotence assertions still run. Clean the retained run with `make test-clean RUN_ID=<id> KUBECONFIG=/path/to/config`.
+
 ## Safety and artifacts
 
 The runner rejects unexpected contexts, API servers, non-K3s clusters, missing permissions, mutable image references, invalid registry credentials, and unowned incompatible CRDs before proceeding. Runs are serialized through `cbse-test-system/cbse-smoke-lock` and never use `default`.

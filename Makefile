@@ -12,13 +12,14 @@ CBSE_REGISTRY ?= docker.io/d4ns3u/cbse-testing
 TEST_IMAGE_VERSION ?= 26.7.16
 CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,trans-mock
 
-.PHONY: help test-fast test-smoke publish-test-images test-diagnose test-clean test-tools verify-generated
+.PHONY: help test-fast test-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools verify-generated
 
 help:
 	@echo "CBSE test commands:"
 	@echo "  make test-fast"
 	@echo "  make publish-test-images TEST_IMAGE_VERSION=$(TEST_IMAGE_VERSION)"
 	@echo "  make test-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=$(CBSE_REGISTRY)"
+	@echo "  make test-e2e-retained KUBECONFIG=/path/to/config CBSE_REGISTRY=$(CBSE_REGISTRY)"
 	@echo "  make test-diagnose RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 	@echo "  make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 
@@ -55,6 +56,11 @@ publish-test-images:
 
 test-smoke: test-tools
 	KUBECTL="$(KUBECTL)" CBSE_REGISTRY="$(CBSE_REGISTRY)" \
+	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" $(TEST_DIR)/harness/smoke.sh
+
+test-e2e-retained: test-tools
+	CBSE_KEEP_NAMESPACE=1 CBSE_RETAIN_RESOURCES=1 CBSE_SELECTOR_ENABLED=1 \
+	  KUBECTL="$(KUBECTL)" CBSE_REGISTRY="$(CBSE_REGISTRY)" \
 	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" $(TEST_DIR)/harness/smoke.sh
 
 test-diagnose: test-tools
