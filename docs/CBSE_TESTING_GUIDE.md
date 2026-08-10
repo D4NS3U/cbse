@@ -70,7 +70,6 @@ Component-local Go tests remain under `experiment-operator/test/` because that i
 | `make test-fast` | Any Go, CRD, Dockerfile, manifest, or test-harness change | Does not contact K3s or build/push images |
 | `make publish-test-images` | You need new private Docker Hub test images | Does not deploy to K3s |
 | `make test-smoke` | Operator, Scenario Manager, mock, image, or Kubernetes integration change | Does not retain a namespace unless asked |
-| `make test-e2e-retained` | Manual inspection of a completed full-stack E2E environment | Deliberately skips the final deletion assertion and requires explicit cleanup |
 | `make test-diagnose RUN_ID=<id>` | A retained failure needs fresh diagnostics | Does not change workloads |
 | `make test-clean RUN_ID=<id>` | `CBSE_KEEP_ON_FAILURE=1` retained a failed namespace | Does not delete the shared CRD or `cbse-test-system` |
 
