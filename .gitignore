@@ -6,3 +6,4 @@ scenario-manager/.gocache/
 /bin/kubectl-*
 /.cache/
 __pycache__/
+.DS_Store
