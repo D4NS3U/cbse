@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -30,6 +31,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	crcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -37,7 +39,6 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	experimentalpha2 "github.com/D4NS3U/cbse/experiment-operator/api/alpha2"
 	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	"github.com/D4NS3U/cbse/experiment-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
@@ -51,7 +52,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(experimentalpha2.AddToScheme(scheme))
 	utilruntime.Must(experimentalpha3.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -180,7 +180,7 @@ func main() {
 		})
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	managerOptions := ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -198,7 +198,15 @@ func main() {
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
-	})
+	}
+	if watchNamespace := strings.TrimSpace(os.Getenv("EXPERIMENT_OPERATOR_WATCH_NAMESPACE")); watchNamespace != "" {
+		setupLog.Info("restricting controller cache to namespace", "namespace", watchNamespace)
+		managerOptions.Cache = crcache.Options{
+			DefaultNamespaces: map[string]crcache.Config{watchNamespace: {}},
+		}
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), managerOptions)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
@@ -211,13 +219,11 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "SimulationExperiment")
 		os.Exit(1)
 	}
-	if err := (&controller.LegacySimulationExperimentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "LegacySimulationExperiment")
-		os.Exit(1)
-	}
+	// Do not register the legacy alpha2 controller. The CRD serves alpha2 and
+	// alpha3 without a conversion webhook, so both endpoints expose the same
+	// underlying object. A separate alpha2 watcher would therefore also see
+	// alpha3 resources and could overwrite their status. Alpha3 is the active
+	// API and the only reconciliation authority.
 	// nolint:goconst
 	// if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 	// 	if err := webhookalpha2.SetupSimulationExperimentWebhookWithManager(mgr); err != nil {

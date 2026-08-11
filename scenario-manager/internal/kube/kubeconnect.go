@@ -3,7 +3,7 @@
 package kube
 
 import (
-	"log"
+	"fmt"
 
 	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,40 +27,38 @@ func RunningInCluster() bool {
 }
 
 // KubeConnect initializes and retains the shared Kubernetes client tailored for SimulationExperiment resources.
-// It attempts to load the in-cluster configuration; startup treats any failure as fatal for the Scenario Manager.
-func KubeConnect() bool {
+// It attempts to load the in-cluster configuration and returns a descriptive
+// error to the caller. Library code deliberately does not terminate the
+// process, which keeps the package testable and lets the application decide
+// how dependency failures should be handled.
+func KubeConnect() error {
 	if k8sClient != nil {
-		return true
+		return nil
 	}
 
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		runningInCluster = false
-		log.Fatalf("Kubernetes in-cluster config unavailable: %v", err)
-		return false
+		return fmt.Errorf("Kubernetes in-cluster config unavailable: %w", err)
 	}
 
 	runningInCluster = true
 
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
-		log.Printf("add core scheme: %v", err)
-		return false
+		return fmt.Errorf("add core scheme: %w", err)
 	}
 	if err := experimentalpha3.AddToScheme(scheme); err != nil {
-		log.Printf("add simulation experiment scheme: %v", err)
-		return false
+		return fmt.Errorf("add simulation experiment scheme: %w", err)
 	}
 
 	clientSet, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
-		log.Printf("create Kubernetes client: %v", err)
-		return false
+		return fmt.Errorf("create Kubernetes client: %w", err)
 	}
 
 	k8sClient = clientSet
-	log.Println("Kubernetes client connection established.")
-	return true
+	return nil
 }
 
 // Client returns the shared Kubernetes client reference.
