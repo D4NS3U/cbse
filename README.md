@@ -28,6 +28,16 @@ Not yet implemented:
 Interfaces and behavior may change without notice.
 For the full, plain-language overview of what is implemented, what is still missing, and the latest verification results, see [Project status](docs/project-status.md).
 
+## Start here
+
+Want to supply your own Experimental Design Service, Translator, or PostProcessingService? Start with [Designing Custom CBSE Components](COMPONENT_DESIGN_GOALS.md). It explains the current architecture and scenario lifecycle, the implemented EDS and Translator message contracts, the not-yet-implemented post-processing boundary, container design goals, and a practical implementation checklist.
+
+The most useful follow-up references are:
+
+- [Project status](docs/project-status.md) for the exact implemented product boundary.
+- [Testing guide](docs/CBSE_TESTING_GUIDE.md) for repository tests, smoke architecture, and diagnostics.
+- [Experiment Operator README](experiment-operator/README.md) for operator development and generated API assets.
+
 ---
 
 ## Publications
