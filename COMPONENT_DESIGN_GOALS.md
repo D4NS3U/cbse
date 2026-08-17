@@ -2,7 +2,7 @@
 
 This is the starting point for developers who want to provide their own Experimental Design Service (EDS), Translator, or PostProcessingService image for CBSE. It explains what CBSE owns, what a component must own, and which integration contracts exist in the current `alpha3` prototype.
 
-CBSE is still evolving. Treat the subjects and payloads below as the current contract, not as a promise of long-term API stability. In particular, EDS and Translator messaging are implemented today, while PostProcessingService communication is not.
+CBSE is still evolving. Treat the subjects and payloads below as the current alpha3 contract, not as a promise of long-term API stability. In particular, EDS and Translator messaging are implemented today, while PostProcessingService communication is not. The alpha4 runner-start feature will replace the alpha3-specific API, subject, registry, and execution sections when it is implemented; its durable pushed-image recovery rule is already stated here because it is a common Translator design invariant.
 
 ## Start with the current boundary
 
@@ -275,10 +275,13 @@ Publish-before-ack ordering is essential:
 receive request
   -> validate
   -> create/resolve runner image
+  -> retain the pushed tag and resolved digest
   -> publish ready message
   -> wait for JetStream PubAck
   -> ACK request
 ```
+
+Once an image push succeeds, that pushed image is the durable outcome for the scenario ID and translation attempt. If ready publication fails, retry publication with the same digest. Do not regenerate the model, rebuild the image, or push another image for that attempt. Keep a credential-free local outcome marker while the request is unacknowledged, and use the deterministic registry tag as the recovery source if the Translator process or Pod restarts. The ready-message handoff is incomplete until JetStream confirms publication, but a broker failure does not erase the completed registry effect.
 
 For malformed requests that cannot become valid through redelivery, log a credential-free reason and ACK them. For transient broker, registry, or build failures, leave the request unacknowledged or NAK it according to the client's retry policy.
 
@@ -366,13 +369,17 @@ The framework side should own connection lifecycle, payload validation, acknowle
 
 Assume messages can be redelivered and processes can stop after an external effect but before recording success. Use scenario ID, attempt, and experiment identity to make work deterministic. Confirm the expected owner and contract before accepting an existing image, record, or workload; never silently adopt a conflict.
 
+When one durable external effect succeeds and the following handoff fails, resume from the completed effect. In particular, a Translator that has pushed a runner image must recover and republish that exact digest rather than repeating model generation or image creation.
+
 Each lifecycle transition, cleanup action, validation step, and failure class needs one clear owner. Infrastructure outages should remain retryable infrastructure errors rather than being forced into a domain state such as `Failed`.
 
 ### Observable and testable behavior
 
 Logs should identify the component, operation, project, scenario ID, and attempt when available. Health should distinguish startup failure, dependency outage, and readiness for new work. Long operations need progress that is visible without exposing payload Secrets.
 
-Test normal behavior as well as invalid configuration, malformed payloads, duplicate delivery, stale attempts, publish-after-effect crashes, dependency outages, shutdown, and cleanup. Protocol tests should run against NATS/JetStream rather than replacing acknowledgement behavior with mocks alone.
+Keep the default log volume proportional to scenarios and failures, not repetitions or simulation events. Log scenario-level creation and terminal outcomes. A runner-controlled failure should emit one timestamped, sanitized record with the scenario ID, Pod hostname, failure stage, and reason. Use Kubernetes Job conditions, Pod status, and events for infrastructure-level detail instead of duplicating them continuously. Log retention and deletion are installation concerns unless a feature explicitly owns them.
+
+Test normal behavior as well as every required environment variable, mounted Secret key and path, subject template, component identity, image or repository reference, and writable workspace named by the active component contract. Also test malformed payloads, duplicate delivery, stale attempts, publish-after-effect crashes, dependency outages, shutdown, and cleanup. Protocol tests should run against NATS/JetStream rather than replacing acknowledgement behavior with mocks alone.
 
 When contributing component, Go, CRD, Dockerfile, or test-harness changes to this repository, follow the root [test contract](AGENTS.md) and [testing guide](docs/CBSE_TESTING_GUIDE.md).
 
@@ -384,7 +391,7 @@ Before treating a custom component image as ready:
 - It validates its complete configuration before external work.
 - It uses `SIMULATIONPROJECTNAME` consistently and avoids subject collisions.
 - Its image is pinned by digest and supports restricted, non-root execution.
-- It never embeds or logs credentials.
+- It never logs credentials and embeds them only when an active feature specification explicitly requires and documents a trusted-prototype exception.
 - Its external effects are safe under retry and process restart.
 - It distinguishes malformed work from transient failure.
 - It acknowledges messages only at the contract's durable completion point.
