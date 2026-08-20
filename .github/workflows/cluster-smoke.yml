@@ -22,9 +22,8 @@ jobs:
     timeout-minutes: 45
     env:
       KUBECONFIG: /home/d4ns3u/.kube/config
-      CBSE_REGISTRY: docker.io/d4ns3u/cbse-testing
+      CBSE_REGISTRY: registry.unibw.de/i31bdase/cbse-test
       TEST_IMAGE_VERSION: "26.7.16"
-      CBSE_REGISTRY_AUTH_FILE: /home/d4ns3u/.docker/cbse-testing-config.json
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -34,6 +33,17 @@ jobs:
             experiment-operator/go.sum
             scenario-manager/go.sum
             test/e2e/go.sum
+      - name: Prepare registry authentication
+        shell: bash
+        env:
+          CBSE_REGISTRY_DOCKERCONFIG_JSON: ${{ secrets.CBSE_REGISTRY_DOCKERCONFIG_JSON }}
+        run: |
+          auth_dir="$(mktemp -d)"
+          auth_file="${auth_dir}/config.json"
+          umask 077
+          printf '%s' "${CBSE_REGISTRY_DOCKERCONFIG_JSON}" >"${auth_file}"
+          echo "CBSE_REGISTRY_AUTH_FILE=${auth_file}" >>"${GITHUB_ENV}"
+          echo "CBSE_REGISTRY_AUTH_DIR=${auth_dir}" >>"${GITHUB_ENV}"
       - name: Run full-stack smoke suite
         run: make test-smoke
       - name: Upload smoke diagnostics
@@ -44,3 +54,10 @@ jobs:
           path: artifacts/test/
           if-no-files-found: warn
           retention-days: 14
+      - name: Remove registry authentication
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${CBSE_REGISTRY_AUTH_DIR:-}" ]]; then
+            rm -rf -- "${CBSE_REGISTRY_AUTH_DIR}"
+          fi

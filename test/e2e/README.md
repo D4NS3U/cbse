@@ -7,8 +7,9 @@ This suite deploys the current Experiment Operator and Scenario Manager with rea
 - Go 1.24 or newer, Docker with Buildx, `curl`, `jq`, and OpenSSL.
 - A readable kubeconfig. Linux agents normally use `/home/d4ns3u/.kube/config`; set another explicit path when needed.
 - Access to the K3s API server at `https://192.168.101.245:6443`.
-- Access to the private Docker Hub repository `d4ns3u/cbse-testing` from both the agent and K3s node.
-- A dedicated Docker `config.json` containing a Docker Hub PAT in `CBSE_REGISTRY_AUTH_FILE`.
+- Access to the University Harbor repository `registry.unibw.de/i31bdase/cbse-test` from both the agent and K3s node.
+- A dedicated Docker `config.json` provided through `CBSE_REGISTRY_AUTH_FILE`.
+- A `kubernetes.io/dockerconfigjson` Secret named `cbse-registry-auth` in `cbse-test-system`; the harness copies it only to its ephemeral test namespace.
 
 The harness downloads kubectl v1.32.5 into the ignored root `bin/` directory.
 
@@ -18,20 +19,20 @@ The harness downloads kubectl v1.32.5 into the ignored root `bin/` directory.
 make test-smoke \
   KUBECONFIG=/home/d4ns3u/.kube/config \
   TEST_IMAGE_VERSION=26.7.16 \
-  CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json
+  CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
 ```
 
-To create the dedicated authentication file, log in with a Docker Hub PAT using an isolated `DOCKER_CONFIG` directory and pass its `config.json` path. Do not use a credential helper for this file and do not commit it.
+An authorized administrator provisions the dedicated Docker configuration and the shared Kubernetes Secret outside this repository. Do not use a credential helper for the configuration and do not commit it.
 
 To reuse already published images, every reference must include a digest:
 
 ```bash
 SKIP_BUILD=1 \
-OPERATOR_IMAGE=docker.io/d4ns3u/cbse-testing:exop.test.26.7.16@sha256:... \
-SM_IMAGE=docker.io/d4ns3u/cbse-testing:sm.test.26.7.16@sha256:... \
-EDS_IMAGE=docker.io/d4ns3u/cbse-testing:eds-mock.test.26.7.16@sha256:... \
-TRANS_IMAGE=docker.io/d4ns3u/cbse-testing:trans-mock.test.26.7.16@sha256:... \
-CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json \
+OPERATOR_IMAGE=registry.unibw.de/i31bdase/cbse-test:exop.test.26.7.16@sha256:... \
+SM_IMAGE=registry.unibw.de/i31bdase/cbse-test:sm.test.26.7.16@sha256:... \
+EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test:eds-mock.test.26.7.16@sha256:... \
+TRANS_IMAGE=registry.unibw.de/i31bdase/cbse-test:trans-mock.test.26.7.16@sha256:... \
+CBSE_REGISTRY_AUTH_FILE=<protected-docker-config> \
 make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
 ```
 

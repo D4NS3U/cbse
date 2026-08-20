@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-registry="${CBSE_REGISTRY:-docker.io/d4ns3u/cbse-testing}"
+registry="${CBSE_REGISTRY:-registry.unibw.de/i31bdase/cbse-test}"
 version="${TEST_IMAGE_VERSION:-26.7.16}"
 run_id="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 3)}"
 artifact_dir="${CBSE_IMAGE_ARTIFACT_DIR:-${root}/artifacts/test-images/${version}/${run_id}}"

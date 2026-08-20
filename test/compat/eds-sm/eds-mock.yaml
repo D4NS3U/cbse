@@ -15,10 +15,10 @@ spec:
         app: eds-mock
     spec:
       imagePullSecrets:
-        - name: dockerhub-auth
+        - name: cbse-registry-auth
       containers:
         - name: eds-mock
-          image: docker.io/d4ns3u/cbse-testing:eds-mock.test.26.7.16
+          image: registry.unibw.de/i31bdase/cbse-test:eds-mock.test.26.7.16
           imagePullPolicy: IfNotPresent
           env:
             - name: NATS_URL

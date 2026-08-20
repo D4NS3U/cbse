@@ -24,7 +24,7 @@ make test-fast
 make test-smoke \
   KUBECONFIG=/home/d4ns3u/.kube/config \
   TEST_IMAGE_VERSION=26.7.16 \
-  CBSE_REGISTRY_AUTH_FILE=/secure/dockerhub-config.json
+  CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
 ```
 
 Diagnostics and JUnit output are written below `artifacts/test/<run-id>/`; never add that directory to commits.

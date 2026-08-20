@@ -17,7 +17,8 @@ case "${args}" in
   *"config current-context"*) echo default ;;
   *"config view --minify"*) printf '%s' "${FAKE_SERVER:-https://192.168.101.245:6443}" ;;
   *"version -o json"*) printf '%s' '{"serverVersion":{"gitVersion":"v1.32.5+k3s1"}}' ;;
-  *"get secret"*) echo kubernetes.io/dockerconfigjson ;;
+  *"get secret cbse-registry-auth -n cbse-test-system"*) echo kubernetes.io/dockerconfigjson ;;
+  *"get secret"*) echo "unexpected registry Secret lookup: ${args}" >&2; exit 9 ;;
   *"auth can-i"*) echo yes ;;
   *"get namespace"*) exit 1 ;;
   *) echo "unexpected fake kubectl call: ${args}" >&2; exit 9 ;;
@@ -37,6 +38,11 @@ common=(
 )
 
 env "${common[@]}" "${root}/test/harness/preflight.sh" >/dev/null
+
+grep -Fqx 'CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test' "${root}/Makefile"
+grep -Fqx 'pull_secret_name="${CBSE_PULL_SECRET_NAME:-cbse-registry-auth}"' "${root}/test/harness/preflight.sh"
+grep -Fqx 'pull_secret_namespace="${CBSE_PULL_SECRET_NAMESPACE:-cbse-test-system}"' "${root}/test/harness/preflight.sh"
+grep -Fq 'name: cbse-registry-auth' "${root}/test/e2e/manifests/base/stack.yaml"
 
 if env "${common[@]}" FAKE_SERVER=https://wrong.example.test:6443 "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted the wrong API server" >&2

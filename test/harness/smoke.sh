@@ -13,8 +13,8 @@ run_id="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 3)}"
 namespace="cbse-e2e-${run_id}"
 project="smoke-${run_id}"
 artifact_dir="${root}/artifacts/test/${run_id}"
-pull_secret_name="${CBSE_PULL_SECRET_NAME:-dockerhub-auth}"
-pull_secret_namespace="${CBSE_PULL_SECRET_NAMESPACE:-default}"
+pull_secret_name="${CBSE_PULL_SECRET_NAME:-cbse-registry-auth}"
+pull_secret_namespace="${CBSE_PULL_SECRET_NAMESPACE:-cbse-test-system}"
 tmp="$(mktemp -d)"
 lock_acquired=0
 namespace_created=0
@@ -81,7 +81,7 @@ KUBECTL="${kubectl_bin}" KUBECONFIG="${kubeconfig}" RUN_ID="${run_id}" \
 lock_acquired=1
 
 if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
-  CBSE_REGISTRY="${CBSE_REGISTRY:-docker.io/d4ns3u/cbse-testing}" \
+  CBSE_REGISTRY="${CBSE_REGISTRY:-registry.unibw.de/i31bdase/cbse-test}" \
     TEST_IMAGE_VERSION="${TEST_IMAGE_VERSION:-26.7.16}" RUN_ID="${run_id}" \
     CBSE_REGISTRY_AUTH_FILE="${CBSE_REGISTRY_AUTH_FILE}" CBSE_IMAGE_ARTIFACT_DIR="${artifact_dir}" \
     "${root}/test/harness/build-images.sh"

@@ -5,8 +5,8 @@ kubectl_bin="${KUBECTL:?KUBECTL is required}"
 kubeconfig="${KUBECONFIG:?KUBECONFIG must point to the dedicated test-cluster config}"
 expected_server="${CBSE_EXPECTED_APISERVER:-https://192.168.101.245:6443}"
 expected_context="${CBSE_EXPECTED_CONTEXT:-default}"
-pull_secret_name="${CBSE_PULL_SECRET_NAME:-dockerhub-auth}"
-pull_secret_namespace="${CBSE_PULL_SECRET_NAMESPACE:-default}"
+pull_secret_name="${CBSE_PULL_SECRET_NAME:-cbse-registry-auth}"
+pull_secret_namespace="${CBSE_PULL_SECRET_NAMESPACE:-cbse-test-system}"
 
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 
@@ -60,7 +60,7 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   command -v docker >/dev/null || { echo "docker is required to build current-source images" >&2; exit 2; }
   docker info >/dev/null || { echo "Docker daemon is not available" >&2; exit 2; }
   docker buildx version >/dev/null || { echo "Docker Buildx is required" >&2; exit 2; }
-  registry="${CBSE_REGISTRY:-docker.io/d4ns3u/cbse-testing}"
+  registry="${CBSE_REGISTRY:-registry.unibw.de/i31bdase/cbse-test}"
   registry_host="${registry%%/*}"
   probe_host="${registry_host}"
   [[ "${probe_host}" == "docker.io" ]] && probe_host="registry-1.docker.io"

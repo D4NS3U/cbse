@@ -8,7 +8,7 @@ export GOCACHE
 KUBECTL_VERSION ?= v1.32.5
 KUBECTL ?= $(ROOT)/bin/kubectl-$(KUBECTL_VERSION)
 RUN_ID ?=
-CBSE_REGISTRY ?= docker.io/d4ns3u/cbse-testing
+CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test
 TEST_IMAGE_VERSION ?= 26.7.16
 CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,trans-mock
 
