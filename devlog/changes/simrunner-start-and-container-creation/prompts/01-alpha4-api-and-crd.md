@@ -6,17 +6,18 @@ Implement Slice 01 only. Leave the worktree reviewable and resumable; do not beg
 
 1. First read [`../FEATURE.md`](../FEATURE.md) completely. It is the feature entry point and owns the cross-cutting contracts.
 2. Read the repository-root [`AGENTS.md`](../../../../AGENTS.md) completely and obey all applicable instructions.
-3. Read [`../slices/01-alpha4-api-and-crd.md`](../slices/01-alpha4-api-and-crd.md) completely, including its acceptance tests, exclusions, test tier, and handoff criteria.
+3. Read [`../IMPLEMENTATION_HANDOFF.md`](../IMPLEMENTATION_HANDOFF.md) completely and validate it against the current worktree.
+4. Read [`../slices/01-alpha4-api-and-crd.md`](../slices/01-alpha4-api-and-crd.md) completely, including its stable milestones, local acceptance groups, exclusions, test tier, and handoff criteria.
 
 Treat the feature and slice documents as normative and read-only. Report an irreconcilable contradiction instead of changing the specification.
 
 ## Prerequisite and worktree gate
 
-Slice 01 has no feature-slice prerequisite. Before editing, inspect `git status --short`, relevant diffs, current alpha2/alpha3 API patterns, generated-code tooling, CRD manifests, schemes, samples, and tests. Preserve all pre-existing work and continue compatible partial Slice 01 changes rather than overwriting them.
+Slice 01 has no feature-slice prerequisite. Before editing, inspect `git status --short`, relevant diffs, current alpha2/alpha3 API patterns, generated-code tooling, CRD manifests, schemes, samples, and tests. Preserve all pre-existing work and continue compatible partial Slice 01 changes rather than overwriting them. Update the handoff with the base commit, first incomplete stable ID, and `in-progress` state.
 
 ## Required outcome
 
-Implement every Slice 01 requirement and acceptance criterion. In particular, keep this slice an additive alpha4 API/CRD foundation: create the typed alpha4 surface, validation and immutability rules, generated code/manifests, samples, and tests owned by the slice, while leaving the coordinated repository-wide serving/storage/import/fixture cutover to Slice 07. Do not prematurely perform the alpha4-only active cutover, retain a compatibility reconciler, or add migration/conversion behavior.
+Implement `S01-M1`, `S01-A1`, and the Slice 01 completion-and-handoff criteria. The `S01-D*` groups are mandatory only in the later implementation-owner slices listed by `FEATURE.md`; they do not block Slice 01. In particular, keep this slice an additive alpha4 API/CRD foundation: create the typed alpha4 surface, validation and immutability rules, isolated envtest CRD, and tests owned by the slice, while leaving the coordinated repository-wide serving/storage/import/fixture cutover to Slice 07. Do not prematurely perform the alpha4-only active cutover, retain a compatibility reconciler, or add migration/conversion behavior.
 
 Keep credentials outside the API, keep the Job-template subtree structural, and keep generated artifacts reproducible and current. Do not weaken validation tests or hand-edit generated output when the repository's generator is the authority.
 
@@ -30,4 +31,4 @@ Keep credentials outside the API, keep the Job-template subtree structural, and 
 
 ## Final handoff
 
-Report: Slice 01 status (`complete`, `incomplete`, or `verification-blocked`); implemented behavior; files changed; generated artifacts; every test command and result; remaining acceptance criteria or blockers; relevant uncommitted worktree state; confirmation that no commit was created; and `Resume at: Slice 01` unless the full slice and mandatory verification passed, in which case use `Resume at: Slice 02`.
+Update `IMPLEMENTATION_HANDOFF.md`, then report: Slice 01 status (`complete`, `incomplete`, or `verification-blocked`); stable IDs completed; implemented behavior; files changed; generated artifacts; every test command and result; remaining stable ID or blocker; relevant uncommitted worktree state; confirmation that no commit was created; and the exact stable ID at which to resume.

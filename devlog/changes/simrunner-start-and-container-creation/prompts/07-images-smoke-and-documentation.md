@@ -6,17 +6,18 @@ Implement Slice 07 only. This is the final integration and alpha4 cutover slice.
 
 1. First read [`../FEATURE.md`](../FEATURE.md) completely. It is the feature entry point and owns every cross-cutting contract and the coordinated cutover checkpoint.
 2. Read the repository-root [`AGENTS.md`](../../../../AGENTS.md) completely and obey all applicable instructions.
-3. Read all seven slice documents completely, ending with the target contract in [`../slices/07-images-smoke-and-documentation.md`](../slices/07-images-smoke-and-documentation.md).
+3. Read [`../IMPLEMENTATION_HANDOFF.md`](../IMPLEMENTATION_HANDOFF.md) completely and validate it against the current worktree.
+4. Read the target contract in [`../slices/07-images-smoke-and-documentation.md`](../slices/07-images-smoke-and-documentation.md) and incoming deferred groups `S01-D07`, `S03-D07`, `S05-D07`, and `S06-D07` completely. Read an earlier slice completely only if its completion evidence is missing, the cutover changes its contract, or a failure points back to it.
 
 Treat the specification files as normative and read-only. Report an irreconcilable contradiction instead of changing them.
 
 ## Prerequisite and worktree gate
 
-Before editing, inspect `git status --short`, all relevant diffs, generated artifacts, active schemes/imports, image and lock tooling, Kubernetes manifests and RBAC, smoke preflight/cleanup, compatibility lanes, and public documentation. Verify Slices 01 through 06 in numeric order against every completion criterion and required test tier. Do not rely only on an earlier handoff. If any prior slice is incomplete or verification-blocked, stop at the earliest such slice and do not begin the cutover.
+Before editing, inspect `git status --short`, all relevant diffs, generated artifacts, active schemes/imports, image and lock tooling, Kubernetes manifests and RBAC, smoke preflight/cleanup, compatibility lanes, and public documentation. Verify recorded completion evidence for Slices 01 through 06 in numeric order against relevant code and tests without automatically rereading or rerunning all prior work. Do not rely only on the handoff. If any prior slice is incomplete or verification-blocked, stop at the earliest stable ID and do not begin the cutover. Otherwise update the handoff with the base commit, first incomplete Slice 07 ID, and `in-progress` state.
 
 ## Required outcome
 
-Implement every Slice 07 requirement and acceptance criterion as one coordinated integration. Switch active schemes, CRD serving/storage, fixtures, manifests, RBAC, compatibility coverage, and smoke assertions to alpha4 together; do not leave a mixed-version state. Integrate the exact locked source images and repository-built immutable outputs, reference Translator and Detail DB builds, minimum Kubernetes 1.30 lane and smoke preflight, approved namespace/RBAC behavior, protected credential handoff, reference end-to-end workflow, annotation- and tag-verified Harbor cleanup, and required user/developer documentation.
+Implement incoming groups `S01-D07`, `S03-D07`, `S05-D07`, and `S06-D07`, local milestones `S07-M1` through `S07-M5`, local acceptance groups `S07-A1` through `S07-A4`, and the Slice 07 completion-and-handoff criteria as one coordinated integration. Switch active schemes, CRD serving/storage, fixtures, manifests, RBAC, compatibility coverage, and smoke assertions to alpha4 together; do not leave a mixed-version state. Integrate the exact locked source images and repository-built immutable outputs, reference Translator and Detail DB builds, minimum Kubernetes 1.30 lane and smoke preflight, approved namespace/RBAC behavior, protected credential handoff, reference end-to-end workflow, annotation- and tag-verified Harbor cleanup, and required user/developer documentation.
 
 Never delete or migrate the shared CRD, weaken cluster or registry preflight, introduce floating tags or image overrides, expose credentials or credential paths, target shared image repositories during cleanup, add insecure-registry/TLS bypasses, or retain alpha2/alpha3 serving or reconciliation as compatibility behavior.
 
@@ -30,4 +31,4 @@ Never delete or migrate the shared CRD, weaken cluster or registry preflight, in
 
 ## Final handoff
 
-Report: prerequisite audit; Slice 07 status (`complete`, `incomplete`, or `verification-blocked`); cutover, image, smoke, cleanup, and documentation behavior implemented; files changed; generated artifacts; every test command and result; remaining acceptance criteria or external blockers; relevant uncommitted worktree state; confirmation that no commit was created; and either `Resume at: Slice 07` with the first remaining task or `Resume at: all seven slices complete` when full mandatory acceptance passed.
+Update `IMPLEMENTATION_HANDOFF.md`, then report: prerequisite audit; Slice 07 status (`complete`, `incomplete`, or `verification-blocked`); stable IDs and cutover/image/smoke/cleanup/documentation behavior completed; files changed; generated artifacts; every test command and result; remaining stable ID or external blocker; relevant uncommitted worktree state; confirmation that no commit was created; and either the exact stable ID at which to resume or `Resume at: all seven slices complete` when full mandatory acceptance passed.

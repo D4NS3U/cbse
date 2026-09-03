@@ -147,9 +147,33 @@ This branch must not add:
 | [06 — Runner Job orchestration](slices/06-runner-job-orchestration.md) | Slices 01, 02, and 04 |
 | [07 — Images, smoke, and documentation](slices/07-images-smoke-and-documentation.md) | Slices 01 through 06 |
 
+## Sequential completion contract
+
+Coding-agent runs begin with this document, then use the current [`IMPLEMENTATION_HANDOFF.md`](IMPLEMENTATION_HANDOFF.md) and the target slice. The reusable controller and single-slice launchers are described in [`prompts/README.md`](prompts/README.md).
+
+For sequential implementation, a slice's local completion gate consists of its required behavior owned by its **Files and components owned** section, its `SNN-A*` local acceptance groups, its **Completion and handoff** section, and its required test tier. A later slice may consume a contract defined by an earlier slice without making the earlier slice responsible for the later consumer's implementation.
+
+Deferred integration groups retain acceptance coverage that cannot be implemented inside the defining slice's ownership boundary. A deferred group does not block its defining slice. It becomes mandatory in the listed implementation-owner slice, together with that owner's local acceptance groups. Ownership moves only to a greater-numbered slice, so deferred coverage cannot create a dependency cycle.
+
+| Deferred group | Defined in | Implementation owner |
+| --- | --- | --- |
+| [`S01-D02`](slices/01-alpha4-api-and-crd.md#s01-d02) | Slice 01 | Slice 02 |
+| [`S01-D03`](slices/01-alpha4-api-and-crd.md#s01-d03) | Slice 01 | Slice 03 |
+| [`S01-D04`](slices/01-alpha4-api-and-crd.md#s01-d04) | Slice 01 | Slice 04 |
+| [`S01-D06`](slices/01-alpha4-api-and-crd.md#s01-d06) | Slice 01 | Slice 06 |
+| [`S01-D07`](slices/01-alpha4-api-and-crd.md#s01-d07) | Slice 01 | Slice 07 |
+| [`S02-D03`](slices/02-job-template-policy.md#s02-d03) | Slice 02 | Slice 03 |
+| [`S02-D06`](slices/02-job-template-policy.md#s02-d06) | Slice 02 | Slice 06 |
+| [`S03-D07`](slices/03-operator-provisioning.md#s03-d07) | Slice 03 | Slice 07 |
+| [`S04-D06`](slices/04-sm-messaging-and-lifecycle.md#s04-d06) | Slice 04 | Slice 06 |
+| [`S05-D07`](slices/05-reference-translator-runtime.md#s05-d07) | Slice 05 | Slice 07 |
+| [`S06-D07`](slices/06-runner-job-orchestration.md#s06-d07) | Slice 06 | Slice 07 |
+
 ## Alpha4 cutover checkpoint
 
 Slices may prepare additive alpha4 work before the integration checkpoint. Active schemes, CRD serving and storage, Scenario Manager imports, fixtures, and smoke manifests switch together in Slice 07. The integrated result has no mixed-version or compatibility mode.
+
+Before Slice 07, Slice 01 proves alpha4-only serving and storage with an isolated envtest CRD generated from `experiment-operator/api/alpha4/`; it does not replace the checked-in active CRD, active schemes, active samples, or smoke inputs. Slice 07 changes the repository-wide generator inputs and checked-in active artifacts together.
 
 ## Change Location
 
