@@ -42,8 +42,13 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	$(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+manifests: controller-gen ## Generate the active WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+	$(CONTROLLER_GEN) rbac:roleName=manager-role webhook paths="./..."
+	$(CONTROLLER_GEN) crd paths="./api/alpha2/...;./api/alpha3/..." output:crd:artifacts:config=config/crd/bases
+
+.PHONY: alpha4-manifests
+alpha4-manifests: controller-gen ## Generate the isolated alpha4-only CustomResourceDefinition used before cutover.
+	$(CONTROLLER_GEN) crd:generateEmbeddedObjectMeta=true paths="./api/alpha4/..." output:crd:artifacts:config=config/crd/alpha4/bases
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

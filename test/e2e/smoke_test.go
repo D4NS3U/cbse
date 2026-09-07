@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -169,11 +170,15 @@ func queryDatabase(query string) string {
 		"exec", "-n", namespace, "deployment/core-db", "--",
 		"psql", "-U", "cbse_test", "-d", "scenarios", "-At", "-F", "|", "-c", query,
 	)
-	output, err := cmd.CombinedOutput()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if err != nil {
-		return "query-error: " + strings.TrimSpace(string(output))
+		return "query-error: " + strings.TrimSpace(stdout.String()+stderr.String())
 	}
-	return strings.TrimSpace(string(output))
+	return strings.TrimSpace(stdout.String())
 }
 
 func writeDatabaseArtifact(contents string) {

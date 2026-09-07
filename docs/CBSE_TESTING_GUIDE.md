@@ -77,7 +77,7 @@ Set `CBSE_KEEP_NAMESPACE=1` on `make test-smoke` to retain a successful run's na
 
 The fast suite checks generated code, formatting, harness self-tests, vetting, Scenario Manager race tests, and the operator's `envtest` suite.
 
-The smoke suite uses a pinned Kubernetes 1.32 `kubectl`, verifies the expected K3s API server and permissions, acquires a Kubernetes Lease, creates a unique `cbse-e2e-<run-id>` namespace, and deploys images by digest. It never deploys test resources to `default` or `kube-system`.
+The smoke suite uses a pinned Kubernetes 1.32 `kubectl`, verifies the expected K3s API server and permissions, acquires a Kubernetes Lease, creates a unique `cbse-e2e-<run-id>` namespace, and deploys images by digest. Test images are published to the nested Harbor repositories `cbse-test/exop`, `cbse-test/sm`, `cbse-test/eds-mock`, and `cbse-test/trans-mock`. It never deploys test resources to `default` or `kube-system`.
 
 ## 5. How to read a smoke-test result
 

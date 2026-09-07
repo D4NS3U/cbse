@@ -7,7 +7,7 @@ This suite deploys the current Experiment Operator and Scenario Manager with rea
 - Go 1.24 or newer, Docker with Buildx, `curl`, `jq`, and OpenSSL.
 - A readable kubeconfig. Linux agents normally use `/home/d4ns3u/.kube/config`; set another explicit path when needed.
 - Access to the K3s API server at `https://192.168.101.245:6443`.
-- Access to the University Harbor repository `registry.unibw.de/i31bdase/cbse-test` from both the agent and K3s node.
+- Access to the University Harbor repository prefix `registry.unibw.de/i31bdase/cbse-test` from both the agent and K3s node. Images are published to the nested repositories `exop`, `sm`, `eds-mock`, and `trans-mock` below that prefix.
 - A dedicated Docker `config.json` provided through `CBSE_REGISTRY_AUTH_FILE`.
 - A `kubernetes.io/dockerconfigjson` Secret named `cbse-registry-auth` in `cbse-test-system`; the harness copies it only to its ephemeral test namespace.
 
@@ -28,10 +28,10 @@ To reuse already published images, every reference must include a digest:
 
 ```bash
 SKIP_BUILD=1 \
-OPERATOR_IMAGE=registry.unibw.de/i31bdase/cbse-test:exop.test.26.7.16@sha256:... \
-SM_IMAGE=registry.unibw.de/i31bdase/cbse-test:sm.test.26.7.16@sha256:... \
-EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test:eds-mock.test.26.7.16@sha256:... \
-TRANS_IMAGE=registry.unibw.de/i31bdase/cbse-test:trans-mock.test.26.7.16@sha256:... \
+OPERATOR_IMAGE=registry.unibw.de/i31bdase/cbse-test/exop:26.7.16@sha256:... \
+SM_IMAGE=registry.unibw.de/i31bdase/cbse-test/sm:26.7.16@sha256:... \
+EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test/eds-mock:26.7.16@sha256:... \
+TRANS_IMAGE=registry.unibw.de/i31bdase/cbse-test/trans-mock:26.7.16@sha256:... \
 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config> \
 make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
 ```

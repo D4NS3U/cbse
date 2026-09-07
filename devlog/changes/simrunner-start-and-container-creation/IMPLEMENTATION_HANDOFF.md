@@ -4,11 +4,11 @@ This file is the durable routing record for sequential implementation of [`FEATU
 
 ## Current checkpoint
 
-- Base commit: `unset`
-- Target: `S01-M1`
+- Base commit: `956d01ac62a87b23bc01631aa34803cc7414e1f1`
+- Target: `S01-D02`
 - State: `not-started`
-- Resume at: `S01-M1 — Alpha4 API and CRD`
-- Worktree summary: `unset`
+- Resume at: `S01-D02 — begin Slice 02 Job-template policy after its prerequisite audit`
+- Worktree summary: `Slice 01 alpha4 API, isolated CRD, generated deepcopy, admission tests, generation tooling, nested smoke-image publication, and smoke query-output hardening are uncommitted; the worktree was clean before this run.`
 - Blocker: `none`
 
 Allowed states are:
@@ -24,34 +24,76 @@ Allowed states are:
 
 | Group | State | Evidence-bearing revision or worktree | Verification |
 | --- | --- | --- | --- |
-| None | `not-started` | `unset` | `not run` |
+| `S01-M1`, `S01-A1` | `smoke-verified` | uncommitted worktree based on `956d01ac62a87b23bc01631aa34803cc7414e1f1` | Focused alpha4 envtest, generated verification, `make test-fast`, and the mandatory four-spec smoke suite passed. |
 
 ## Current-slice checklist
 
-- [ ] Read `FEATURE.md`, the target slice, and every deferred group assigned to the target.
-- [ ] Inspect relevant existing changes and record the base commit.
-- [ ] Implement the target milestone without unrelated changes.
-- [ ] Add or update the owned tests and generated artifacts.
-- [ ] Run focused tests.
-- [ ] Run `make test-fast`.
-- [ ] Run `make test-smoke` when required.
-- [ ] Record the first incomplete stable group or milestone below.
+- [x] Read `FEATURE.md`, the target slice, and every deferred group assigned to the target.
+- [x] Inspect relevant existing changes and record the base commit.
+- [x] Implement the target milestone without unrelated changes.
+- [x] Add or update the owned tests and generated artifacts.
+- [x] Run focused tests.
+- [x] Run `make test-fast`.
+- [x] Run `make test-smoke` when required.
+- [x] Record the first incomplete stable group or milestone below.
 
 ## Remaining work
 
-- First incomplete group or milestone: `S01-M1`
-- First concrete task: `Audit the current alpha2/alpha3 API and generated-CRD structure against Slice 01.`
+- First incomplete group or milestone: `S01-D02` (owned by Slice 02)
+- First concrete task: `Perform the Slice 02 prerequisite audit, then implement the Kubernetes-1.30-pinned default-deny Job-template policy beginning at S02-M1.`
 
 ## Verification log
 
 | Date | Revision or worktree | Command | Result | Notes |
 | --- | --- | --- | --- | --- |
-| — | — | — | `not run` | — |
+| 2026-09-07 | uncommitted worktree based on `956d01ac62a87b23bc01631aa34803cc7414e1f1` | `make alpha4-manifests generate` | `pass` | Generated the isolated alpha4-only CRD and alpha4 deepcopy code. |
+| 2026-09-07 | same worktree | `go test ./api/alpha4 -count=1` | `pass` | Isolated envtest API, schema, validation, immutability, status, and raw-field coverage passed. |
+| 2026-09-07 | same worktree | `make verify-generated` | `pass` | Active alpha2/alpha3 and isolated alpha4 generated artifacts are reproducible. |
+| 2026-09-07 | same worktree | `make test-fast` | `pass` | Repository harness, formatting, vet, compile checks, race tests, and envtest passed. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `blocked` | Not run: approved kubeconfig and protected registry-auth runtime input were unavailable. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `fail` | Preflight passed; the first test-image push failed with Harbor `401 Unauthorized`. Secret-safe comparison confirmed that both runtime sources contain matching basic-auth identities. The smoke lease was released and no ephemeral namespace remained. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `fail` | Retry after Docker Desktop login: preflight passed, but the first push again returned `401 Unauthorized`. Secret-safe comparison showed that Docker Desktop's login differs from the dedicated smoke credential used by the harness. Cleanup completed. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `fail` | Retry after reported robot permission update: preflight passed, but the first push again returned `401 Unauthorized`. A fresh secret-safe token probe authenticated the robot but found neither pull nor push repository scope for `i31bdase/cbse-test`. Cleanup completed. |
+| 2026-09-07 | same worktree | `test/harness/test-harness.sh` | `pass` | Focused coverage verifies nested Harbor repositories and digest-pinned outputs for `exop`, `sm`, `eds-mock`, and `trans-mock`. |
+| 2026-09-07 | same worktree | `make test-fast` | `pass` | Passed after the user-directed nested Harbor repository rewrite. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `fail` | Nested repository preflight passed; push targeted `i31bdase/cbse-test/exop` and failed with `401 Unauthorized`. Fresh tokens granted neither pull nor push for nested target repositories or the pre-existing `i31bdase/cbse-test/busybox`. Cleanup completed. |
+| 2026-09-07 | same worktree | Secret-safe Docker credential and Harbor token comparison | `diagnostic pass` | Docker Desktop and the dedicated smoke configuration contain different robot usernames. Only the Desktop identity receives pull and push actions for `i31bdase/cbse-test/exop`; no usernames, passwords, tokens, or protected paths were recorded. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `fail` | Harness used the requested nested `cbse-test/exop:26.7.16` tag, but Harbor returned `401 Unauthorized`. A subsequent secret-safe comparison showed both username and password differ between the protected file and Docker Desktop's working login. Cleanup completed. |
+| 2026-09-07 | same worktree | Secret-safe flat/nested Harbor scope comparison after the latest Docker login | `diagnostic pass` | The protected configuration and Docker Desktop now use matching password material but different robot usernames. The Desktop username receives pull/push for both `i31bdase/cbse-test` and `i31bdase/cbse-test/exop`; the protected-file username receives neither action for either repository. No credential value or protected path was recorded. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `fail` | Requested Slice 01 retry passed cluster preflight and emitted `cbse-test/exop:26.7.16`, then Harbor rejected the protected-file credential on the first blob `HEAD` with `401 Unauthorized`. The failed run created no test namespace and released its Lease. |
+| 2026-09-07 | same worktree | Exact nested-image read through Desktop and protected Docker configurations | `diagnostic pass` | The same Docker client could read `i31bdase/cbse-test/exop:26.7.16` through Desktop but not the protected configuration, proving the credential sources differed independently of image construction or naming. The protected configuration and shared Kubernetes pull Secret were then synchronized to the working identity, and the protected nested-image read passed with the normal Docker builder/context state. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `fail` | All four nested component images published and three smoke specs passed. The final database assertion failed because a transient `kubectl exec` WebSocket warning from stderr was combined with the successful stdout value `0`; cleanup completed. |
+| 2026-09-07 | same worktree | `make test-fast` | `pass` | Passed after separating successful database-query stdout from `kubectl exec` stderr in the smoke harness. |
+| 2026-09-07 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `pass` | Approved-cluster preflight passed; all four nested images published with canonical and immutable tags; all four Ginkgo specs passed; JUnit reported four tests and zero failures; teardown removed the ephemeral namespace and released the Lease. |
 
 ## Decisions and repository observations
 
-- None recorded.
+- Base revision `956d01ac62a87b23bc01631aa34803cc7414e1f1` had a clean worktree and no `experiment-operator/api/alpha4` package or isolated alpha4 CRD. The checked-in active CRD, schemes, samples, and reconcilers remain alpha2/alpha3 until the Slice 07 cutover.
+- Alpha4 generation is intentionally separate from the active `manifests` target. Embedded Job and Pod metadata schemas are expanded in the isolated CRD, and `verify-generated` checks both active and isolated output.
+- Slice 02 was not started during this one-slice run. Slice 01 now has complete mandatory fast and smoke evidence.
+- On the resumed 2026-09-07 verification attempt, Docker and `/Users/d4ns3u/.kube/config` reached the approved `default` K3s context and API server. `CBSE_REGISTRY_AUTH_FILE` remained absent from the agent environment, so the smoke harness was not invoked without its mandatory protected input.
+- After the protected Docker configuration was supplied, smoke preflight passed but Harbor rejected the first `cbse-test` image push with `401 Unauthorized`. A secret-safe comparison found matching basic-auth identities in the protected Docker configuration and `cbse-test-system/cbse-registry-auth`; no credential value or protected file path was recorded. The harness released its Lease and did not leave an ephemeral namespace.
+- A subsequent Docker Desktop registry login did not update the dedicated smoke credential. Secret-safe comparison showed the Desktop credential differs from `CBSE_REGISTRY_AUTH_FILE`; the retry therefore used the unchanged dedicated credential and failed identically. The harness again released its Lease and left no ephemeral namespace.
+- After the robot account permissions were reported updated, another fresh Harbor token still contained neither pull nor push access for `i31bdase/cbse-test`. This is an external Harbor scope/configuration issue rather than cached Docker authorization. The Lease was released and no test namespace remained.
+- At the user's direction, current smoke publication now uses nested Harbor repositories: `cbse-test/exop`, `cbse-test/sm`, `cbse-test/eds-mock`, and `cbse-test/trans-mock`, with the date version as the canonical tag and digest-pinned runtime references. This intentionally diverges from the read-only feature specification's flat shared-image repository contract and must be reconciled in the normative documentation before Slice 07.
+- The nested-layout smoke attempt targeted `i31bdase/cbse-test/exop` as intended. Secret-safe probes against `exop`, `eds-mock`, and the already-visible `busybox` repository all authenticated successfully but received neither pull nor push actions, confirming that nested naming alone does not resolve the robot permission scope.
+- The user's successful manual push used Docker Desktop's credential-store robot identity. Secret-safe comparison proved that its username differs from the robot username in the dedicated smoke Docker configuration, although their password material matched. Harbor grants the Desktop identity both pull and push for `i31bdase/cbse-test/exop` and grants the dedicated identity neither. The shared Kubernetes Secret still matches the dedicated identity, so both protected runtime sources must be synchronized to the authorized robot before smoke can pass.
+- After the user re-logged Docker Desktop, another smoke attempt used the correct `cbse-test/exop:26.7.16` naming but failed identically. The protected file did not change with the Desktop login: secret-safe comparison now found both username and password different. The harness must not substitute credential-helper state for `CBSE_REGISTRY_AUTH_FILE`, because the protected file and Kubernetes Secret are the required matching runtime boundary.
+- The latest successful manual push proves Docker Desktop's robot can publish the flat `i31bdase/cbse-test` repository. A fresh token comparison also proves that same Desktop robot has pull/push for the requested nested `i31bdase/cbse-test/exop` repository. The protected configuration now shares its password material but still specifies a different robot username with no actions for either scope; `docker login` updates Desktop's credential store, not that separate file.
+- The protected Docker configuration and `cbse-test-system/cbse-registry-auth` were synchronized to the working robot identity without recording credential material. Subsequent smoke publication succeeded for `exop`, `sm`, `eds-mock`, and `trans-mock` beneath the nested `cbse-test/<component>` repositories.
+- `queryDatabase` now captures stdout and stderr separately. Successful SQL assertions consume stdout only, so benign `kubectl exec` transport warnings cannot corrupt query values; stderr remains included when the command itself fails.
 
 ## Run history
 
 Append one sanitized entry per agent run. Record the slice and milestone, what changed, tests and results, remaining stable ID, blocker category, and next action. Do not paste raw logs or sensitive paths.
+
+- 2026-09-07 — Slice 01 (`S01-M1`, `S01-A1`): added the typed alpha4 API, exact immutable-field admission rules, isolated structural alpha4-only CRD, generated deepcopy code, and focused envtest/schema tests. Focused tests, generated verification, and `make test-fast` passed. Remaining: `S01-A1` mandatory smoke verification. Blocker: approved cluster configuration and protected registry-auth input unavailable. Next: run the exact smoke command above, then mark Slice 01 `smoke-verified` if it passes.
+- 2026-09-07 — Slice 01 verification resume: mandatory smoke preflight passed, then the first image push failed with Harbor `401 Unauthorized`. Matching basic-auth identities were confirmed without exposing them, the smoke Lease was released, and no test namespace remained. Remaining: `S01-A1` mandatory smoke verification. Blocker: external Harbor authorization or credential validity. Next: correct the robot account's Push access (or refresh both matching runtime credentials) and rerun smoke.
+- 2026-09-07 — Slice 01 verification retry: Docker Desktop held a registry login, but it differed from the dedicated smoke credential and was intentionally not consumed by the harness. Smoke again failed on the first Harbor push with `401 Unauthorized`; cleanup succeeded. Remaining: `S01-A1`. Next: repair or rotate the dedicated matching robot credentials, not only the Desktop credential store.
+- 2026-09-07 — Slice 01 permission-update retry: smoke preflight passed and Harbor authenticated the dedicated robot, but a fresh token granted neither pull nor push access for `i31bdase/cbse-test`; the first push returned `401 Unauthorized`. Cleanup succeeded. Remaining: `S01-A1`. Next: correct the robot repository scope in Harbor and rerun smoke.
+- 2026-09-07 — User-directed smoke repository rewrite: component images now publish beneath `cbse-test/<component>:<version>` and runtime values remain digest-pinned. Focused harness coverage and `make test-fast` passed. Mandatory smoke targeted the new `exop` repository but Harbor returned `401`; fresh token evidence showed no pull or push action for new or pre-existing nested repositories. Cleanup succeeded. Remaining: `S01-A1`. Next: grant the dedicated robot `i31bdase/cbse-test/*` repository scope and rerun smoke; reconcile the normative flat-layout specification before Slice 07.
+- 2026-09-07 — Credential-source diagnosis: the successful manual Docker push and failed smoke use different robot usernames. A fresh token grants the Desktop robot pull/push and the dedicated smoke robot neither action. Remaining: `S01-A1`. Next: synchronize the protected Docker configuration and shared Kubernetes Secret to the authorized Desktop robot identity, then rerun smoke.
+- 2026-09-07 — Post-login smoke retry: the rewritten harness emitted `cbse-test/exop:26.7.16` exactly, but push returned `401`. Docker Desktop and the protected file still differ in both robot username and password, and only Desktop receives repository actions. Cleanup succeeded. Remaining: `S01-A1`. Next: explicitly regenerate and synchronize the protected file and cluster Secret; a Desktop login alone does not update them.
+- 2026-09-07 — Latest credential diagnosis: Docker Desktop and the protected configuration now share password material but still name different robot accounts. Desktop receives pull/push for both flat and nested targets; the protected-file account receives neither. Remaining: `S01-A1`. Next: replace the protected configuration's identity with the authorized robot and synchronize the shared pull Secret, then rerun smoke.
+- 2026-09-07 — Requested Slice 01 smoke rerun: preflight passed and the rewritten harness targeted `cbse-test/exop:26.7.16`, but Harbor returned `401 Unauthorized` for the credential loaded from the protected configuration. Cleanup was verified: no ephemeral namespace remains and the smoke Lease was released. Remaining: `S01-A1`; Slice 02 was not started.
+- 2026-09-07 — Slice 01 completion: isolated the registry discrepancy with an exact same-client nested-image read, synchronized the protected Docker and cluster pull credentials to the working identity, and successfully published all four nested component images. Fixed a real smoke-harness flake by separating successful database stdout from transient `kubectl exec` stderr. `make test-fast` passed, the complete four-spec smoke suite passed, JUnit recorded zero failures, and teardown was verified. Slice 01 (`S01-M1`, `S01-A1`) is `smoke-verified`; resume at incoming group `S01-D02` in Slice 02. No later slice was started.

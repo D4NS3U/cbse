@@ -82,7 +82,7 @@ spec:
       containers:
         - name: scenario-manager
           # Build and push/pull your current Scenario Manager image before applying.
-          image: registry.unibw.de/i31bdase/cbse-test:sm.test.26.7.16
+          image: registry.unibw.de/i31bdase/cbse-test/sm:26.7.16
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

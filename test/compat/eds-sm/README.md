@@ -24,10 +24,10 @@ This test environment validates the Scenario Manager EDS communication path:
 - A reachable Kubernetes cluster context
 - `kubectl` configured for that cluster
 - Scenario Manager image available to the cluster
-  - default in `manifests.yaml`: `registry.unibw.de/i31bdase/cbse-test:sm.test.26.7.16`
+  - default in `manifests.yaml`: `registry.unibw.de/i31bdase/cbse-test/sm:26.7.16`
   - override at runtime with `SM_IMAGE=<your-image>`
 - EDS mock image available to the cluster
-  - default in `eds-mock.yaml`: `registry.unibw.de/i31bdase/cbse-test:eds-mock.test.26.7.16`
+  - default in `eds-mock.yaml`: `registry.unibw.de/i31bdase/cbse-test/eds-mock:26.7.16`
   - override at runtime with `EDS_IMAGE=<your-image>`
 
 Build and push the Scenario Manager image from repo root:
@@ -54,8 +54,8 @@ From repo root:
 Optional overrides:
 
 ```bash
-SM_IMAGE=registry.unibw.de/i31bdase/cbse-test:sm.test.26.7.16@sha256:... \
-EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test:eds-mock.test.26.7.16@sha256:... \
+SM_IMAGE=registry.unibw.de/i31bdase/cbse-test/sm:26.7.16@sha256:... \
+EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test/eds-mock:26.7.16@sha256:... \
 PROJECT_NAME=sm-eds-e2e \
 EXPECTED_SCENARIOS=4 \
 ./test/compat/eds-sm/run_eds_e2e.sh

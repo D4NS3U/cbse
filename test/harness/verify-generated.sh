@@ -11,10 +11,13 @@ for path in api cmd config hack internal go.mod go.sum PROJECT; do
   cp -R "${root}/experiment-operator/${path}" "${tmp}/experiment-operator/${path}"
 done
 cd "${tmp}/experiment-operator"
-GOCACHE="${GOCACHE:-${tmp}/gocache}" "${controller_gen}" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+GOCACHE="${GOCACHE:-${tmp}/gocache}" "${controller_gen}" rbac:roleName=manager-role webhook paths="./..."
+GOCACHE="${GOCACHE:-${tmp}/gocache}" "${controller_gen}" crd paths="./api/alpha2/...;./api/alpha3/..." output:crd:artifacts:config=config/crd/bases
+GOCACHE="${GOCACHE:-${tmp}/gocache}" "${controller_gen}" crd:generateEmbeddedObjectMeta=true paths="./api/alpha4/..." output:crd:artifacts:config=config/crd/alpha4/bases
 GOCACHE="${GOCACHE:-${tmp}/gocache}" "${controller_gen}" object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
 diff -ru "${root}/experiment-operator/config/crd/bases" config/crd/bases
+diff -ru "${root}/experiment-operator/config/crd/alpha4/bases" config/crd/alpha4/bases
 diff -u "${root}/experiment-operator/config/rbac/role.yaml" config/rbac/role.yaml
 while IFS= read -r generated; do
   relative="${generated#./}"

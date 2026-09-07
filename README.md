@@ -76,4 +76,4 @@ make test-smoke \
   CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
 ```
 
-The default repository is the University Harbor test-image repository `registry.unibw.de/i31bdase/cbse-test`. Supply a dedicated Docker configuration through `CBSE_REGISTRY_AUTH_FILE`; never commit it. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See [`docs/CBSE_TESTING_GUIDE.md`](docs/CBSE_TESTING_GUIDE.md) for the current architecture, test layout, and artifact-reading guide.
+The default Harbor repository prefix is `registry.unibw.de/i31bdase/cbse-test`; smoke publishes each image beneath it as `exop:<version>`, `sm:<version>`, `eds-mock:<version>`, or `trans-mock:<version>`. Supply a dedicated Docker configuration through `CBSE_REGISTRY_AUTH_FILE`; never commit it. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See [`docs/CBSE_TESTING_GUIDE.md`](docs/CBSE_TESTING_GUIDE.md) for the current architecture, test layout, and artifact-reading guide.

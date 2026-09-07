@@ -42,8 +42,9 @@ fi
 
 build_image() {
   local name="$1" image_var="$2" dockerfile="$3" context="$4" title="$5"
-  local canonical="${registry}:${name}.test.${version}"
-  local immutable="${registry}:${name}.test.${immutable_suffix}"
+  local repository="${registry}/${name}"
+  local canonical="${repository}:${version}"
+  local immutable="${repository}:${immutable_suffix}"
   local metadata="${artifact_dir}/${name}.metadata.json"
   "${docker_config[@]}" docker buildx build --platform linux/amd64 --pull --push \
     --progress=plain --file "${dockerfile}" \
@@ -55,7 +56,7 @@ build_image() {
   local digest
   digest="$(jq -r '.["containerimage.digest"] // empty' "${metadata}")"
   [[ "${digest}" == sha256:* ]] || { echo "Build did not report a digest for ${name}" >&2; return 1; }
-  printf '%s=%s@%s\n' "${image_var}" "${registry}:${name}.test.${version}" "${digest}" >>"${artifact_dir}/images.env"
+  printf '%s=%s@%s\n' "${image_var}" "${canonical}" "${digest}" >>"${artifact_dir}/images.env"
   printf '%s canonical=%s immutable=%s digest=%s\n' "${name}" "${canonical}" "${immutable}" "${digest}" >>"${artifact_dir}/summary.txt"
 }
 
