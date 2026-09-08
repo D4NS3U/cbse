@@ -4,11 +4,11 @@ This file is the durable routing record for sequential implementation of [`FEATU
 
 ## Current checkpoint
 
-- Base commit: `956d01ac62a87b23bc01631aa34803cc7414e1f1`
-- Target: `S01-D02`
+- Base commit: `48aa86ec906dc4df539b903b587443d107e59d6e`
+- Target: `S01-D03` (incoming Operator-provisioning group assigned to Slice 03)
 - State: `not-started`
-- Resume at: `S01-D02 — begin Slice 02 Job-template policy after its prerequisite audit`
-- Worktree summary: `Slice 01 alpha4 API, isolated CRD, generated deepcopy, admission tests, generation tooling, nested smoke-image publication, and smoke query-output hardening are uncommitted; the worktree was clean before this run.`
+- Resume at: `S01-D03 — begin Slice 03 Operator provisioning with the validated alpha4 Job-template policy`
+- Worktree summary: `Based on 48aa86ec906dc4df539b903b587443d107e59d6e. Slice 02 policy and tests are uncommitted in IMPLEMENTATION_HANDOFF.md, experiment-operator/api/alpha4/simulationexperiment_types_test.go, and the new experiment-operator/internal/jobtemplate package; no unrelated pre-existing changes were present.`
 - Blocker: `none`
 
 Allowed states are:
@@ -24,7 +24,8 @@ Allowed states are:
 
 | Group | State | Evidence-bearing revision or worktree | Verification |
 | --- | --- | --- | --- |
-| `S01-M1`, `S01-A1` | `smoke-verified` | uncommitted worktree based on `956d01ac62a87b23bc01631aa34803cc7414e1f1` | Focused alpha4 envtest, generated verification, `make test-fast`, and the mandatory four-spec smoke suite passed. |
+| `S01-M1`, `S01-A1` | `smoke-verified` | `48aa86ec906dc4df539b903b587443d107e59d6e` | Focused alpha4 envtest and generated verification were re-run at this revision; the previously recorded `make test-fast` and mandatory four-spec smoke pass cover the identical committed content. |
+| `S01-D02`, `S02-M1`, `S02-M2`, `S02-M3`, `S02-M4`, `S02-A1`, `S02-A2`, `S02-A3` | `smoke-verified` | uncommitted worktree based on `48aa86ec906dc4df539b903b587443d107e59d6e` | Focused policy and raw alpha4 admission tests, final `make test-fast`, and the mandatory four-spec smoke suite passed. JUnit reported four tests and zero failures; cleanup removed the ephemeral namespace and released the Lease. |
 
 ## Current-slice checklist
 
@@ -39,13 +40,20 @@ Allowed states are:
 
 ## Remaining work
 
-- First incomplete group or milestone: `S01-D02` (owned by Slice 02)
-- First concrete task: `Perform the Slice 02 prerequisite audit, then implement the Kubernetes-1.30-pinned default-deny Job-template policy beginning at S02-M1.`
+- First incomplete group or milestone: `S01-D03` (incoming Operator-provisioning group assigned to Slice 03)
+- First concrete task: `Read Slice 03 and both incoming deferred groups completely, then wire the alpha4 provisioning path to validate the Job template before InProgress.`
 
 ## Verification log
 
 | Date | Revision or worktree | Command | Result | Notes |
 | --- | --- | --- | --- | --- |
+| 2026-09-08 | `48aa86ec906dc4df539b903b587443d107e59d6e` | `make verify-generated` | `pass` | Revalidated that active alpha2/alpha3 and isolated alpha4 generated artifacts are current before Slice 02. |
+| 2026-09-08 | same revision | `go test ./api/alpha4 -count=1` | `pass` | Revalidated Slice 01 alpha4 envtest API, schema, validation, immutability, status, and raw-field coverage; the sandboxed attempt was unable by local port restrictions, then the same test passed with loopback access. |
+| 2026-09-08 | uncommitted Slice 02 worktree based on `48aa86ec906dc4df539b903b587443d107e59d6e` | `GOCACHE=<temporary-cache> go test ./internal/jobtemplate -count=1` | `pass` | Pinned policy matrix, deep-copy, value-safe errors, normalization, field census, internal boundary, and Kubernetes 1.30 golden fixtures passed. |
+| 2026-09-08 | same worktree | `GOCACHE=<temporary-cache> go test ./api/alpha4 -count=1` | `pass` | Full alpha4 envtest passed, including structural schema and Strict/Warn/Ignore raw unknown- and duplicate-field admission coverage. |
+| 2026-09-08 | same worktree | `make test-fast` | `pass` | Final post-audit run passed generated verification, harness self-tests, formatting, vet, integration/e2e compile checks, race tests, all Operator tests, alpha4 envtest, and the new policy suite. |
+| 2026-09-08 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `blocked` | Not invoked: approved kubeconfig is available, but the mandatory protected registry-auth input was not supplied to this run. No cluster mutation occurred. |
+| 2026-09-08 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `pass` | The user supplied the protected input. Approved-cluster preflight passed; all four component images published with immutable references; all four Ginkgo specs passed; JUnit reported four tests and zero failures; teardown removed the ephemeral namespace and released the Lease. |
 | 2026-09-07 | uncommitted worktree based on `956d01ac62a87b23bc01631aa34803cc7414e1f1` | `make alpha4-manifests generate` | `pass` | Generated the isolated alpha4-only CRD and alpha4 deepcopy code. |
 | 2026-09-07 | same worktree | `go test ./api/alpha4 -count=1` | `pass` | Isolated envtest API, schema, validation, immutability, status, and raw-field coverage passed. |
 | 2026-09-07 | same worktree | `make verify-generated` | `pass` | Active alpha2/alpha3 and isolated alpha4 generated artifacts are reproducible. |
@@ -70,7 +78,11 @@ Allowed states are:
 
 - Base revision `956d01ac62a87b23bc01631aa34803cc7414e1f1` had a clean worktree and no `experiment-operator/api/alpha4` package or isolated alpha4 CRD. The checked-in active CRD, schemes, samples, and reconcilers remain alpha2/alpha3 until the Slice 07 cutover.
 - Alpha4 generation is intentionally separate from the active `manifests` target. Embedded Job and Pod metadata schemas are expanded in the isolated CRD, and `verify-generated` checks both active and isolated output.
-- Slice 02 was not started during this one-slice run. Slice 01 now has complete mandatory fast and smoke evidence.
+- Slice 01 evidence was reconciled with the current repository: its previously uncommitted implementation and harness work are now committed as `48aa86ec906dc4df539b903b587443d107e59d6e`, generated verification and focused alpha4 envtest were re-run, and the earlier smoke pass applies to that identical content.
+- Slice 02 now owns an Operator-internal, external-API-only `ValidateAndNormalizeJobTemplate` implementation. It deep-copies before validation, uses a reflection-backed default-deny boundary, collects rooted value-safe errors, applies only post-validation nil/empty and pull-Secret-order normalization, and has no Scenario Manager dependency or Kubernetes defaulting/server-validation path.
+- Kubernetes 1.30 compatibility is pinned with local-equivalent fixtures, including explicit compatibility behavior where current public helpers differ: legacy-form IP acceptance, unconstrained `emptyDir.medium`, signed `tolerationSeconds` under the required effect relationship, topology-spread key and list behavior, and extended-resource namespace handling.
+- Raw alpha4 API tests now prove Strict rejection and Warn/Ignore persistence behavior for unknown and duplicate Job-template fields and verify that no ancestor preserves unknown fields.
+- Slice 02 mandatory smoke subsequently passed with the user-supplied protected Docker configuration. The successful run produced four passing JUnit cases, removed its `cbse-e2e-*` namespace, and left no smoke Lease.
 - On the resumed 2026-09-07 verification attempt, Docker and `/Users/d4ns3u/.kube/config` reached the approved `default` K3s context and API server. `CBSE_REGISTRY_AUTH_FILE` remained absent from the agent environment, so the smoke harness was not invoked without its mandatory protected input.
 - After the protected Docker configuration was supplied, smoke preflight passed but Harbor rejected the first `cbse-test` image push with `401 Unauthorized`. A secret-safe comparison found matching basic-auth identities in the protected Docker configuration and `cbse-test-system/cbse-registry-auth`; no credential value or protected file path was recorded. The harness released its Lease and did not leave an ephemeral namespace.
 - A subsequent Docker Desktop registry login did not update the dedicated smoke credential. Secret-safe comparison showed the Desktop credential differs from `CBSE_REGISTRY_AUTH_FILE`; the retry therefore used the unchanged dedicated credential and failed identically. The harness again released its Lease and left no ephemeral namespace.
@@ -97,3 +109,5 @@ Append one sanitized entry per agent run. Record the slice and milestone, what c
 - 2026-09-07 — Latest credential diagnosis: Docker Desktop and the protected configuration now share password material but still name different robot accounts. Desktop receives pull/push for both flat and nested targets; the protected-file account receives neither. Remaining: `S01-A1`. Next: replace the protected configuration's identity with the authorized robot and synchronize the shared pull Secret, then rerun smoke.
 - 2026-09-07 — Requested Slice 01 smoke rerun: preflight passed and the rewritten harness targeted `cbse-test/exop:26.7.16`, but Harbor returned `401 Unauthorized` for the credential loaded from the protected configuration. Cleanup was verified: no ephemeral namespace remains and the smoke Lease was released. Remaining: `S01-A1`; Slice 02 was not started.
 - 2026-09-07 — Slice 01 completion: isolated the registry discrepancy with an exact same-client nested-image read, synchronized the protected Docker and cluster pull credentials to the working identity, and successfully published all four nested component images. Fixed a real smoke-harness flake by separating successful database stdout from transient `kubectl exec` stderr. `make test-fast` passed, the complete four-spec smoke suite passed, JUnit recorded zero failures, and teardown was verified. Slice 01 (`S01-M1`, `S01-A1`) is `smoke-verified`; resume at incoming group `S01-D02` in Slice 02. No later slice was started.
+- 2026-09-08 — Slice 02 (`S01-D02`, `S02-M1` through `S02-M4`, `S02-A1` through `S02-A3`): reconciled Slice 01 evidence at commit `48aa86ec906dc4df539b903b587443d107e59d6e`; added the Operator-internal default-deny Job-template validator, Kubernetes-1.30 compatibility fixtures, reflection field census, deep-copy and normalization coverage, internal-boundary checks, and Strict/Warn/Ignore raw API admission tests. Focused tests and final `make test-fast` passed. Remaining: `S02-A1` mandatory smoke verification. Blocker: protected registry-auth input was not externally supplied; no cluster mutation occurred. Next: supply that protected input and run the exact redacted smoke command recorded above, then mark Slice 02 `smoke-verified` only if it passes. Slice 03 was not started.
+- 2026-09-08 — Slice 02 smoke continuation: the user supplied the protected registry-auth input and the exact mandatory smoke suite passed against the approved K3s cluster. Four immutable component images published, all four specs and JUnit cases passed, and teardown removed the ephemeral namespace and released the Lease. Slice 02 is `smoke-verified`; resume at `S01-D03` in Slice 03. Persistent shell configuration remains pending because the requested destination path differs from the tested source path and the requested destination does not exist.

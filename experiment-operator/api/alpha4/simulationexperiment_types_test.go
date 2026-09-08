@@ -18,6 +18,7 @@ package alpha4_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"testing"
 
 	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
+	"github.com/D4NS3U/cbse/experiment-operator/internal/jobtemplate"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	extensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -36,9 +38,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/yaml"
@@ -51,6 +55,7 @@ var (
 	testDiscovery    discovery.DiscoveryInterface
 	testDynamic      dynamic.Interface
 	testEnvironment  *envtest.Environment
+	testRESTClient   rest.Interface
 	resourceSequence atomic.Uint64
 )
 
@@ -94,6 +99,16 @@ func TestMain(m *testing.M) {
 	testDynamic, err = dynamic.NewForConfig(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create alpha4 dynamic client: %v\n", err)
+		_ = testEnvironment.Stop()
+		os.Exit(1)
+	}
+	rawConfig := rest.CopyConfig(cfg)
+	rawConfig.GroupVersion = &experimentalpha4.GroupVersion
+	rawConfig.APIPath = "/apis"
+	rawConfig.NegotiatedSerializer = serializer.NewCodecFactory(testScheme).WithoutConversion()
+	testRESTClient, err = rest.RESTClientFor(rawConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create alpha4 raw REST client: %v\n", err)
 		_ = testEnvironment.Stop()
 		os.Exit(1)
 	}
@@ -159,6 +174,14 @@ func TestAlpha4CRDIsIsolatedAndStructural(t *testing.T) {
 	_ = requiredProperty(t, podMetadata, "annotations")
 	podSpec := requiredProperty(t, podTemplate, "spec")
 	_ = requiredProperty(t, podSpec, "containers")
+	for path, schema := range map[string]*extensionsv1.JSONSchemaProps{
+		"root":                    root,
+		"spec":                    spec,
+		"spec.runner":             runner,
+		"spec.runner.jobTemplate": jobTemplate,
+	} {
+		assertNodeDoesNotPreserveUnknownFields(t, schema, path)
+	}
 	assertNoPreserveUnknownFields(t, jobTemplate, "spec.runner.jobTemplate")
 }
 
@@ -423,25 +446,99 @@ func TestUnchangedImmutableFieldsAllowMetadataAndStatusUpdates(t *testing.T) {
 	}
 }
 
-func TestUnknownJobTemplateFieldsArePruned(t *testing.T) {
-	resource := newExperiment(nextName("unknown"))
-	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(resource)
-	if err != nil {
-		t.Fatalf("convert experiment to unstructured: %v", err)
-	}
-	if err := unstructured.SetNestedField(raw, "not-supported", "spec", "runner", "jobTemplate", "spec", "unknownField"); err != nil {
-		t.Fatalf("set unknown raw field: %v", err)
-	}
+func TestUnknownJobTemplateFieldValidationModes(t *testing.T) {
+	for _, mode := range []string{metav1.FieldValidationStrict, metav1.FieldValidationWarn, metav1.FieldValidationIgnore} {
+		t.Run(mode, func(t *testing.T) {
+			resource := newExperiment(nextName("unknown"))
+			resource.Spec.Runner.JobTemplate = minimalPolicyTemplate()
+			raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(resource)
+			if err != nil {
+				t.Fatalf("convert experiment to unstructured: %v", err)
+			}
+			removeJobTemplateServerMetadata(raw)
+			if err := unstructured.SetNestedField(raw, "not-supported", "spec", "runner", "jobTemplate", "spec", "unknownField"); err != nil {
+				t.Fatalf("set unknown raw field: %v", err)
+			}
 
-	created, err := testDynamic.Resource(simulationExperimentGVR()).Namespace(testNamespace).Create(
-		context.Background(), &unstructured.Unstructured{Object: raw}, metav1.CreateOptions{},
-	)
-	if err != nil {
-		t.Fatalf("create experiment containing unknown Job field: %v", err)
+			created, err := testDynamic.Resource(simulationExperimentGVR()).Namespace(testNamespace).Create(
+				context.Background(), &unstructured.Unstructured{Object: raw}, metav1.CreateOptions{FieldValidation: mode},
+			)
+			if mode == metav1.FieldValidationStrict {
+				if err == nil || !strings.Contains(err.Error(), "unknownField") {
+					t.Fatalf("Strict unknown-field error = %v, want unknownField rejection", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s create with unknown field: %v", mode, err)
+			}
+			if value, found, nestedErr := unstructured.NestedFieldNoCopy(created.Object, "spec", "runner", "jobTemplate", "spec", "unknownField"); nestedErr != nil || found {
+				t.Fatalf("unknown Job field survived %s pruning: found=%v value=%v err=%v", mode, found, value, nestedErr)
+			}
+			persisted := &experimentalpha4.SimulationExperiment{}
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(created.Object, persisted); err != nil {
+				t.Fatalf("decode persisted %s object: %v", mode, err)
+			}
+			if _, policyErrs := jobtemplate.ValidateAndNormalizeJobTemplate(persisted.Spec.Runner.JobTemplate); len(policyErrs) != 0 {
+				t.Fatalf("validator did not accept only the persisted typed object after %s pruning: %s", mode, policyErrs.ToAggregate())
+			}
+		})
 	}
-	if value, found, err := unstructured.NestedFieldNoCopy(created.Object, "spec", "runner", "jobTemplate", "spec", "unknownField"); err != nil || found {
-		t.Fatalf("unknown Job field survived structural pruning: found=%v value=%v err=%v", found, value, err)
+}
+
+func TestDuplicateJobTemplateFieldValidationModes(t *testing.T) {
+	for _, mode := range []string{metav1.FieldValidationStrict, metav1.FieldValidationWarn, metav1.FieldValidationIgnore} {
+		t.Run(mode, func(t *testing.T) {
+			resource := newExperiment(nextName("duplicate"))
+			resource.Spec.Runner.JobTemplate = minimalPolicyTemplate()
+			resource.Spec.Runner.JobTemplate.Spec.ActiveDeadlineSeconds = int64Pointer(10)
+			raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(resource)
+			if err != nil {
+				t.Fatalf("convert experiment to unstructured: %v", err)
+			}
+			removeJobTemplateServerMetadata(raw)
+			body, err := json.Marshal(raw)
+			if err != nil {
+				t.Fatalf("marshal experiment: %v", err)
+			}
+			body = []byte(strings.Replace(string(body), `"activeDeadlineSeconds":10`, `"activeDeadlineSeconds":10,"activeDeadlineSeconds":20`, 1))
+			if !strings.Contains(string(body), `"activeDeadlineSeconds":20`) {
+				t.Fatal("failed to construct raw duplicate-field fixture")
+			}
+
+			response, err := testRESTClient.Post().Namespace(testNamespace).Resource("simulationexperiments").
+				Param("fieldValidation", mode).Body(body).Do(context.Background()).Raw()
+			if mode == metav1.FieldValidationStrict {
+				if err == nil {
+					t.Fatal("Strict duplicate-field request was accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("%s raw duplicate-field create: %v", mode, err)
+			}
+			persisted := &experimentalpha4.SimulationExperiment{}
+			if err := json.Unmarshal(response, persisted); err != nil {
+				t.Fatalf("decode %s response: %v", mode, err)
+			}
+			deadline := persisted.Spec.Runner.JobTemplate.Spec.ActiveDeadlineSeconds
+			if deadline == nil || *deadline != 20 {
+				t.Fatalf("%s persisted duplicate value = %v, want last value 20", mode, deadline)
+			}
+			if _, policyErrs := jobtemplate.ValidateAndNormalizeJobTemplate(persisted.Spec.Runner.JobTemplate); len(policyErrs) != 0 {
+				t.Fatalf("validator rejected persisted last-value object after %s decoding: %s", mode, policyErrs.ToAggregate())
+			}
+		})
 	}
+}
+
+func minimalPolicyTemplate() *batchv1.JobTemplateSpec {
+	return &batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "runner"}}}}}}
+}
+
+func removeJobTemplateServerMetadata(raw map[string]interface{}) {
+	unstructured.RemoveNestedField(raw, "spec", "runner", "jobTemplate", "metadata", "creationTimestamp")
+	unstructured.RemoveNestedField(raw, "spec", "runner", "jobTemplate", "spec", "template", "metadata", "creationTimestamp")
 }
 
 func expectImmutableRejection(t *testing.T, field string, mutate func(*experimentalpha4.SimulationExperiment)) {
@@ -610,9 +707,7 @@ func hasValidation(schema *extensionsv1.JSONSchemaProps, rule, messageFragment s
 
 func assertNoPreserveUnknownFields(t *testing.T, schema *extensionsv1.JSONSchemaProps, path string) {
 	t.Helper()
-	if schema.XPreserveUnknownFields != nil && *schema.XPreserveUnknownFields {
-		t.Errorf("%s enables x-kubernetes-preserve-unknown-fields", path)
-	}
+	assertNodeDoesNotPreserveUnknownFields(t, schema, path)
 	for name, property := range schema.Properties {
 		propertyCopy := property
 		assertNoPreserveUnknownFields(t, &propertyCopy, path+"."+name)
@@ -622,6 +717,13 @@ func assertNoPreserveUnknownFields(t *testing.T, schema *extensionsv1.JSONSchema
 	}
 	if schema.AdditionalProperties != nil && schema.AdditionalProperties.Schema != nil {
 		assertNoPreserveUnknownFields(t, schema.AdditionalProperties.Schema, path+".*")
+	}
+}
+
+func assertNodeDoesNotPreserveUnknownFields(t *testing.T, schema *extensionsv1.JSONSchemaProps, path string) {
+	t.Helper()
+	if schema.XPreserveUnknownFields != nil && *schema.XPreserveUnknownFields {
+		t.Errorf("%s enables x-kubernetes-preserve-unknown-fields", path)
 	}
 }
 
