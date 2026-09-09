@@ -4,7 +4,7 @@ This file is the durable routing record for sequential implementation of [`FEATU
 
 ## Current checkpoint
 
-- Base commit: `a41a6fc0eb4ca1a5d1145fbb00043c21dc6185a8` (Slice 01, Slice 02, and Slice 03 committed; worktree clean)
+- Base commit: `e2f7992` (Slice 01, Slice 02, and Slice 03 committed; worktree clean)
 - Target: `S04-M1` (Slice 04 Scenario Manager messaging and lifecycle)
 - State: `smoke-verified`
 - Resume at: `S04-M1 — namespace-aware EDS/Translator subject grammar, SM-owned NATS stream and consumer reconciliation, and durable namespace/name project identity`
