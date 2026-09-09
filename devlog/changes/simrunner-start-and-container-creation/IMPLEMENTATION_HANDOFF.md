@@ -4,11 +4,11 @@ This file is the durable routing record for sequential implementation of [`FEATU
 
 ## Current checkpoint
 
-- Base commit: `48aa86ec906dc4df539b903b587443d107e59d6e`
-- Target: `S01-D03` (incoming Operator-provisioning group assigned to Slice 03)
-- State: `not-started`
-- Resume at: `S01-D03 — begin Slice 03 Operator provisioning with the validated alpha4 Job-template policy`
-- Worktree summary: `Based on 48aa86ec906dc4df539b903b587443d107e59d6e. Slice 02 policy and tests are uncommitted in IMPLEMENTATION_HANDOFF.md, experiment-operator/api/alpha4/simulationexperiment_types_test.go, and the new experiment-operator/internal/jobtemplate package; no unrelated pre-existing changes were present. CBSE_REGISTRY_AUTH_FILE is persistently configured in the user's zsh login profile.`
+- Base commit: `a41a6fc0eb4ca1a5d1145fbb00043c21dc6185a8` (Slice 01, Slice 02, and Slice 03 committed; worktree clean)
+- Target: `S04-M1` (Slice 04 Scenario Manager messaging and lifecycle)
+- State: `smoke-verified`
+- Resume at: `S04-M1 — namespace-aware EDS/Translator subject grammar, SM-owned NATS stream and consumer reconciliation, and durable namespace/name project identity`
+- Worktree summary: `Slice 01 (S01-M1, S01-A1), Slice 02 (S01-D02, S02-M1..M4, S02-A1..A3), and Slice 03 (S03-M1, S03-M2, S03-A1, S01-D03, S02-D03) are smoke-verified. The alpha4 Operator provisioning reconciler is additive and isolated with its own envtest package; it is not wired into main.go until the Slice 07 cutover, so the active alpha2/alpha3 wiring and the mandatory four-spec smoke remain unchanged.`
 - Blocker: `none`
 
 Allowed states are:
@@ -26,6 +26,7 @@ Allowed states are:
 | --- | --- | --- | --- |
 | `S01-M1`, `S01-A1` | `smoke-verified` | `48aa86ec906dc4df539b903b587443d107e59d6e` | Focused alpha4 envtest and generated verification were re-run at this revision; the previously recorded `make test-fast` and mandatory four-spec smoke pass cover the identical committed content. |
 | `S01-D02`, `S02-M1`, `S02-M2`, `S02-M3`, `S02-M4`, `S02-A1`, `S02-A2`, `S02-A3` | `smoke-verified` | uncommitted worktree based on `48aa86ec906dc4df539b903b587443d107e59d6e` | Focused policy and raw alpha4 admission tests, final `make test-fast`, and the mandatory four-spec smoke suite passed. JUnit reported four tests and zero failures; cleanup removed the ephemeral namespace and released the Lease. |
+| `S03-M1`, `S03-M2`, `S03-A1`, `S01-D03`, `S02-D03` | `smoke-verified` | uncommitted worktree based on `a41a6fc0eb4ca1a5d1145fbb00043c21dc6185a8` | The pgx-free `dbendpoint` probe package, Operator registry/image/builder-resource validators, standard Docker-config auth resolver, and the additive alpha4 provisioning reconciler with its isolated envtest package passed focused tests, `make test-fast`, and the mandatory four-spec smoke. JUnit reported four tests and zero failures; cleanup removed the ephemeral namespace and released the Lease; the active alpha3 CRD and `cbse-test-system` namespace were left intact. |
 
 ## Current-slice checklist
 
@@ -40,8 +41,8 @@ Allowed states are:
 
 ## Remaining work
 
-- First incomplete group or milestone: `S01-D03` (incoming Operator-provisioning group assigned to Slice 03)
-- First concrete task: `Read Slice 03 and both incoming deferred groups completely, then wire the alpha4 provisioning path to validate the Job template before InProgress.`
+- First incomplete group or milestone: `S04-M1` (Slice 04 Scenario Manager messaging and lifecycle)
+- First concrete task: `Read Slice 04 and every deferred group assigned to it completely, then implement the namespace-aware EDS/Translator subject grammar and SM-owned NATS stream and consumer reconciliation with durable namespace/name project identity.`
 
 ## Verification log
 
@@ -54,6 +55,8 @@ Allowed states are:
 | 2026-09-08 | same worktree | `make test-fast` | `pass` | Final post-audit run passed generated verification, harness self-tests, formatting, vet, integration/e2e compile checks, race tests, all Operator tests, alpha4 envtest, and the new policy suite. |
 | 2026-09-08 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `blocked` | Not invoked: approved kubeconfig is available, but the mandatory protected registry-auth input was not supplied to this run. No cluster mutation occurred. |
 | 2026-09-08 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `pass` | The user supplied the protected input. Approved-cluster preflight passed; all four component images published with immutable references; all four Ginkgo specs passed; JUnit reported four tests and zero failures; teardown removed the ephemeral namespace and released the Lease. |
+| 2026-09-09 | uncommitted Slice 03 worktree based on `a41a6fc0eb4ca1a5d1145fbb00043c21dc6185a8` | `make test-fast` | `pass` | Generated verification, harness self-tests, formatting, vet, integration/e2e compile checks, race tests, all Operator unit tests, the isolated alpha4 envtest controller suite (S03-A1/S01-D03/S02-D03), and the dbendpoint/jobtemplate suites passed. |
+| 2026-09-09 | same worktree | `make test-smoke KUBECONFIG=/Users/d4ns3u/.kube/config TEST_IMAGE_VERSION=26.7.16 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>` | `pass` | Approved-cluster preflight passed; all four component images published with immutable references; all four Ginkgo specs passed; JUnit reported four tests and zero failures; teardown removed the ephemeral namespace and released the Lease; the active alpha3 CRD and `cbse-test-system` namespace were left intact. |
 | 2026-09-07 | uncommitted worktree based on `956d01ac62a87b23bc01631aa34803cc7414e1f1` | `make alpha4-manifests generate` | `pass` | Generated the isolated alpha4-only CRD and alpha4 deepcopy code. |
 | 2026-09-07 | same worktree | `go test ./api/alpha4 -count=1` | `pass` | Isolated envtest API, schema, validation, immutability, status, and raw-field coverage passed. |
 | 2026-09-07 | same worktree | `make verify-generated` | `pass` | Active alpha2/alpha3 and isolated alpha4 generated artifacts are reproducible. |
@@ -111,3 +114,4 @@ Append one sanitized entry per agent run. Record the slice and milestone, what c
 - 2026-09-07 — Slice 01 completion: isolated the registry discrepancy with an exact same-client nested-image read, synchronized the protected Docker and cluster pull credentials to the working identity, and successfully published all four nested component images. Fixed a real smoke-harness flake by separating successful database stdout from transient `kubectl exec` stderr. `make test-fast` passed, the complete four-spec smoke suite passed, JUnit recorded zero failures, and teardown was verified. Slice 01 (`S01-M1`, `S01-A1`) is `smoke-verified`; resume at incoming group `S01-D02` in Slice 02. No later slice was started.
 - 2026-09-08 — Slice 02 (`S01-D02`, `S02-M1` through `S02-M4`, `S02-A1` through `S02-A3`): reconciled Slice 01 evidence at commit `48aa86ec906dc4df539b903b587443d107e59d6e`; added the Operator-internal default-deny Job-template validator, Kubernetes-1.30 compatibility fixtures, reflection field census, deep-copy and normalization coverage, internal-boundary checks, and Strict/Warn/Ignore raw API admission tests. Focused tests and final `make test-fast` passed. Remaining: `S02-A1` mandatory smoke verification. Blocker: protected registry-auth input was not externally supplied; no cluster mutation occurred. Next: supply that protected input and run the exact redacted smoke command recorded above, then mark Slice 02 `smoke-verified` only if it passes. Slice 03 was not started.
 - 2026-09-08 — Slice 02 smoke continuation: the user supplied the protected registry-auth input and the exact mandatory smoke suite passed against the approved K3s cluster. Four immutable component images published, all four specs and JUnit cases passed, and teardown removed the ephemeral namespace and released the Lease. Slice 02 is `smoke-verified`; resume at `S01-D03` in Slice 03. Persistent shell configuration now points `CBSE_REGISTRY_AUTH_FILE` at the tested secure Docker configuration; a fresh zsh login-shell check passed.
+- 2026-09-09 — Slice 03 (`S03-M1`, `S03-M2`, `S03-A1`, `S01-D03`, `S02-D03`): added the pgx-free `dbendpoint` probe package (resolve→connect→`SELECT 1`→close, no pool, no other SQL), the Operator registry/image/builder-resource validators, the standard Docker-config registry-auth resolver, and the additive alpha4 provisioning reconciler with its own isolated envtest package. The reconciler runs a Pending→Provisioning→InProgress/Error phase machine: it provisions image- and host-form database connection Secrets, image-form database Deployments with exactly one `cbse-registry-auth` pull-Secret and no registry-Secret volume/mount/env, and the two-container rootless BuildKit Translator Deployment, ConfigMap, Service, and runner ServiceAccount. Validation failures move to Error before any component is created; transient probe failures requeue without becoming Error or performing application database work. Focused tests, `make test-fast`, and the mandatory four-spec smoke passed; JUnit reported zero failures and cleanup was verified. The deferred `S03-D07` BuildKit-privileged smoke admission check remains for Slice 07. Slice 03 is `smoke-verified`; resume at `S04-M1` in Slice 04.
