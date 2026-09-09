@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 )
@@ -100,6 +101,53 @@ func addrKind(addr netip.Addr) HostKind {
 	return HostIPv6
 }
 
+// resolutionDeadline is the shared 10-second deadline covering DNS resolution
+// and all candidate connection attempts for a single probe, as required by
+// the alpha4 common endpoint contract.
+const resolutionDeadline = 10 * time.Second
+
+// ResolveAddresses resolves a classified database host to an ordered,
+// de-duplicated list of normalized IP address strings, applying the alpha4
+// common endpoint contract. A literal IPv4 or IPv6 address yields a single
+// normalized address without DNS. A DNS host is resolved anew through the
+// context-aware resolver for both A and AAAA records; results retain resolver
+// order and duplicate normalized addresses are removed by retaining their
+// first occurrence. An empty result or a resolver error is a resolution
+// failure. A nil resolver uses the process default net.Resolver.
+func ResolveAddresses(ctx context.Context, classified Classified, resolver Resolver) ([]string, error) {
+	if classified.Kind != HostDNS {
+		return []string{classified.Normalized}, nil
+	}
+	r := Resolver(resolver)
+	if r == nil {
+		r = defaultResolver{}
+	}
+	addrs, err := r.LookupIPAddr(ctx, classified.Normalized)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database host %q: %w", classified.Normalized, err)
+	}
+	seen := make(map[string]struct{}, len(addrs))
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		if a.IP == nil {
+			continue
+		}
+		s := a.IP.String()
+		if s == "<nil>" {
+			continue
+		}
+		if _, dup := seen[s]; dup {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("database host %q resolved to no addresses", classified.Normalized)
+	}
+	return out, nil
+}
+
 // Resolver resolves a DNS name to IP addresses. A nil Resolver uses the
 // process default net.Resolver.
 type Resolver interface {
@@ -140,10 +188,15 @@ type Endpoint struct {
 // Probe resolves the endpoint, opens a single connection, runs SELECT 1, and
 // closes the connection.
 //
-// It performs exactly one connect, one ping, and one close, performs no other
-// SQL, and retains no pool. A DNS host that resolves to no address, or a
-// resolver error, is a probe failure: the probe does not connect. IP hosts
-// skip DNS resolution and connect directly to the normalized address.
+// It applies the alpha4 common endpoint contract: it classifies the host,
+// resolves a DNS host to an ordered, de-duplicated address list, and tries
+// addresses in order under a shared 10-second resolution-and-connection
+// deadline. The first successful PostgreSQL connection owns the probe;
+// remaining addresses are not contacted. It performs exactly one successful
+// connect, one ping, and one close, performs no other SQL, and retains no
+// pool. A DNS host that resolves to no address, a resolver error, or the
+// exhaustion of every returned address is a probe failure. IP hosts skip DNS
+// and connect directly to the normalized address.
 func Probe(ctx context.Context, ep Endpoint, resolver Resolver, connector Connector) error {
 	if connector == nil {
 		return errors.New("database availability probe requires a connector")
@@ -152,34 +205,35 @@ func Probe(ctx context.Context, ep Endpoint, resolver Resolver, connector Connec
 	if err != nil {
 		return err
 	}
-	host := classified.Normalized
-	if classified.Kind == HostDNS {
-		r := Resolver(resolver)
-		if r == nil {
-			r = defaultResolver{}
-		}
-		addrs, err := r.LookupIPAddr(ctx, host)
-		if err != nil {
-			return fmt.Errorf("resolve database host %q: %w", host, err)
-		}
-		if len(addrs) == 0 {
-			return fmt.Errorf("database host %q resolved to no addresses", host)
-		}
-		// Use the first resolved address; duplicates and alternates are ignored
-		// for an availability-only probe.
-		host = addrs[0].IP.String()
-	}
-	conn, err := connector.Connect(ctx, host, ep.Port, ep.User, ep.Password, ep.DBName)
+	deadlineCtx, cancel := context.WithTimeout(ctx, resolutionDeadline)
+	defer cancel()
+	addresses, err := ResolveAddresses(deadlineCtx, classified, resolver)
 	if err != nil {
-		return fmt.Errorf("connect database %s:%d: %w", host, ep.Port, err)
+		return err
 	}
-	pingErr := conn.Ping(ctx)
-	closeErr := conn.Close(ctx)
+	var conn Conn
+	var connectErr error
+	var connectedHost string
+	for _, host := range addresses {
+		c, err := connector.Connect(deadlineCtx, host, ep.Port, ep.User, ep.Password, ep.DBName)
+		if err != nil {
+			connectErr = err
+			continue
+		}
+		conn = c
+		connectedHost = host
+		break
+	}
+	if conn == nil {
+		return fmt.Errorf("connect database %s:%d: %w", classified.Normalized, ep.Port, connectErr)
+	}
+	pingErr := conn.Ping(deadlineCtx)
+	closeErr := conn.Close(deadlineCtx)
 	if pingErr != nil {
-		return fmt.Errorf("probe database %s:%d: %w", host, ep.Port, pingErr)
+		return fmt.Errorf("probe database %s:%d: %w", connectedHost, ep.Port, pingErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close database probe %s:%d: %w", host, ep.Port, closeErr)
+		return fmt.Errorf("close database probe %s:%d: %w", connectedHost, ep.Port, closeErr)
 	}
 	return nil
 }
