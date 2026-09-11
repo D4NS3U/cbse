@@ -526,14 +526,18 @@ func TestAlpha4HappyPathProvisioning(t *testing.T) {
 	if transSvc.Spec.Selector["app"] != "exp-happy-translator" {
 		t.Fatalf("translator Service selector = %#v", transSvc.Spec.Selector)
 	}
+	// The runner ServiceAccount uses the deterministic simrunner-<12-char-UID-prefix>
+	// name derived from the live experiment UID, matching the Scenario Manager
+	// runner Job contract that references this ServiceAccount by exact name.
+	inst := getExperiment(t, key)
+	saName := controller.RunnerServiceAccountName(inst.UID)
 	sa := &corev1.ServiceAccount{}
-	mustExist(t, sa, "exp-happy-runner")
+	mustExist(t, sa, saName)
 	if sa.AutomountServiceAccountToken == nil || *sa.AutomountServiceAccountToken {
 		t.Fatalf("runner ServiceAccount automount = %#v, want false", sa.AutomountServiceAccountToken)
 	}
 
 	// Experiment status reflects the readiness message.
-	inst := getExperiment(t, key)
 	if inst.Status.Phase != "InProgress" {
 		t.Fatalf("status phase = %q, want InProgress", inst.Status.Phase)
 	}

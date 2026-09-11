@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	kresource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestValidateDigestImage(t *testing.T) {
@@ -297,5 +298,34 @@ func TestValidateDatabaseSpec(t *testing.T) {
 				t.Fatalf("expected reject, got nil")
 			}
 		})
+	}
+}
+
+func TestRunnerServiceAccountNameIsDeterministicUIDPrefix(t *testing.T) {
+	cases := []struct {
+		uid  string
+		want string
+	}{
+		// Hyphens are stripped, the result is lowercased, and only the first 12
+		// characters of the stripped UID form the prefix.
+		{"a1b2c3d4-e5f6-7890-abcd-ef1234567890", "a1b2c3d4e5f6"},
+		{"A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "a1b2c3d4e5f6"},
+		{"12345678901234567890", "123456789012"},
+		{"short", "short"},
+		{"", ""},
+		// The derivation must match the Scenario Manager UIDPrefix rule exactly so
+		// that the Operator-created ServiceAccount name equals the name SM computes
+		// from the same UID for its named get and runner Job serviceAccountName.
+		{"1a2b3c4d-5e6f-7080-90a1-b2c3d4e5f6a7", "1a2b3c4d5e6f"},
+	}
+	for _, c := range cases {
+		if got := RunnerUIDPrefix(types.UID(c.uid)); got != c.want {
+			t.Fatalf("RunnerUIDPrefix(%q) = %q, want %q", c.uid, got, c.want)
+		}
+		if c.want != "" {
+			if got := RunnerServiceAccountName(types.UID(c.uid)); got != "simrunner-"+c.want {
+				t.Fatalf("RunnerServiceAccountName(%q) = %q, want %q", c.uid, got, "simrunner-"+c.want)
+			}
+		}
 	}
 }

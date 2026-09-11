@@ -63,6 +63,25 @@ func RunnerJobName(uid types.UID, scenarioID, attempt int) string {
 	return fmt.Sprintf("simrun-%s-s%d-a%d", messaging.UIDPrefix(string(uid)), scenarioID, attempt)
 }
 
+// RunnerServiceAccountName returns the deterministic runner ServiceAccount name
+// simrunner-<12-char-UID-prefix>. The Operator creates this ServiceAccount from
+// the same live UID; SM resolves it with a get-only RBAC grant and references it
+// by exact name in the runner Job pod template. The derivation mirrors the
+// Experiment Operator's RunnerServiceAccountName so both processes compute the
+// same name from the same UID without a cross-module import.
+func RunnerServiceAccountName(uid types.UID) string {
+	return "simrunner-" + messaging.UIDPrefix(string(uid))
+}
+
+// ControllerOwnerReference returns the exact alpha4 controller owner reference
+// that a runner Job must carry: apiVersion
+// experiment.cbse.terministic.de/alpha4, kind SimulationExperiment, the live
+// experiment name and full UID, controller true, and blockOwnerDeletion false.
+// It is the exported form of ownerReference used by the effective-Job builder.
+func ControllerOwnerReference(exp *experimentalpha4.SimulationExperiment) metav1.OwnerReference {
+	return ownerReference(exp)
+}
+
 // ExperimentIdentity is the (namespace, name, UID) triple used to match an
 // informer event to the current live incarnation. A stale event for an old UID
 // must neither close nor clean a replacement.

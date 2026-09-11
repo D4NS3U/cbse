@@ -121,12 +121,14 @@ func TestBSSLCoreDBIntegration(t *testing.T) {
 		insertBSSLScenario(t, ctx, scenarioTable, 14, pendingProject, ScenarioStateFinished, 0, old, nil)
 		insertBSSLScenario(t, ctx, scenarioTable, 15, pendingProject, ScenarioStateFailed, 0, old, nil)
 
+		// Slice 06 removed StartingRunners from the actionable predicate; the
+		// serial BSL selector now owns only Created and PostProcessing. Row 12
+		// (StartingRunners) is no longer an actionable candidate, so exhausting
+		// the Created/PostProcessing rows yields nil even though row 12 remains.
 		assertNextActionable(t, ctx, 5, ScenarioStatePostProcessing)
 		setBSSLState(t, ctx, scenarioTable, 5, ScenarioStateFinished)
 		assertNextActionable(t, ctx, 9, ScenarioStateCreated)
 		setBSSLState(t, ctx, scenarioTable, 9, ScenarioStateFinished)
-		assertNextActionable(t, ctx, 12, ScenarioStateStartingRunners)
-		setBSSLState(t, ctx, scenarioTable, 12, ScenarioStateInProcessing)
 
 		candidate, err := NextActionableScenario(ctx)
 		if err != nil {
@@ -412,9 +414,11 @@ func TestBSSLCoreDBIntegration(t *testing.T) {
 		actionable := definitions["scenario_status_actionable_id_idx"]
 		if !strings.Contains(actionable, "(id)") ||
 			!strings.Contains(actionable, ScenarioStateCreated) ||
-			!strings.Contains(actionable, ScenarioStateStartingRunners) ||
 			!strings.Contains(actionable, ScenarioStatePostProcessing) {
 			t.Fatalf("unexpected actionable index definition: %q", actionable)
+		}
+		if strings.Contains(actionable, ScenarioStateStartingRunners) {
+			t.Fatalf("actionable index must exclude StartingRunners after Slice 06: %q", actionable)
 		}
 		recovery := definitions["scenario_status_unpublished_translation_id_idx"]
 		if !strings.Contains(recovery, "(id)") ||

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -510,9 +512,13 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 
 // reconcileRunnerServiceAccount reconciles the deterministic runner
 // ServiceAccount. It grants no workload permissions and disables service
-// account token automount.
+// account token automount. The ServiceAccount name is the deterministic
+// simrunner-<12-char-UID-prefix> form required by the Scenario Manager runner
+// Job contract: SM references this ServiceAccount by exact name in the runner
+// Job pod template and resolves it with a get-only RBAC grant, so the Operator
+// must produce the deterministic name that SM computes from the same UID.
 func (r *Alpha4SimulationExperimentReconciler) reconcileRunnerServiceAccount(ctx context.Context, instance *experimentalpha4.SimulationExperiment) error {
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1ObjectName(instance, instance.Name+"-runner")}
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1ObjectName(instance, RunnerServiceAccountName(instance.UID))}
 	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, sa, func() error {
 		if err := controllerutil.SetControllerReference(instance, sa, r.Scheme); err != nil {
 			return err
@@ -665,8 +671,34 @@ func metav1ObjectName(instance *experimentalpha4.SimulationExperiment, name stri
 	return metav1.ObjectMeta{Name: name, Namespace: instance.Namespace}
 }
 
+// runnerServiceAccountName returns the deterministic runner ServiceAccount
+// name simrunner-<12-char-UID-prefix>, where the prefix is derived from the
+// live experiment UID by lowercasing, stripping hyphens, and keeping the first
+// 12 characters. This mirrors the UIDPrefix derivation in the Scenario Manager
+// (scenario-manager/internal/alpha4/messaging) so both modules independently
+// produce the same fixed contract name without a cross-module dependency. The
+// derivation is duplicated by contract: the experiment-operator is a separate
+// Go module and must not import the Scenario Manager internal package.
+
 func metav1Selector(labels map[string]string) *metav1.LabelSelector {
 	return &metav1.LabelSelector{MatchLabels: labels}
+}
+
+// RunnerUIDPrefix derives the 12-character UID prefix from a full experiment
+// UID by lowercasing, stripping hyphens, and keeping at most the first 12
+// characters. It is the local replica of the Scenario Manager UIDPrefix rule.
+func RunnerUIDPrefix(uid types.UID) string {
+	stripped := strings.ToLower(strings.ReplaceAll(string(uid), "-", ""))
+	if len(stripped) > 12 {
+		stripped = stripped[:12]
+	}
+	return stripped
+}
+
+// RunnerServiceAccountName returns the deterministic runner ServiceAccount
+// name for the given experiment UID.
+func RunnerServiceAccountName(uid types.UID) string {
+	return "simrunner-" + RunnerUIDPrefix(uid)
 }
 
 // int64Ptr and boolPtr are small helpers for security-context fields.

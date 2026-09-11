@@ -17,7 +17,15 @@ const (
 	// candidate queries match the partial indexes created in schema.go. Turning
 	// the state names into query parameters can prevent that match when the
 	// database chooses a generic prepared-query plan.
-	actionableScenarioPredicate     = `state IN ('Created', 'StartingRunners', 'PostProcessing')`
+	//
+	// Slice 06 separates runner-start work from the serial BSL selector:
+	// StartingRunners is no longer an actionable state here and is instead owned
+	// by the bounded ordered runner-start scheduler (alpha4). The serial BSL
+	// selector continues to own only Created and PostProcessing, retaining the
+	// ascending-positive-ID FIFO ordering. The legacy handleStartingRunners path
+	// in the selector is retained as defensive dead code until the Slice 07
+	// cutover wires the alpha4 scheduler.
+	actionableScenarioPredicate     = `state IN ('Created', 'PostProcessing')`
 	unpublishedTranslationPredicate = `state = 'Scheduled' AND translation_request_published_at IS NULL`
 
 	// DefaultScenarioState is assigned by Scenario Manager when EDS payloads
