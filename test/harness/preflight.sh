@@ -107,11 +107,9 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     exit 2
   }
   # A smoke build builds the component set requested via CBSE_IMAGE_COMPONENTS
-  # (defaulting to the alpha3 mock set). The alpha4 reference build (real
-  # Translator, runner base, and Detail Database) is selected by passing the
-  # six-component set explicitly; it is validated and exercised by the harness
-  # self-tests and becomes the default when the manifests and smoke switch to
-  # alpha4 together.
+  # (defaulting to the alpha4 reference set: real Translator, runner base, and
+  # Detail Database). The alpha4 reference build is the default; the harness
+  # self-tests validate the full six-component set.
 else
   for variable in OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE; do
     value="${!variable:-}"
@@ -120,13 +118,11 @@ else
       exit 2
     }
   done
-  # The alpha4 reference outputs (runner base and Detail Database) are not yet
-  # required by the active smoke path; when they are supplied they must still be
-  # immutable digest references. They become required when the smoke switches to
-  # alpha4 together with the manifests and build default.
+  # The alpha4 reference outputs (runner base and Detail Database) are required
+  # by the alpha4 smoke path; they must be immutable digest references.
   for variable in RUNNER_BASE_IMAGE DETAIL_DB_IMAGE; do
     value="${!variable:-}"
-    [[ -z "${value}" || "${value}" == *@sha256:* ]] || {
+    [[ "${value}" == *@sha256:* ]] || {
       echo "${variable} must be an immutable digest reference when SKIP_BUILD=1" >&2
       exit 2
     }

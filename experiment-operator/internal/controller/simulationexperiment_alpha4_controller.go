@@ -55,15 +55,29 @@ const alpha4RequeueAfter = 5 * time.Second
 // Operator-side errors: a lowercase DNS label of 1 to 63 characters.
 var alpha4ExperimentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
+// RBAC markers for the alpha4 reconciler. They generate the operator's
+// manager-role ClusterRole and cover every resource the reconciler creates,
+// updates, watches, and finalizes: the alpha4 SimulationExperiment and its
+// status/finalizers, the image-based database and Translator Deployments and
+// Services, the database connection and registry-auth Secrets, the Translator
+// ConfigMap, and the deterministic runner ServiceAccount.
+// +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=services;secrets;configmaps;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services/finalizers;secrets/finalizers;configmaps/finalizers;serviceaccounts/finalizers,verbs=update
+
 // Alpha4SimulationExperimentReconciler reconciles an alpha4 SimulationExperiment
 // by validating its configuration and provisioning the immutable runtime
 // components: image- and host-based database connection Secrets, image-based
 // database Deployments with exactly one cbse-registry-auth pull-Secret, the
 // two-container rootless BuildKit Translator Deployment and Service, the
-// mock-style Translator ConfigMap, and the runner ServiceAccount.
+// Translator ConfigMap, and the deterministic runner ServiceAccount.
 //
-// This reconciler is additive and isolated until the alpha4 cutover in a later
-// slice: it does not replace the active alpha3 reconciler wiring.
+// After the alpha4 cutover this is the only registered reconciler; alpha2 and
+// alpha3 are not served or reconciled.
 type Alpha4SimulationExperimentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -675,7 +689,7 @@ func metav1ObjectName(instance *experimentalpha4.SimulationExperiment, name stri
 // name simrunner-<12-char-UID-prefix>, where the prefix is derived from the
 // live experiment UID by lowercasing, stripping hyphens, and keeping the first
 // 12 characters. This mirrors the UIDPrefix derivation in the Scenario Manager
-// (scenario-manager/internal/alpha4/messaging) so both modules independently
+// (scenario-manager/internal/nats) so both modules independently
 // produce the same fixed contract name without a cross-module dependency. The
 // derivation is duplicated by contract: the experiment-operator is a separate
 // Go module and must not import the Scenario Manager internal package.

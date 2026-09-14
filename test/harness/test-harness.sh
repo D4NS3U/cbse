@@ -59,10 +59,10 @@ common=(
 # Preflight must pass against a qualifying cluster.
 env "${common[@]}" "${root}/test/harness/preflight.sh" >/dev/null
 
-# Preflight must also pass with only the four alpha3 skip-build images; the
-# alpha4 reference outputs (runner base and Detail Database) are optional until
-# the smoke switches to alpha4 together with the manifests and build default.
-alpha3_common=(
+# Preflight must reject a partial skip-build set: the alpha4 smoke requires all
+# six images (operator, sm, eds, translator, runner base, and Detail Database).
+# partial_common omits RUNNER_BASE_IMAGE and DETAIL_DB_IMAGE, so preflight must fail.
+partial_common=(
   KUBECTL="${tmp}/kubectl"
   KUBECONFIG="${tmp}/kubeconfig"
   SKIP_BUILD=1
@@ -73,15 +73,17 @@ alpha3_common=(
   TRANS_IMAGE=registry.example.test/trans@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json"
 )
-env "${alpha3_common[@]}" "${root}/test/harness/preflight.sh" >/dev/null
+if env "${partial_common[@]}" "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a partial skip-build image set missing the alpha4 outputs" >&2; exit 1
+fi
 # When an alpha4 output image is supplied it must still be an immutable digest.
-if env "${alpha3_common[@]}" RUNNER_BASE_IMAGE=registry.example.test/runner-base:latest "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+if env "${common[@]}" RUNNER_BASE_IMAGE=registry.example.test/runner-base:latest "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted a mutable alpha4 output image" >&2; exit 1
 fi
 
 # Repository-structure invariants.
 grep -Fqx 'CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test' "${root}/Makefile"
-grep -Fqx 'CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,trans-mock' "${root}/Makefile"
+grep -Fqx 'CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database' "${root}/Makefile"
 grep -Fqx '  local canonical="${registry}:${name}.test.${version}"' "${root}/test/harness/build-images.sh"
 grep -Fqx '  local immutable="${registry}:${name}.test.${immutable_suffix}"' "${root}/test/harness/build-images.sh"
 grep -Fqx '  local repository="${registry}/${name}"' "${root}/test/harness/build-images.sh"
@@ -161,25 +163,26 @@ grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64
 grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 
-# build-images.sh default (alpha3): builds the synthetic translator mock, not
-# the real Translator, runner base, or Detail Database, so the active smoke
-# path stays consistent with the alpha3 manifests until the alpha4 cutover
-# switches the build default, manifests, and smoke together.
+# build-images.sh default (alpha4): the cutover build default is the real
+# translator 6-component set, so the default build produces the real Translator
+# and runner base, and the reference Detail Database, not the synthetic
+# translator mock.
 PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
-  FAKE_DOCKER_LOG="${tmp}/docker-tags-alpha3.txt" \
+  FAKE_DOCKER_LOG="${tmp}/docker-tags-default.txt" \
   CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test \
-  TEST_IMAGE_VERSION=26.9.7 RUN_ID=alpha3-default \
+  TEST_IMAGE_VERSION=26.9.7 RUN_ID=alpha4-default \
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json" \
-  CBSE_IMAGE_ARTIFACT_DIR="${tmp}/build-artifacts-alpha3" \
+  CBSE_IMAGE_ARTIFACT_DIR="${tmp}/build-artifacts-default" \
   "${root}/test/harness/build-images.sh" >/dev/null
-grep -Fqx "registry.unibw.de/i31bdase/cbse-test:trans-mock.test.26.9.7" "${tmp}/docker-tags-alpha3.txt"
-grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-alpha3/images.env"
-grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-alpha3/images.env"
-if grep -Fq 'scenario-detail-database' "${tmp}/docker-tags-alpha3.txt"; then
-  echo "alpha3 default build produced the Detail Database image" >&2; exit 1
-fi
-if grep -Eq 'translator\.test\.' "${tmp}/docker-tags-alpha3.txt"; then
-  echo "alpha3 default build produced the real Translator image" >&2; exit 1
+grep -Fqx "registry.unibw.de/i31bdase/cbse-test:translator.test.26.9.7" "${tmp}/docker-tags-default.txt"
+grep -Fqx "registry.unibw.de/i31bdase/cbse-test:runner-base.test.26.9.7" "${tmp}/docker-tags-default.txt"
+grep -Fqx "registry.unibw.de/i31bdase/cbse-test/scenario-detail-database:26.9.7" "${tmp}/docker-tags-default.txt"
+grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+if grep -Fq 'trans-mock' "${tmp}/docker-tags-default.txt"; then
+  echo "alpha4 default build produced the synthetic translator mock" >&2; exit 1
 fi
 
 # build-images.sh must reject unknown, empty, and duplicate component tokens

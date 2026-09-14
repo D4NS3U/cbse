@@ -99,21 +99,31 @@ imagePullSecrets:
   - name: cbse-registry-auth
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: scenario-manager
 rules:
   - apiGroups: ["experiment.cbse.terministic.de"]
-    resources: ["simulationexperiments", "simulationexperiments/status"]
-    verbs: ["get", "list", "watch"]
+    resources: ["simulationexperiments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["cbse-registry-auth"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: scenario-manager
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: scenario-manager
 subjects:
   - kind: ServiceAccount
@@ -131,15 +141,7 @@ data:
   SCENARIO_MANAGER_NATS_URL: nats://sm-eds-nats:4222
   SCENARIO_MANAGER_NATS_USER: ""
   SCENARIO_MANAGER_NATS_PASSWORD: ""
-  SCENARIO_MANAGER_EDS_AVAILABLE_SUBJECT: cbse.eds.scenarios.available
-  SCENARIO_MANAGER_EDS_BATCH_SUBJECT_TEMPLATE: cbse.{project}.eds.scenarios
-  SCENARIO_MANAGER_EDS_QUEUE_GROUP: scenario-manager-eds
-  SCENARIO_MANAGER_EDS_MAX_BATCH: "1000"
-  SCENARIO_MANAGER_EDS_STREAM: cbse_eds_scenarios
-  SCENARIO_MANAGER_EDS_CONSUMER: scenario-manager-eds-consumer
-  SCENARIO_MANAGER_EDS_ACK_WAIT: 2m
-  SCENARIO_MANAGER_EDS_MAX_ACK_PENDING: "1024"
-  SCENARIO_MANAGER_SELECTOR_ENABLED: "false"
+  SCENARIO_MANAGER_RUNNER_START_WORKERS: "4"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -361,3 +363,54 @@ spec:
     - name: monitor
       port: 8222
       targetPort: monitor
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eds-mock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: eds-mock
+  template:
+    metadata:
+      labels:
+        app: eds-mock
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: eds-mock
+          image: CBSE_EDS_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NATS_URL
+              value: nats://sm-eds-nats:4222
+            - name: AVAILABILITY_SUBJECT
+              value: cbse.CBSE_NAMESPACE.CBSE_PROJECT.eds.scenarios.available
+            - name: PROJECT_NAME
+              value: CBSE_PROJECT
+            - name: TOTAL_BATCHES
+              value: "2"
+            - name: SCENARIOS_PER_BATCH
+              value: "2"
+            - name: EDS_KEEP_ALIVE
+              value: "true"
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
+	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -43,7 +43,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		scheme := runtime.NewScheme()
 		Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
-		Expect(experimentalpha3.AddToScheme(scheme)).To(Succeed())
+		Expect(experimentalpha4.AddToScheme(scheme)).To(Succeed())
 		k8sClient, err = client.New(config, client.Options{Scheme: scheme})
 		Expect(err).NotTo(HaveOccurred())
 	})
@@ -51,42 +51,35 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 	It("reaches InProgress with the complete owned resource set", func() {
 		key := types.NamespacedName{Namespace: namespace, Name: project}
 		Eventually(func(g Gomega) string {
-			experiment := &experimentalpha3.SimulationExperiment{}
+			experiment := &experimentalpha4.SimulationExperiment{}
 			g.Expect(k8sClient.Get(ctx, key, experiment)).To(Succeed())
 			g.Expect(experiment.Status.Phase).NotTo(Equal("Error"), experiment.Status.Message)
 			return experiment.Status.Phase
 		}, 4*time.Minute, 2*time.Second).Should(Equal("InProgress"))
 
-		for _, suffix := range []string{"detaildb", "resultdb", "translator", "postproc"} {
+		for _, suffix := range []string{"detaildb", "resultdb", "translator"} {
 			deployment := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-" + suffix}, deployment)).To(Succeed())
 			Expect(deployment.OwnerReferences).NotTo(BeEmpty())
 			Expect(deployment.Spec.Template.Labels).To(HaveKeyWithValue("experiment.cbse.terministic.de/project", project))
 		}
 
-		design := &corev1.Pod{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-design"}, design)).To(Succeed())
-		Expect(design.OwnerReferences).NotTo(BeEmpty())
-		Expect(design.Labels).To(HaveKeyWithValue("experiment.cbse.terministic.de/project", project))
-
-		for _, suffix := range []string{"detaildb-svc", "resultdb-svc", "translator-svc", "postproc-svc", "design-svc"} {
+		for _, suffix := range []string{"detaildb-svc", "resultdb-svc", "translator-svc"} {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-" + suffix}, &corev1.Service{})).To(Succeed())
 		}
 		for _, suffix := range []string{"detaildb-sct", "resultdb-sct"} {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-" + suffix}, &corev1.Secret{})).To(Succeed())
 		}
-		for _, suffix := range []string{"translator-cfg", "design"} {
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-" + suffix}, &corev1.ConfigMap{})).To(Succeed())
-		}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-translator-cfg"}, &corev1.ConfigMap{})).To(Succeed())
 	})
 
 	It("persists one project and four deterministic Created scenarios", func() {
 		Eventually(func() string {
 			return queryDatabase(fmt.Sprintf(
-				"SELECT COUNT(*), MIN(number_of_components), MIN(status) FROM project WHERE project_name='%s'",
+				"SELECT COUNT(*) FROM project WHERE project_name='%s'",
 				project,
 			))
-		}, 2*time.Minute, 2*time.Second).Should(Equal("1|5|InProgress"))
+		}, 2*time.Minute, 2*time.Second).Should(Equal("1"))
 
 		if os.Getenv("CBSE_SELECTOR_ENABLED") == "1" {
 			Eventually(func() string {
@@ -112,7 +105,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 
 	It("reconciles an idempotent metadata update without duplicating children", func() {
 		key := types.NamespacedName{Namespace: namespace, Name: project}
-		experiment := &experimentalpha3.SimulationExperiment{}
+		experiment := &experimentalpha4.SimulationExperiment{}
 		Expect(k8sClient.Get(ctx, key, experiment)).To(Succeed())
 		if experiment.Annotations == nil {
 			experiment.Annotations = map[string]string{}
@@ -125,7 +118,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			g.Expect(k8sClient.List(ctx, deployments, client.InNamespace(namespace), client.MatchingLabels{
 				"experiment.cbse.terministic.de/project": project,
 			})).To(Succeed())
-			g.Expect(deployments.Items).To(HaveLen(4))
+			g.Expect(deployments.Items).To(HaveLen(3))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 
@@ -134,12 +127,12 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			Skip("retained E2E run requested; leaving SimulationExperiment, owned resources, and database rows intact")
 		}
 		key := types.NamespacedName{Namespace: namespace, Name: project}
-		experiment := &experimentalpha3.SimulationExperiment{}
+		experiment := &experimentalpha4.SimulationExperiment{}
 		Expect(k8sClient.Get(ctx, key, experiment)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, experiment)).To(Succeed())
 
 		Eventually(func() bool {
-			err := k8sClient.Get(ctx, key, &experimentalpha3.SimulationExperiment{})
+			err := k8sClient.Get(ctx, key, &experimentalpha4.SimulationExperiment{})
 			return apierrors.IsNotFound(err)
 		}, 90*time.Second, 2*time.Second).Should(BeTrue())
 

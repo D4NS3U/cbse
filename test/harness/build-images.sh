@@ -7,7 +7,7 @@ version="${TEST_IMAGE_VERSION:-26.7.16}"
 run_id="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 3)}"
 artifact_dir="${CBSE_IMAGE_ARTIFACT_DIR:-${root}/artifacts/test-images/${version}/${run_id}}"
 auth_file="${CBSE_REGISTRY_AUTH_FILE:-}"
-components="${CBSE_IMAGE_COMPONENTS:-exop,sm,eds-mock,trans-mock}"
+components="${CBSE_IMAGE_COMPONENTS:-exop,sm,eds-mock,translator,runner-base,scenario-detail-database}"
 lock_file="${root}/test/e2e/images.lock.env"
 
 [[ "${registry}" != */ ]] || registry="${registry%/}"

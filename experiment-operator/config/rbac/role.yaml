@@ -9,6 +9,7 @@ rules:
   resources:
   - configmaps
   - secrets
+  - serviceaccounts
   - services
   verbs:
   - create
@@ -23,6 +24,7 @@ rules:
   resources:
   - configmaps/finalizers
   - secrets/finalizers
+  - serviceaccounts/finalizers
   - services/finalizers
   verbs:
   - update

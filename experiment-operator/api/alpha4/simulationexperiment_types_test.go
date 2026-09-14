@@ -71,7 +71,7 @@ func TestMain(m *testing.M) {
 	}
 
 	testEnvironment = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "alpha4", "bases")},
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
 	}
 	if assets := localEnvtestAssets(); assets != "" {
@@ -134,7 +134,7 @@ func TestMain(m *testing.M) {
 func TestAlpha4CRDIsIsolatedAndStructural(t *testing.T) {
 	crd := loadAlpha4CRD(t)
 	if len(crd.Spec.Versions) != 1 {
-		t.Fatalf("isolated CRD has %d versions, want exactly alpha4", len(crd.Spec.Versions))
+		t.Fatalf("active CRD has %d versions, want exactly alpha4", len(crd.Spec.Versions))
 	}
 	version := crd.Spec.Versions[0]
 	if version.Name != "alpha4" || !version.Served || !version.Storage {
@@ -652,7 +652,7 @@ func simulationExperimentGVR() schema.GroupVersionResource {
 
 func loadAlpha4CRD(t *testing.T) *extensionsv1.CustomResourceDefinition {
 	t.Helper()
-	contents, err := os.ReadFile(filepath.Join("..", "..", "config", "crd", "alpha4", "bases", "experiment.cbse.terministic.de_simulationexperiments.yaml"))
+	contents, err := os.ReadFile(filepath.Join("..", "..", "config", "crd", "bases", "experiment.cbse.terministic.de_simulationexperiments.yaml"))
 	if err != nil {
 		t.Fatalf("read isolated alpha4 CRD: %v", err)
 	}

@@ -10,7 +10,7 @@ KUBECTL ?= $(ROOT)/bin/kubectl-$(KUBECTL_VERSION)
 RUN_ID ?=
 CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test
 TEST_IMAGE_VERSION ?= 26.7.16
-CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,trans-mock
+CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database
 
 .PHONY: help test-fast test-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools verify-generated
 

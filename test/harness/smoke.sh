@@ -71,6 +71,13 @@ trap 'exit 130' INT TERM
 
 KUBECTL="${kubectl_bin}" KUBECONFIG="${kubeconfig}" "${root}/test/harness/preflight.sh" | tee "${artifact_dir}/preflight.txt"
 
+# Load the checked-in source-image lock so the locked BUILDER_IMAGE and
+# POSTGRES_IMAGE are available for rendering the alpha4 smoke experiment
+# (spec.translator.builderImage and spec.resultDatabase.image). The lock is
+# validated by preflight and by load_image_lock; it has no environment override.
+source "${root}/test/harness/image-lock.sh"
+load_image_lock "${root}/test/e2e/images.lock.env"
+
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" create namespace cbse-test-system --dry-run=client -o yaml \
   | "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -f - >/dev/null
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" label namespace cbse-test-system \
@@ -92,17 +99,26 @@ else
   SM_IMAGE="${SM_IMAGE}"
   EDS_IMAGE="${EDS_IMAGE}"
   TRANS_IMAGE="${TRANS_IMAGE}"
+  RUNNER_BASE_IMAGE="${RUNNER_BASE_IMAGE}"
+  DETAIL_DB_IMAGE="${DETAIL_DB_IMAGE}"
 fi
-export OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE
-printf 'OPERATOR_IMAGE=%s\nSM_IMAGE=%s\nEDS_IMAGE=%s\nTRANS_IMAGE=%s\n' \
-  "${OPERATOR_IMAGE}" "${SM_IMAGE}" "${EDS_IMAGE}" "${TRANS_IMAGE}" >"${artifact_dir}/images.env"
+export OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE RUNNER_BASE_IMAGE DETAIL_DB_IMAGE
+printf 'OPERATOR_IMAGE=%s\nSM_IMAGE=%s\nEDS_IMAGE=%s\nTRANS_IMAGE=%s\nRUNNER_BASE_IMAGE=%s\nDETAIL_DB_IMAGE=%s\n' \
+  "${OPERATOR_IMAGE}" "${SM_IMAGE}" "${EDS_IMAGE}" "${TRANS_IMAGE}" \
+  "${RUNNER_BASE_IMAGE}" "${DETAIL_DB_IMAGE}" >"${artifact_dir}/images.env"
 
 crd="${root}/experiment-operator/config/crd/bases/experiment.cbse.terministic.de_simulationexperiments.yaml"
 crd_name="simulationexperiments.experiment.cbse.terministic.de"
 if "${kubectl_bin}" --kubeconfig "${kubeconfig}" get crd "${crd_name}" >/dev/null 2>&1; then
   owner="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get crd "${crd_name}" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/part-of}')"
   storage="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get crd "${crd_name}" -o jsonpath='{.spec.versions[?(@.storage==true)].name}')"
-  [[ "${storage}" == "alpha3" ]] || { echo "Existing CRD storage version is ${storage}, expected alpha3" >&2; exit 4; }
+  [[ "${storage}" == "alpha4" ]] || { echo "Existing CRD storage version is ${storage}, expected alpha4" >&2; exit 4; }
+  # Reject any served alpha2/alpha3: the alpha4 cutover serves and stores only
+  # alpha4, with no conversion webhook or compatibility mode.
+  served_versions="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get crd "${crd_name}" -o jsonpath='{.spec.versions[*].name}')"
+  for v in ${served_versions}; do
+    [[ "${v}" == "alpha4" ]] || { echo "Existing CRD serves ${v}; only alpha4 may be served" >&2; exit 4; }
+  done
   if [[ "${owner}" != "cbse" && "${CBSE_ALLOW_CRD_UPGRADE:-0}" != "1" ]]; then
     echo "Existing CRD is not pipeline-managed; set CBSE_ALLOW_CRD_UPGRADE=1 after reviewing the diff" >&2
     exit 4
@@ -138,11 +154,12 @@ sed \
   -e "s|CBSE_RUN_ID|${run_id}|g" \
   -e "s|CBSE_OPERATOR_IMAGE|${OPERATOR_IMAGE}|g" \
   -e "s|CBSE_SM_IMAGE|${SM_IMAGE}|g" \
-  -e "s|SCENARIO_MANAGER_SELECTOR_ENABLED: \"false\"|SCENARIO_MANAGER_SELECTOR_ENABLED: \"${CBSE_SELECTOR_ENABLED:-false}\"|g" \
+  -e "s|CBSE_EDS_IMAGE|${EDS_IMAGE}|g" \
+  -e "s|CBSE_PROJECT|${project}|g" \
   "${tmp}/stack.raw.yaml" >"${artifact_dir}/stack.yaml"
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -n "${namespace}" -f "${artifact_dir}/stack.yaml" >/dev/null
 
-for deployment in core-db sm-eds-nats experiment-operator scenario-manager; do
+for deployment in core-db sm-eds-nats eds-mock experiment-operator scenario-manager; do
   "${kubectl_bin}" --kubeconfig "${kubeconfig}" rollout status deployment/"${deployment}" -n "${namespace}" --timeout=240s
 done
 
@@ -162,6 +179,11 @@ sed \
   -e "s|CBSE_RUN_ID|${run_id}|g" \
   -e "s|CBSE_SUPPORT_IMAGE|${EDS_IMAGE}|g" \
   -e "s|CBSE_TRANS_IMAGE|${TRANS_IMAGE}|g" \
+  -e "s|CBSE_BUILDER_IMAGE|${BUILDER_IMAGE}|g" \
+  -e "s|CBSE_RUNNER_BASE_IMAGE|${RUNNER_BASE_IMAGE}|g" \
+  -e "s|CBSE_RUNNER_REPOSITORY|${CBSE_RUNNER_REPOSITORY:-registry.unibw.de/i31bdase/cbse-test-runner}|g" \
+  -e "s|CBSE_DETAIL_DB_IMAGE|${DETAIL_DB_IMAGE}|g" \
+  -e "s|CBSE_POSTGRES_IMAGE|${POSTGRES_IMAGE}|g" \
   "${root}/test/e2e/manifests/experiment.yaml" >"${artifact_dir}/experiment.yaml"
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -f "${artifact_dir}/experiment.yaml" >/dev/null
 

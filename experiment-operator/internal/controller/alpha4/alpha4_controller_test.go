@@ -68,7 +68,7 @@ func TestMain(m *testing.M) {
 	alpha4Scheme = s
 
 	alpha4Env = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "config", "crd", "alpha4", "bases")},
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
 	}
 	if assets := localEnvtestAssets(); assets != "" {
