@@ -1,7 +1,25 @@
-go 1.24.0
+go 1.26.3
 
 use (
+	./component-templates/translator
 	./experiment-operator
 	./scenario-manager
 	./test/e2e
+)
+
+// The translator's transitive dependencies (containerd/containerd/v2, pulled by
+// moby/buildkit) require k8s.io/{api,apimachinery,client-go} v0.36.3. In workspace
+// mode MVS selects the maximum across all members, which would bump the
+// operator and scenario-manager from their required v0.33.0 (pinned by
+// sigs.k8s.io/controller-runtime v0.21.0) and break controller-runtime. The
+// translator does not import any k8s.io package, so pinning the suite to v0.33.0
+// workspace-wide is safe for the translator and keeps controller-runtime whole.
+replace (
+	k8s.io/api => k8s.io/api v0.33.0
+	k8s.io/apimachinery => k8s.io/apimachinery v0.33.0
+	k8s.io/client-go => k8s.io/client-go v0.33.0
+	k8s.io/component-base => k8s.io/component-base v0.33.0
+	k8s.io/klog/v2 => k8s.io/klog/v2 v2.130.1
+	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20250318190949-c8a335a9a2ff
+	k8s.io/utils => k8s.io/utils v0.0.0-20241104100929-3ea5e8cea738
 )

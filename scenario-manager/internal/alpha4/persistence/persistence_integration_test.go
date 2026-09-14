@@ -290,3 +290,122 @@ func scenarioAttempts(t *testing.T, ctx context.Context, db DB, id int) int {
 	}
 	return a
 }
+
+func scenarioContainerImage(t *testing.T, ctx context.Context, db DB, id int) string {
+	t.Helper()
+	var image sql.NullString
+	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT container_image FROM %s WHERE id = $1`, ScenarioStatusTable()), id).Scan(&image); err != nil {
+		t.Fatalf("select container_image: %v", err)
+	}
+	return image.String
+}
+
+func TestInsertScenarioBatch(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	if err := EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	records := []ScenarioIntakeRecord{
+		{Priority: 5, NumberOfReps: 2, RecipeInfo: json.RawMessage(`{"k":"v"}`)},
+		{Priority: 1, NumberOfReps: 4}, // nil recipe_info and nil confidence_metric
+	}
+	inserted, err := InsertScenarioBatch(ctx, db, "default", "batch", records)
+	if err != nil || inserted != 2 {
+		t.Fatalf("InsertScenarioBatch: inserted=%d err=%v", inserted, err)
+	}
+
+	pid, err := ProjectIDByNamespaceAndName(ctx, db, "default", "batch")
+	if err != nil {
+		t.Fatalf("lookup project: %v", err)
+	}
+	if pid <= 0 {
+		t.Fatalf("project id = %d; want positive", pid)
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE project_id = $1`, ScenarioStatusTable()), pid).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("row count = %d; want 2", count)
+	}
+
+	var state string
+	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT state FROM %s WHERE project_id = $1 ORDER BY id LIMIT 1`, ScenarioStatusTable()), pid).Scan(&state); err != nil {
+		t.Fatalf("select state: %v", err)
+	}
+	if state != ScenarioStateCreated {
+		t.Fatalf("state = %q; want Created", state)
+	}
+
+	// Idempotent project registration: a second batch reuses the same project id.
+	inserted2, err := InsertScenarioBatch(ctx, db, "default", "batch", []ScenarioIntakeRecord{{Priority: 0, NumberOfReps: 1}})
+	if err != nil || inserted2 != 1 {
+		t.Fatalf("second InsertScenarioBatch: inserted=%d err=%v", inserted2, err)
+	}
+	pid2, _ := ProjectIDByNamespaceAndName(ctx, db, "default", "batch")
+	if pid2 != pid {
+		t.Fatalf("project id changed: %d -> %d", pid, pid2)
+	}
+}
+
+func TestMarkScenarioStartingRunners(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	if err := EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	pid, _ := RegisterProject(ctx, db, "default", "ready")
+	sID, _ := insertScenario(ctx, db, pid, ScenarioStateCreated, `null`)
+
+	// Drive the scenario through Created -> Scheduled -> published, the only
+	// eligible path into StartingRunners.
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), sID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := MarkTranslationPublishStarted(ctx, db, sID, 1); err != nil {
+		t.Fatalf("publish started: %v", err)
+	}
+	if _, err := MarkScenarioTranslationRequestPublished(ctx, db, sID, 1); err != nil {
+		t.Fatalf("published: %v", err)
+	}
+
+	ok, err := MarkScenarioStartingRunners(ctx, db, sID, "registry.example.com/runner@sha256:abc")
+	if err != nil || !ok {
+		t.Fatalf("MarkScenarioStartingRunners: ok=%v err=%v", ok, err)
+	}
+	if state := scenarioState(t, ctx, db, sID); state != ScenarioStateStartingRunners {
+		t.Fatalf("state = %q; want StartingRunners", state)
+	}
+	if got := scenarioContainerImage(t, ctx, db, sID); got != "registry.example.com/runner@sha256:abc" {
+		t.Fatalf("container_image = %q; want the digest", got)
+	}
+
+	// A second ready for the same scenario is a stale no-op: the row is no
+	// longer Scheduled, so the transition is a handled false.
+	ok2, err := MarkScenarioStartingRunners(ctx, db, sID, "registry.example.com/runner@sha256:def")
+	if err != nil || ok2 {
+		t.Fatalf("second MarkScenarioStartingRunners: ok=%v err=%v; want false nil", ok2, err)
+	}
+	if got := scenarioContainerImage(t, ctx, db, sID); got != "registry.example.com/runner@sha256:abc" {
+		t.Fatalf("container_image changed on stale ready: %q", got)
+	}
+
+	// A Scheduled-but-unpublished scenario is NOT eligible: the ready handler
+	// must not advance a scenario whose request was not durably accepted.
+	sUnpub, _ := insertScenario(ctx, db, pid, ScenarioStateCreated, `null`)
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), sUnpub); err != nil {
+		t.Fatalf("claim unpub: %v", err)
+	}
+	// Intentionally do NOT call MarkScenarioTranslationRequestPublished.
+	ok3, err := MarkScenarioStartingRunners(ctx, db, sUnpub, "registry.example.com/runner@sha256:xyz")
+	if err != nil || ok3 {
+		t.Fatalf("unpublished MarkScenarioStartingRunners: ok=%v err=%v; want false nil", ok3, err)
+	}
+	if state := scenarioState(t, ctx, db, sUnpub); state != ScenarioStateScheduled {
+		t.Fatalf("unpublished state = %q; want Scheduled", state)
+	}
+}
