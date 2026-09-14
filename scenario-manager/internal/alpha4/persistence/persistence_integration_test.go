@@ -409,3 +409,181 @@ func TestMarkScenarioStartingRunners(t *testing.T) {
 		t.Fatalf("unpublished state = %q; want Scheduled", state)
 	}
 }
+
+func TestNextCreatedScenarioForTranslationDiscovery(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	if err := EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	pid, _ := RegisterProject(ctx, db, "default", "discovery")
+	// Two Created scenarios; discovery returns the lowest id.
+	sLow, _ := insertScenario(ctx, db, pid, ScenarioStateCreated, `null`)
+	sHigh, _ := insertScenario(ctx, db, pid, ScenarioStateCreated, `null`)
+	if sLow >= sHigh {
+		t.Fatalf("expected sLow < sHigh; got %d, %d", sLow, sHigh)
+	}
+
+	c, err := NextCreatedScenarioForTranslation(ctx, db)
+	if err != nil || c == nil {
+		t.Fatalf("NextCreatedScenarioForTranslation: c=%+v err=%v", c, err)
+	}
+	if c.ID != sLow {
+		t.Fatalf("discovered id = %d; want lowest %d", c.ID, sLow)
+	}
+	if c.ProjectNamespace != "default" || c.ProjectName != "discovery" {
+		t.Fatalf("discovered identity = %s/%s; want default/discovery", c.ProjectNamespace, c.ProjectName)
+	}
+	if c.TranslationAttempt != 0 {
+		t.Fatalf("fresh Created attempt = %d; want 0", c.TranslationAttempt)
+	}
+
+	// A non-Created row is never discovered.
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), sLow); err != nil {
+		t.Fatalf("claim sLow: %v", err)
+	}
+	c2, err := NextCreatedScenarioForTranslation(ctx, db)
+	if err != nil || c2 == nil {
+		t.Fatalf("second discovery: c=%+v err=%v", c2, err)
+	}
+	if c2.ID != sHigh {
+		t.Fatalf("second discovered id = %d; want %d (Scheduled excluded)", c2.ID, sHigh)
+	}
+
+	// When no Created scenario remains, discovery returns nil.
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), sHigh); err != nil {
+		t.Fatalf("claim sHigh: %v", err)
+	}
+	if c3, err := NextCreatedScenarioForTranslation(ctx, db); err != nil || c3 != nil {
+		t.Fatalf("no Created left: c=%+v err=%v; want nil", c3, err)
+	}
+}
+
+func TestNextStaleUnpublishedTranslationClaimDiscovery(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	if err := EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	pid, _ := RegisterProject(ctx, db, "default", "stale")
+	sStale, _ := insertScenario(ctx, db, pid, ScenarioStateCreated, `null`)
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), sStale); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	// Backdate updated_at so the row is older than the cutoff.
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`UPDATE %s SET updated_at = NOW() - INTERVAL '10 minutes' WHERE id = $1`, ScenarioStatusTable()), sStale); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	cutoff := time.Now()
+	claim, err := NextStaleUnpublishedTranslationClaim(ctx, db, cutoff)
+	if err != nil || claim == nil {
+		t.Fatalf("stale discovery: c=%+v err=%v", claim, err)
+	}
+	if claim.ID != sStale || claim.TranslationAttempt != 1 {
+		t.Fatalf("stale claim = %+v; want id=%d attempt=1", claim, sStale)
+	}
+
+	// A fresh Scheduled row (updated_at after the cutoff) is not discovered.
+	sFresh, _ := insertScenario(ctx, db, pid, ScenarioStateCreated, `null`)
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), sFresh); err != nil {
+		t.Fatalf("claim fresh: %v", err)
+	}
+	if c2, err := NextStaleUnpublishedTranslationClaim(ctx, db, cutoff); err != nil || c2 == nil || c2.ID != sStale {
+		t.Fatalf("fresh excluded: c=%+v err=%v; want sStale", c2, err)
+	}
+
+	// A confirmed request (translation_request_published_at set) is never discovered.
+	if _, err := MarkTranslationPublishStarted(ctx, db, sStale, 1); err != nil {
+		t.Fatalf("start sStale: %v", err)
+	}
+	if _, err := MarkScenarioTranslationRequestPublished(ctx, db, sStale, 1); err != nil {
+		t.Fatalf("published sStale: %v", err)
+	}
+	if c3, err := NextStaleUnpublishedTranslationClaim(ctx, db, cutoff); err != nil || c3 != nil {
+		t.Fatalf("confirmed excluded: c=%+v err=%v; want nil", c3, err)
+	}
+}
+
+func TestMarkScenarioTranslationAttemptFailedConsumesPublishedAttempt(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	if err := EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	pid, _ := RegisterProject(ctx, db, "default", "attemptfail")
+	sID, _ := insertScenario(ctx, db, pid, ScenarioStateCreated, `null`)
+	// Drive the scenario through Created -> Scheduled -> published, the normal
+	// state when a Translator ready arrives. Both publication timestamps are
+	// SET, so MarkScenarioTranslationPublishFailed (which requires both NULL)
+	// would NOT match; the attempt-failed transition must match this row.
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), sID); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := MarkTranslationPublishStarted(ctx, db, sID, 1); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := MarkScenarioTranslationRequestPublished(ctx, db, sID, 1); err != nil {
+		t.Fatalf("published: %v", err)
+	}
+
+	// Empty-image ready below the limit: Scheduled -> Created, attempt consumed
+	// (not refunded; translation_attempts stays 1).
+	changed, finalState, err := MarkScenarioTranslationAttemptFailed(ctx, db, sID, 1, 3)
+	if err != nil || !changed {
+		t.Fatalf("attempt-failed below limit: changed=%v err=%v", changed, err)
+	}
+	if finalState != ScenarioStateCreated {
+		t.Fatalf("finalState = %q; want Created", finalState)
+	}
+	if state := scenarioState(t, ctx, db, sID); state != ScenarioStateCreated {
+		t.Fatalf("state = %q; want Created", state)
+	}
+	if a := scenarioAttempts(t, ctx, db, sID); a != 1 {
+		t.Fatalf("attempts = %d; want 1 (not refunded)", a)
+	}
+
+	// Re-claim and re-publish to reach the limit, then consume at the limit:
+	// Scheduled -> Failed, attempt still not refunded.
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), sID); err != nil {
+		t.Fatalf("reclaim: %v", err)
+	}
+	if a := scenarioAttempts(t, ctx, db, sID); a != 2 {
+		t.Fatalf("attempts after reclaim = %d; want 2", a)
+	}
+	if _, err := MarkTranslationPublishStarted(ctx, db, sID, 2); err != nil {
+		t.Fatalf("start 2: %v", err)
+	}
+	if _, err := MarkScenarioTranslationRequestPublished(ctx, db, sID, 2); err != nil {
+		t.Fatalf("published 2: %v", err)
+	}
+	changed, finalState, err = MarkScenarioTranslationAttemptFailed(ctx, db, sID, 2, 2)
+	if err != nil || !changed {
+		t.Fatalf("attempt-failed at limit: changed=%v err=%v", changed, err)
+	}
+	if finalState != ScenarioStateFailed {
+		t.Fatalf("finalState = %q; want Failed", finalState)
+	}
+	if state := scenarioState(t, ctx, db, sID); state != ScenarioStateFailed {
+		t.Fatalf("state = %q; want Failed", state)
+	}
+	if a := scenarioAttempts(t, ctx, db, sID); a != 2 {
+		t.Fatalf("attempts at limit = %d; want 2 (not refunded)", a)
+	}
+
+	// A stale attempt (wrong attempt number) is a no-op.
+	stale, _ := insertScenario(ctx, db, pid, ScenarioStateCreated, `null`)
+	if _, err := ClaimScenarioForTranslation(ctx, NewStore(db), stale); err != nil {
+		t.Fatalf("claim stale: %v", err)
+	}
+	changed, _, err = MarkScenarioTranslationAttemptFailed(ctx, db, stale, 99, 3)
+	if err != nil || changed {
+		t.Fatalf("stale attempt: changed=%v err=%v; want false nil", changed, err)
+	}
+	if state := scenarioState(t, ctx, db, stale); state != ScenarioStateScheduled {
+		t.Fatalf("stale state = %q; want unchanged Scheduled", state)
+	}
+}
