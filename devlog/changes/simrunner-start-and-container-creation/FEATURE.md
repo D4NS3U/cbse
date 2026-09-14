@@ -145,7 +145,8 @@ This branch must not add:
 | [04 — SM messaging and lifecycle](slices/04-sm-messaging-and-lifecycle.md) | Slice 01 |
 | [05 — Reference Translator runtime](slices/05-reference-translator-runtime.md) | Slices 03 and 04 |
 | [06 — Runner Job orchestration](slices/06-runner-job-orchestration.md) | Slices 01, 02, and 04 |
-| [07 — Images, smoke, and documentation](slices/07-images-smoke-and-documentation.md) | Slices 01 through 06 |
+| [06.5 — Alpha4 SM composition](slices/06.5-alpha4-sm-composition.md) | Slices 01 through 06 |
+| [07 — Images, smoke, and documentation](slices/07-images-smoke-and-documentation.md) | Slices 01 through 06 and 06.5 |
 
 ## Sequential completion contract
 

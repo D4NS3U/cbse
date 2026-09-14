@@ -6,7 +6,7 @@ Integrate the preceding slices through immutable image publication, alpha4 manif
 
 ## Dependencies
 
-Slices [01](01-alpha4-api-and-crd.md), [02](02-job-template-policy.md), [03](03-operator-provisioning.md), [04](04-sm-messaging-and-lifecycle.md), [05](05-reference-translator-runtime.md), and [06](06-runner-job-orchestration.md) must be complete.
+Slices [01](01-alpha4-api-and-crd.md), [02](02-job-template-policy.md), [03](03-operator-provisioning.md), [04](04-sm-messaging-and-lifecycle.md), [05](05-reference-translator-runtime.md), [06](06-runner-job-orchestration.md), and [06.5](06.5-alpha4-sm-composition.md) must be complete.
 
 ## Contracts consumed
 
@@ -18,7 +18,25 @@ This slice consumes every cross-cutting contract in the [root specification](../
 8. SM RBAC and `test/e2e/manifests/` -- grant cluster-wide `get`, `list`, `watch`, and `patch` for alpha4 experiments; `create`, `delete`, `get`, `list`, and `watch` for Jobs; `get`-only Secret access restricted by `resourceNames` to `cbse-registry-auth`; and `get`-only access, without `list` or `watch`, for ServiceAccounts. SM uses experiment patch only to add or remove its metadata finalizer and does not modify experiment spec or status. It uses Job delete for ownership-verified runner cancellation after `Error`, `Failed`, or deletion and for UID-preconditioned cleanup, without an ownership read or check, at the submitted deterministic namespace/name when its successful create races lifecycle-gate closure; it performs only direct named reads for the canonical registry Secret and deterministic runner ServiceAccount. Expose `SCENARIO_MANAGER_RUNNER_START_WORKERS` with value `4` in the SM smoke manifest. Render the locked `BUILDER_IMAGE` and `POSTGRES_IMAGE` plus the repository-built `TRANS_IMAGE`, `RUNNER_BASE_IMAGE`, and `DETAIL_DB_IMAGE` into their exact alpha4 fields. Translator generates the scenario-specific runner images; there is no prebuilt scenario-specific runner smoke image.
 9. `component-templates/translator/README.md`, `component-templates/scenario-detail-database/README.md`, `COMPONENT_DESIGN_GOALS.md`, `README.md`, `docs/CBSE_TESTING_GUIDE.md`, and developer documentation -- provide the Translator and reference Detail DB integration guides, document Kubernetes 1.30 or newer as the runtime support range and distinguish it from build-time Go module versions, document the 1.30-through-1.32 native-sidecar feature-gate prerequisite, document the immutable alpha4 Translator Deployment/Service configuration and delete/recreate update path, document the runner-start concurrency setting and its non-capacity semantics, document the trusted experiment-namespace Job-creator assumption defined by the `AlreadyExists` ownership contract, state the common component design goals, provide alpha4-only public and test documentation, and link those contracts.
 
+## Repository fold obligation (consumes Slice 06.5)
+
+Slice 06.5 delivered the alpha4 Scenario Manager composition as additive code under the temporary `scenario-manager/internal/alpha4/` version subtree so the active alpha3 binary, CRD, schemes, and smoke path stayed unchanged until the integration checkpoint. Alpha4 is the only served version and alpha3 is deleted at the cutover, so a permanent version-prefixed directory has no meaning. Slice 07 removes that subtree: it folds the alpha4 packages into their final `internal/` homes, merges the composition into the existing `internal/core` and `internal/nats` packages, deletes the dead alpha3 code, and removes the `scenario-manager/internal/alpha4/` directory. The fold is mechanical and is verified by `make test-fast` before the CRD/scheme flip and the cluster smoke.
+
+Intended final homes:
+
+- `alpha4/communication` and `alpha4/subject` → `internal/communication` and `internal/subject` (delete the alpha3 siblings)
+- `alpha4/persistence` → `internal/coredb` (delete the alpha3 `internal/coredb`; a rename to `internal/persistence` is an acceptable lower-risk alternative)
+- `alpha4/messaging` and `alpha4/natsadapter` → `internal/nats` (delete the alpha3 `internal/nats`)
+- `alpha4/app`, `alpha4/informer`, `alpha4/selection`, `alpha4/lifecycle`, `alpha4/scheduler`, `alpha4/jobadapter`, `alpha4/runnerstart`, `alpha4/observation`, `alpha4/effectivejob`, `alpha4/registry`, `alpha4/eventlog`, `alpha4/config`, `alpha4/rbac` → `internal/core` and dedicated `internal/<name>` packages as appropriate; `alpha4/app.RunScenarioManager` becomes `internal/core.RunScenarioManager`, replacing the alpha3 entry
+- `internal/kube` and `internal/translatorconfig` are updated in place to alpha4 types
+
+After the fold there is no `scenario-manager/internal/alpha4/` directory and no alpha3 source on the active path. The 04–06 unit and integration tests move with their packages and continue to pass.
+
 ## Required behavior
+
+### S07-M0 — Repository fold: drop the alpha4 version subtree
+
+Move every package under `scenario-manager/internal/alpha4/` to its final `internal/` home per the repository fold obligation, update all import paths, merge the composition (`RunScenarioManager`, the informer, the NATS adapters, the selection loop, the ready workflow) into `internal/core` and `internal/nats`, delete the dead alpha3 files in `internal/core`, `internal/nats`, `internal/coredb`, `internal/communication`, and `internal/subject`, and remove the `scenario-manager/internal/alpha4/` directory. `cmd/main.go` still imports `internal/core` after the fold; its import does not change in this milestone (the cutover import flip is S07-M1). Run `make test-fast` and require rc=0 before proceeding to the CRD/scheme flip. The fold must not change any contract or test expectation; it is a rename, an in-place merge of the composition, and a deletion of dead code.
 
 ### S07-M1 — Integration and repository boundaries
 
@@ -122,6 +140,10 @@ Source credentials remain outside the repository, TLS verification is mandatory,
 - `S05-D07`
 - `S06-D07`
 
+### S07-A0 — Repository fold
+
+After the fold, `scenario-manager/internal/alpha4/` does not exist; no Go import path in the repository references `scenario-manager/internal/alpha4`; no source file on the active path references a deleted alpha3 package; `cmd/main.go` still imports only `internal/core`; and `make test-fast` passes. Verify that the 04–06 unit and integration tests still pass after the move and that no alpha3-specific type or function remains referenced on the active path.
+
 ### S07-A1 — Kubernetes and Node preflight
 
 Test smoke version and Node preflight independently of Operator and SM. Accept Kubernetes `v1.30.0`, later `1.x` minors, patch releases, and distribution-suffixed versions such as K3s; impose no upper minor bound. Reject Kubernetes 1.29 or older, a non-1 major, and malformed or unavailable version data before any cluster or registry mutation. Accept one Node with `Ready=True`, absent or false `spec.unschedulable`, and `kubernetes.io/arch=amd64`. Accept a mixed cluster when at least one Node qualifies, regardless of additional cordoned, non-Ready, missing-architecture, or non-`amd64` Nodes. Reject zero Nodes and reject clusters in which every Node is non-Ready, cordoned, missing `kubernetes.io/arch`, or has a non-`amd64` value. Assert that the check does not inspect taints, allocatable resources, or pressure conditions and adds no Node permission to either application ServiceAccount.
@@ -150,4 +172,4 @@ Additional architectures, insecure registries, repository-management APIs, and p
 
 ## Completion and handoff
 
-Locked inputs, repository-owned image outputs, generated image environment, Kubernetes and Harbor preflight, alpha4-only manifests and RBAC, the Kubernetes 1.30 compatibility lane, full smoke workflow, cleanup, and public documentation all pass final cross-slice acceptance.
+Locked inputs, repository-owned image outputs, generated image environment, Kubernetes and Harbor preflight, alpha4-only manifests and RBAC, the Kubernetes 1.30 compatibility lane, full smoke workflow, cleanup, and public documentation all pass final cross-slice acceptance. The repository fold (S07-M0) removes the temporary `scenario-manager/internal/alpha4/` subtree and the dead alpha3 code, leaving a single alpha4-only `internal/` tree; the cutover (S07-M1 onward) then flips `cmd/main.go`'s import, the served/storage CRD scheme, and the smoke manifests and runs the real-translator end-to-end smoke.
