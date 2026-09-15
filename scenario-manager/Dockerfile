@@ -7,14 +7,15 @@ FROM golang:${GO_VERSION} AS builder
 WORKDIR /workspace
 
 # Build from monorepo root because scenario-manager/go.mod depends on the local
-# experiment-operator module via replace directive.
-COPY go.work go.work.sum ./
+# experiment-operator module via replace directive. Build with GOWORK=off so the
+# workspace go directive (raised for the translator module's local tests) does not
+# constrain this image's Go toolchain; scenario-manager/go.mod is self-sufficient.
 COPY experiment-operator ./experiment-operator
 COPY scenario-manager ./scenario-manager
-COPY test/e2e ./test/e2e
 
 WORKDIR /workspace/scenario-manager
 
+ENV GOWORK=off
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/scenario-manager ./cmd
 
