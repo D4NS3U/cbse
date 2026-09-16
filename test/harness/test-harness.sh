@@ -84,8 +84,12 @@ fi
 # Repository-structure invariants.
 grep -Fqx 'CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test' "${root}/Makefile"
 grep -Fqx 'CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database' "${root}/Makefile"
-grep -Fqx '  local canonical="${registry}:${name}.test.${version}"' "${root}/test/harness/build-images.sh"
-grep -Fqx '  local immutable="${registry}:${name}.test.${immutable_suffix}"' "${root}/test/harness/build-images.sh"
+grep -Fqx '  local immutable="${repository}:${immutable_suffix}"' "${root}/test/harness/build-images.sh"
+# The flat layout (cbse-test:<component>.test.<version>) is retired; every
+# component uses the nested layout cbse-test/<component>:<version>.
+if grep -Fq '.test.${version}' "${root}/test/harness/build-images.sh"; then
+  echo "build-images.sh still uses the flat .test. tag layout" >&2; exit 1
+fi
 grep -Fqx '  local repository="${registry}/${name}"' "${root}/test/harness/build-images.sh"
 grep -Fqx '  local canonical="${repository}:${version}"' "${root}/test/harness/build-images.sh"
 grep -Fq 'load_image_lock "${lock_file}"' "${root}/test/harness/preflight.sh"
@@ -147,20 +151,18 @@ PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json" \
   CBSE_IMAGE_ARTIFACT_DIR="${tmp}/build-artifacts" \
   "${root}/test/harness/build-images.sh" >/dev/null
-for image in exop sm eds-mock translator runner-base; do
-  grep -Fqx "registry.unibw.de/i31bdase/cbse-test:${image}.test.26.9.7" "${tmp}/docker-tags.txt"
-  grep -Eq "^registry\.unibw\.de/i31bdase/cbse-test:${image}\.test\.26\.9\.7\.sha-" "${tmp}/docker-tags.txt"
+for image in exop sm eds-mock translator runner-base scenario-detail-database; do
+  grep -Fqx "registry.unibw.de/i31bdase/cbse-test/${image}:26.9.7" "${tmp}/docker-tags.txt"
+  grep -Eq "^registry\.unibw\.de/i31bdase/cbse-test/${image}:26\.9\.7\.sha-" "${tmp}/docker-tags.txt"
 done
-grep -Fqx "registry.unibw.de/i31bdase/cbse-test/scenario-detail-database:26.9.7" "${tmp}/docker-tags.txt"
-grep -Eq "^registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database:26\.9\.7\.sha-" "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG TRANSLATOR_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:98d673f18a1aac43da744209873cb79323e11706f909251bcfb131828b95559d' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG PYTHON_BASE_IMAGE=docker.io/library/python@sha256:b921fe7e7522f828d45197a47656ec465a9b15689b27fa8e1fba2864fca5b967' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG POSTGRES_IMAGE=docker.io/library/postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7' "${tmp}/docker-tags.txt"
-grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
-grep -Eq '^SM_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
-grep -Eq '^EDS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
-grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
-grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+grep -Eq '^SM_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/sm@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+grep -Eq '^EDS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/eds-mock@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 
 # build-images.sh default (alpha4): the cutover build default is the real
@@ -174,12 +176,12 @@ PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json" \
   CBSE_IMAGE_ARTIFACT_DIR="${tmp}/build-artifacts-default" \
   "${root}/test/harness/build-images.sh" >/dev/null
-grep -Fqx "registry.unibw.de/i31bdase/cbse-test:translator.test.26.9.7" "${tmp}/docker-tags-default.txt"
-grep -Fqx "registry.unibw.de/i31bdase/cbse-test:runner-base.test.26.9.7" "${tmp}/docker-tags-default.txt"
+grep -Fqx "registry.unibw.de/i31bdase/cbse-test/translator:26.9.7" "${tmp}/docker-tags-default.txt"
+grep -Fqx "registry.unibw.de/i31bdase/cbse-test/runner-base:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/scenario-detail-database:26.9.7" "${tmp}/docker-tags-default.txt"
-grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
-grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
-grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 if grep -Fq 'trans-mock' "${tmp}/docker-tags-default.txt"; then
   echo "alpha4 default build produced the synthetic translator mock" >&2; exit 1

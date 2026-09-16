@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 registry="${CBSE_REGISTRY:-registry.unibw.de/i31bdase/cbse-test}"
-version="${TEST_IMAGE_VERSION:-26.7.16}"
+version="${TEST_IMAGE_VERSION:-$(date -u +%-y.%-m.%-d)}"
 run_id="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 3)}"
 artifact_dir="${CBSE_IMAGE_ARTIFACT_DIR:-${root}/artifacts/test-images/${version}/${run_id}}"
 auth_file="${CBSE_REGISTRY_AUTH_FILE:-}"
@@ -77,24 +77,15 @@ if [[ -n "${auth_file}" ]]; then
   trap 'rm -rf "${auth_dir}"' EXIT
 fi
 
-# --- Build helpers -----------------------------------------------------------
-# Shared component images use the FLAT repository layout: a single registry
-# prefix (${CBSE_REGISTRY}) carries one tag per component, e.g.
-# ${CBSE_REGISTRY}:translator.test.${version}. The digest output omits any
-# repository path: TRANS_IMAGE=${CBSE_REGISTRY}@sha256:<hex>.
-build_flat() {
-  local name="$1" image_var="$2" dockerfile="$3" context="$4" title="$5"
-  shift 5
-  local canonical="${registry}:${name}.test.${version}"
-  local immutable="${registry}:${name}.test.${immutable_suffix}"
-  _build "${name}" "${image_var}" "${registry}" "${canonical}" "${immutable}" \
-    "${dockerfile}" "${context}" "${title}" "$@"
-}
-
-# The reference Scenario Detail Database uses the NESTED layout: a dedicated
-# repository below the prefix, ${CBSE_REGISTRY}/scenario-detail-database, with
-# the date version as its tag. Its digest output keeps the path:
-# DETAIL_DB_IMAGE=${CBSE_REGISTRY}/scenario-detail-database@sha256:<hex>.
+# --- Build helper ------------------------------------------------------------
+# All component images use the NESTED repository layout: a dedicated
+# repository below the prefix, ${CBSE_REGISTRY}/<component>, carries the
+# date-versioned canonical tag, e.g. ${CBSE_REGISTRY}/sm:26.9.16. The tag is
+# the build date in YY.M.D form (overridable via TEST_IMAGE_VERSION). Each
+# build also pushes an immutable provenance tag
+# ${CBSE_REGISTRY}/<component>:<version>.sha-<commit>-<source>-<run-id>.
+# The digest output keeps the repository path:
+# SM_IMAGE=${CBSE_REGISTRY}/sm@sha256:<hex>.
 build_nested() {
   local name="$1" image_var="$2" dockerfile="$3" context="$4" title="$5"
   shift 5
@@ -125,12 +116,12 @@ _build() {
 }
 
 : >"${artifact_dir}/images.env"
-component_enabled exop && build_flat exop OPERATOR_IMAGE "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator" "CBSE Experiment Operator"
-component_enabled sm && build_flat sm SM_IMAGE "${root}/scenario-manager/Dockerfile" "${root}" "CBSE Scenario Manager"
-component_enabled eds-mock && build_flat eds-mock EDS_IMAGE "${root}/test/mocks/eds/Dockerfile" "${root}" "CBSE EDS Mock"
-component_enabled trans-mock && build_flat trans-mock TRANS_IMAGE "${root}/test/mocks/translator/Dockerfile" "${root}" "CBSE Translator Mock"
-component_enabled translator && build_flat translator TRANS_IMAGE "${root}/component-templates/translator/Dockerfile" "${root}/component-templates/translator" "CBSE Translator" --build-arg "TRANSLATOR_GO_BUILDER_IMAGE=${TRANSLATOR_GO_BUILDER_IMAGE}"
-component_enabled runner-base && build_flat runner-base RUNNER_BASE_IMAGE "${root}/component-templates/translator/runner-base/Dockerfile" "${root}/component-templates/translator/runner-base" "CBSE Runner Base" --build-arg "PYTHON_BASE_IMAGE=${PYTHON_BASE_IMAGE}"
+component_enabled exop && build_nested exop OPERATOR_IMAGE "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator" "CBSE Experiment Operator"
+component_enabled sm && build_nested sm SM_IMAGE "${root}/scenario-manager/Dockerfile" "${root}" "CBSE Scenario Manager"
+component_enabled eds-mock && build_nested eds-mock EDS_IMAGE "${root}/test/mocks/eds/Dockerfile" "${root}" "CBSE EDS Mock"
+component_enabled trans-mock && build_nested trans-mock TRANS_IMAGE "${root}/test/mocks/translator/Dockerfile" "${root}" "CBSE Translator Mock"
+component_enabled translator && build_nested translator TRANS_IMAGE "${root}/component-templates/translator/Dockerfile" "${root}/component-templates/translator" "CBSE Translator" --build-arg "TRANSLATOR_GO_BUILDER_IMAGE=${TRANSLATOR_GO_BUILDER_IMAGE}"
+component_enabled runner-base && build_nested runner-base RUNNER_BASE_IMAGE "${root}/component-templates/translator/runner-base/Dockerfile" "${root}/component-templates/translator/runner-base" "CBSE Runner Base" --build-arg "PYTHON_BASE_IMAGE=${PYTHON_BASE_IMAGE}"
 component_enabled scenario-detail-database && build_nested scenario-detail-database DETAIL_DB_IMAGE "${root}/component-templates/scenario-detail-database/Dockerfile" "${root}/component-templates/scenario-detail-database" "CBSE Scenario Detail Database" --build-arg "POSTGRES_IMAGE=${POSTGRES_IMAGE}"
 printf 'REGISTRY=%s\nVERSION=%s\nCOMMIT=%s\nSOURCE_HASH=%s\nRUN_ID=%s\n' \
   "${registry}" "${version}" "${commit}" "${source_hash}" "${run_id}" >"${artifact_dir}/build-info.env"
