@@ -2,6 +2,8 @@
 
 This guide is the human-facing entry point for the current CBSE implementation and its Kubernetes test system. It is intentionally practical: it explains what works today, where the important code lives, and how to interpret a smoke-test run.
 
+> **Cluster requirements**: CBSE needs Kubernetes >= 1.30 with the `UserNamespacesSupport` feature gate enabled (for the reference Translator's rootless BuildKit sidecar) and experiment namespaces that permit the sidecar's unconfined seccomp/AppArmor profiles (Pod Security enforce `privileged`). See [`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md) for the exact enablement steps, prerequisites, and verification; it is the source a future Helm chart's prerequisites must reference.
+
 ## 1. What CBSE currently does
 
 CBSE is a Kubernetes-native research prototype for preparing simulation experiments. The tested path is:
@@ -106,16 +108,23 @@ test resources to `default` or `kube-system`.
 
 ### Component build and image contract
 
+All six component images use the **nested** repository layout
+`${CBSE_REGISTRY}/<component>:<version>` (for example
+`${CBSE_REGISTRY}/sm:26.9.16`); there is no flat `${CBSE_REGISTRY}:<component>.test.<version>`
+form. The version tag is the build date in `YY.M.D` form (no leading zeros;
+overridable via `TEST_IMAGE_VERSION`). The reference Scenario Detail Database uses
+the same nested layout under `${CBSE_REGISTRY}/scenario-detail-database:<version>`.
+Generated runner images are published to `${CBSE_REGISTRY}/cbse-test-runner`.
+It never deploys test resources to `default` or `kube-system`.
+
 The exact component tokens and their repository layouts are:
 
 | Token | Layout | Canonical tag | Digest output |
 | --- | --- | --- | --- |
-| `exop`, `sm`, `eds-mock`, `translator`, `runner-base` | flat | `${CBSE_REGISTRY}:<token>.test.<version>` | `${CBSE_REGISTRY}@sha256:<hex>` |
-| `scenario-detail-database` | nested | `${CBSE_REGISTRY}/scenario-detail-database:<version>` | `${CBSE_REGISTRY}/scenario-detail-database@sha256:<hex>` |
+| `exop`, `sm`, `eds-mock`, `translator`, `runner-base`, `scenario-detail-database` | nested | `${CBSE_REGISTRY}/<token>:<version>` | `${CBSE_REGISTRY}/<token>@sha256:<hex>` |
 
-The `scenario-detail-database` component token is exact; the canonical
-repository is `${CBSE_REGISTRY}/scenario-detail-database`. `TEST_IMAGE_VERSION`
-uses a non-normalizing `YY.M.D` format validated against
+`TEST_IMAGE_VERSION` defaults to the build date (`$(date -u +%-y.%-m.%-d)`) when
+unset, and uses a non-normalizing `YY.M.D` format validated against
 `^[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}$`; single-digit month/day are accepted
 as-is and never rewritten (optional zero-padding is permitted by the regex, but
 the harness does not normalize). `build-images.sh` records `DETAIL_DB_IMAGE` in

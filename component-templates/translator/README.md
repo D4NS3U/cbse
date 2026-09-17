@@ -139,6 +139,22 @@ registry then rejects the push if it requires auth.
 The Translator runs alongside a BuildKit sidecar (provisioned by the alpha4
 Operator) that exposes its socket at `unix:///run/buildkit/buildkitd.sock`.
 
+The sidecar is the **rootless** `moby/buildkit:v0.32.2-rootless` image. Rootless
+`buildkitd` must run as the **mapped root inside a user namespace**: the Operator
+sets `hostUsers: false` on the Translator Pod and runs the `buildkit` container
+as `runAsUser: 0` (mapped root) with `--oci-worker-no-process-sandbox`, an
+unconfined seccomp profile, and an unconfined AppArmor profile. This requires the
+cluster to have the **`UserNamespacesSupport` feature gate enabled** (beta in
+Kubernetes 1.30–1.32, disabled by default; GA in 1.33). On a cluster where the
+gate is off, the API server strips `hostUsers: false` and `buildkitd` fails at
+startup with `can't enable NoProcessSandbox without Rootless`. Enabling the gate
+and the experiment-namespace Pod Security it needs is a one-time cluster-admin
+operation; see [`docs/CLUSTER_REQUIREMENTS.md`](../../docs/CLUSTER_REQUIREMENTS.md)
+for the exact K3s enablement steps, the kernel/containerd prerequisites, the
+verification procedure, and the namespace Pod Security label. The sidecar uses
+no privileged mode, host networking, host paths, host runtime sockets, or
+privilege escalation.
+
 Before creating or attaching its JetStream request consumer, the framework
 opens an **admission gate**: it connects the BuildKit client at the canonical
 socket and calls `ListWorkers` (the `buildctl debug workers` equivalent),
