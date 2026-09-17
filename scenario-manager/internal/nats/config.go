@@ -177,14 +177,15 @@ func TranslatorStreamConfig() *natsgo.StreamConfig {
 // DeliverAll, AckWait 2m, MaxAckPending 1024, MaxDeliver -1.
 func EDSConsumerConfig() *natsgo.ConsumerConfig {
 	return &natsgo.ConsumerConfig{
-		Durable:       EDSConsumerName,
-		DeliverPolicy: natsgo.DeliverAllPolicy,
-		AckPolicy:     natsgo.AckExplicitPolicy,
-		AckWait:       AckWaitCanonical,
-		MaxDeliver:    MaxDeliverCanonical,
-		FilterSubject: "cbse.*.*.eds.scenarios",
-		MaxAckPending: MaxAckPendingSM,
-		DeliverGroup:  "scenario-manager-eds",
+		Durable:        EDSConsumerName,
+		DeliverPolicy:  natsgo.DeliverAllPolicy,
+		AckPolicy:      natsgo.AckExplicitPolicy,
+		AckWait:        AckWaitCanonical,
+		MaxDeliver:     MaxDeliverCanonical,
+		FilterSubject:  "cbse.*.*.eds.scenarios",
+		MaxAckPending:  MaxAckPendingSM,
+		DeliverGroup:   "scenario-manager-eds",
+		DeliverSubject: EDSDeliverSubject,
 	}
 }
 
@@ -194,16 +195,28 @@ func EDSConsumerConfig() *natsgo.ConsumerConfig {
 // explicit ACK, DeliverAll, AckWait 2m, MaxAckPending 1024, MaxDeliver -1.
 func TranslatorReadyConsumerConfig() *natsgo.ConsumerConfig {
 	return &natsgo.ConsumerConfig{
-		Durable:       TranslatorReadyConsumerName,
-		DeliverPolicy: natsgo.DeliverAllPolicy,
-		AckPolicy:     natsgo.AckExplicitPolicy,
-		AckWait:       AckWaitCanonical,
-		MaxDeliver:    MaxDeliverCanonical,
-		FilterSubject: "cbse.*.*.trans.*.ready",
-		MaxAckPending: MaxAckPendingSM,
-		DeliverGroup:  "scenario-manager-translator-ready",
+		Durable:        TranslatorReadyConsumerName,
+		DeliverPolicy:  natsgo.DeliverAllPolicy,
+		AckPolicy:      natsgo.AckExplicitPolicy,
+		AckWait:        AckWaitCanonical,
+		MaxDeliver:     MaxDeliverCanonical,
+		FilterSubject:  "cbse.*.*.trans.*.ready",
+		MaxAckPending:  MaxAckPendingSM,
+		DeliverGroup:   "scenario-manager-translator-ready",
+		DeliverSubject: TranslatorReadyDeliverSubject,
 	}
 }
+
+// SM consumer deliver subjects. These are internal push-delivery subjects used
+// by the SM-owned durable queue consumers; they are 4-token subjects that do
+// not match any stream filter (cbse.*.*.eds.scenarios is 5 tokens;
+// cbse.*.*.trans.*.ready is 6 tokens), so delivered messages never re-enter a
+// stream. The queue group on each consumer distributes a given delivery among
+// SM replicas.
+const (
+	EDSDeliverSubject             = "cbse.sm.eds-batch.deliver"
+	TranslatorReadyDeliverSubject = "cbse.sm.translator-ready.deliver"
+)
 
 // SM consumer durable names.
 const (
