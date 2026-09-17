@@ -155,7 +155,7 @@ for image in exop sm eds-mock translator runner-base scenario-detail-database; d
   grep -Fqx "registry.unibw.de/i31bdase/cbse-test/${image}:26.9.7" "${tmp}/docker-tags.txt"
   grep -Eq "^registry\.unibw\.de/i31bdase/cbse-test/${image}:26\.9\.7\.sha-" "${tmp}/docker-tags.txt"
 done
-grep -Fqx 'ARG TRANSLATOR_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:98d673f18a1aac43da744209873cb79323e11706f909251bcfb131828b95559d' "${tmp}/docker-tags.txt"
+grep -Fqx 'ARG TRANSLATOR_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:3bf5b04541eb4a37fe62aa1bc9c98a1dec09db9d2e79c1d2eb54e3c9d08dbca9' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG PYTHON_BASE_IMAGE=docker.io/library/python@sha256:b921fe7e7522f828d45197a47656ec465a9b15689b27fa8e1fba2864fca5b967' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG POSTGRES_IMAGE=docker.io/library/postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7' "${tmp}/docker-tags.txt"
 grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"

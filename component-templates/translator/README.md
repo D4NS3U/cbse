@@ -35,8 +35,8 @@ by immutable digest in `images.env`.
 
 | Image | Dockerfile | Build arg | Output var | Layout | Contains |
 | --- | --- | --- | --- | --- | --- |
-| Translator runtime | `Dockerfile` | `TRANSLATOR_GO_BUILDER_IMAGE` | `TRANS_IMAGE` | flat | static Go binary + CA bundle only |
-| Runner base | `runner-base/Dockerfile` | `PYTHON_BASE_IMAGE` | `RUNNER_BASE_IMAGE` | flat | Python + SimPy + Psycopg, no model |
+| Translator runtime | `Dockerfile` | `TRANSLATOR_GO_BUILDER_IMAGE` | `TRANS_IMAGE` | nested | static Go binary + CA bundle only |
+| Runner base | `runner-base/Dockerfile` | `PYTHON_BASE_IMAGE` | `RUNNER_BASE_IMAGE` | nested | Python + SimPy + Psycopg, no model |
 
 ### Translator runtime (`Dockerfile`)
 

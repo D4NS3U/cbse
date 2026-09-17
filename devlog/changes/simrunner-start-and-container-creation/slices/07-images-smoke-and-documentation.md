@@ -45,7 +45,7 @@ Move every package under `scenario-manager/internal/alpha4/` to its final `inter
 
 The alpha4 smoke profile is `linux/amd64` only, matching the repository harness's existing `docker buildx build --platform linux/amd64` contract. Every digest below is the platform-specific OCI image-manifest digest, not the digest of a multi-platform image index. Smoke preflight requires at least one Node whose `Ready` condition has status `True`, whose `spec.unschedulable` is absent or `false`, and whose `kubernetes.io/arch` label is exactly `amd64`. Zero Nodes or no matching Node fails preflight. Other Nodes, including cordoned, non-Ready, missing-architecture, and non-`amd64` Nodes, neither qualify nor cause failure when one matching Node exists. This test-only check does not inspect taints, allocatable capacity, or resource pressure and adds no Node permission to Operator or SM RBAC. Supporting another smoke architecture requires a later specification update with a complete per-platform lock set and multi-platform component builds.
 
-The following non-secret source-image lock is fixed as of 2026-08-26 and must be checked into the repository in `test/e2e/images.lock.env` exactly as shown:
+The following non-secret source-image lock is fixed as of 2026-08-26 (the translator Go builder was updated to 1.26.3-bookworm on 2026-09-16 to satisfy `github.com/moby/buildkit v0.33.0`'s `go >= 1.26.3` requirement; the other three source images remain at their 2026-08-26 pins) and must be checked into the repository in `test/e2e/images.lock.env` exactly as shown:
 
 ```text
 BUILDER_IMAGE=docker.io/moby/buildkit@sha256:60d1f642e29dc938bd6c109ba5500849fccf41921927c5339788b8227f57feb9
@@ -54,8 +54,8 @@ PYTHON_BASE_IMAGE=docker.io/library/python@sha256:b921fe7e7522f828d45197a47656ec
 PYTHON_BASE_VERSION=3.14.6-slim
 POSTGRES_IMAGE=docker.io/library/postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7
 POSTGRES_VERSION=18.6
-TRANSLATOR_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:98d673f18a1aac43da744209873cb79323e11706f909251bcfb131828b95559d
-TRANSLATOR_GO_VERSION=1.24.13-bookworm
+TRANSLATOR_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:3bf5b04541eb4a37fe62aa1bc9c98a1dec09db9d2e79c1d2eb54e3c9d08dbca9
+TRANSLATOR_GO_VERSION=1.26.3-bookworm
 ```
 
 The version entries are provenance for reviewers and diagnostics; deployment and `FROM` instructions use only the corresponding digest entries. These locked values have no environment override in the mandatory smoke path. Preflight loads this repository file, validates each exact name and digest, rejects a duplicate or externally overridden value, and fails before registry or cluster mutation on any mismatch. The rootless BuildKit image is copied verbatim to `spec.translator.builderImage`, and the official PostgreSQL image is copied verbatim to `spec.resultDatabase.image`. The same `POSTGRES_IMAGE` is the `FROM` source for the repository-built reference Scenario Detail Database image. `PYTHON_BASE_IMAGE` and `TRANSLATOR_GO_BUILDER_IMAGE` are build-only sources and never appear in a `SimulationExperiment`.
@@ -97,7 +97,7 @@ The guide must document:
 
 ### S07-M4 — Pinned example runtime and PostgreSQL databases
 
-The reference versions are frozen as of 2026-08-26: Python 3.14.6, SimPy 4.1.2, Psycopg 3.3.4, PostgreSQL 18.6, rootless BuildKit 0.32.2, and the Go 1.24.13 Bookworm toolchain used only to build Translator. Their exact `linux/amd64` source manifests are the checked-in values in `test/e2e/images.lock.env`; tags and multi-platform index digests are not implementation inputs.
+The reference versions are frozen as of 2026-08-26: Python 3.14.6, SimPy 4.1.2, Psycopg 3.3.4, PostgreSQL 18.6, rootless BuildKit 0.32.2, and the Go 1.26.3 Bookworm toolchain used only to build Translator (raised from 1.24.13 on 2026-09-16 to satisfy BuildKit v0.33.0's `go >= 1.26.3` requirement). Their exact `linux/amd64` source manifests are the checked-in values in `test/e2e/images.lock.env`; tags and multi-platform index digests are not implementation inputs.
 
 The runner smoke base is built by `component-templates/translator/runner-base/Dockerfile` from the locked `PYTHON_BASE_IMAGE`. It preinstalls exactly `simpy==4.1.2`, `psycopg==3.3.4`, and `psycopg-binary==3.3.4` from the checked-in hash-locked requirements file and verifies the imported versions during the build. The harness pushes the shared base and records `RUNNER_BASE_IMAGE`; that repository-built digest, not the official Python digest, becomes `spec.translator.baseimage`. Generated runner images inherit those packages and add only the generated model and connection configuration. They do not contain a PostgreSQL server; Psycopg is the client used to reach the experiment's Result DB.
 
