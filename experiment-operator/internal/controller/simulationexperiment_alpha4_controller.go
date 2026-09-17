@@ -364,9 +364,9 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileDatabase(ctx context.Con
 				Image: spec.Image,
 				Ports: []corev1.ContainerPort{{ContainerPort: spec.Port}},
 				Env: []corev1.EnvVar{
-					{Name: "DB_NAME", Value: spec.DBName},
-					{Name: "DB_USER", Value: spec.User},
-					{Name: "DB_PASSWORD", Value: spec.Password},
+					{Name: "POSTGRES_DB", Value: spec.DBName},
+					{Name: "POSTGRES_USER", Value: spec.User},
+					{Name: "POSTGRES_PASSWORD", Value: spec.Password},
 				},
 			}
 			ctr.Env = append(ctr.Env, simulationProjectEnvVar())

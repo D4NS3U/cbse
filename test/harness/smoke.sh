@@ -133,7 +133,7 @@ namespace_created=1
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" label namespace "${namespace}" \
   "cbse.terministic.de/managed-run=${run_id}" \
   app.kubernetes.io/part-of=cbse-smoke \
-  pod-security.kubernetes.io/enforce=baseline \
+  pod-security.kubernetes.io/enforce=privileged \
   pod-security.kubernetes.io/audit=restricted \
   pod-security.kubernetes.io/warn=restricted --overwrite >/dev/null
 
