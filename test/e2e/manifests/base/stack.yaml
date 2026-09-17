@@ -11,8 +11,11 @@ metadata:
   name: experiment-operator
 rules:
   - apiGroups: [""]
-    resources: ["configmaps", "secrets", "services", "pods"]
+    resources: ["configmaps", "secrets", "serviceaccounts", "services", "pods"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [""]
+    resources: ["configmaps/finalizers", "secrets/finalizers", "serviceaccounts/finalizers", "services/finalizers"]
+    verbs: ["update"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
