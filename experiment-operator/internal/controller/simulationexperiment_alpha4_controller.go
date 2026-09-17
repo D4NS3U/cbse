@@ -355,7 +355,7 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileDatabase(ctx context.Con
 			if err := controllerutil.SetControllerReference(instance, dep, r.Scheme); err != nil {
 				return err
 			}
-			labels := workloadLabels(instance.Name+"-"+suffix, instance.Name)
+			labels := workloadLabels(instance.Name+"-"+suffix, instance.Name, string(instance.UID))
 			dep.Labels = labels
 			dep.Spec.Selector = metav1Selector(labels)
 			dep.Spec.Template.ObjectMeta.Labels = labels
@@ -450,7 +450,7 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 		if err := controllerutil.SetControllerReference(instance, dep, r.Scheme); err != nil {
 			return err
 		}
-		labels := workloadLabels(instance.Name+"-translator", instance.Name)
+		labels := workloadLabels(instance.Name+"-translator", instance.Name, string(instance.UID))
 		dep.Labels = labels
 		dep.Spec.Selector = metav1Selector(labels)
 		dep.Spec.Template.ObjectMeta.Labels = labels
@@ -460,10 +460,7 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 		translatorCtr := corev1.Container{
 			Name:  "translator",
 			Image: t.Image,
-			Env: []corev1.EnvVar{
-				{Name: "REPOSITORY", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}, Key: "REPOSITORY"}}},
-				{Name: "BASEIMAGE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}, Key: "BASEIMAGE"}}},
-			},
+			Env:   translatorEnvVars(instance, cmName),
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "workspace", MountPath: "/workspace"},
 				{Name: "run-buildkit", MountPath: "/run/buildkit"},
@@ -473,7 +470,6 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 			},
 			SecurityContext: restrictedSecurityContext(),
 		}
-		translatorCtr.Env = append(translatorCtr.Env, simulationProjectEnvVar())
 		if len(t.Command) > 0 {
 			translatorCtr.Command = t.Command
 		}
@@ -544,6 +540,30 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileRunnerServiceAccount(ctx
 		return fmt.Errorf("reconcile runner ServiceAccount: %w", err)
 	}
 	return nil
+}
+
+// translatorEnvVars returns the full alpha4 env var set injected into the
+// Translator container. REPOSITORY and BASEIMAGE are sourced from the
+// Translator ConfigMap; NATS_URL, TRANSLATOR_STREAM, the derived request
+// subject, the canonical ready-subject template, and the UID-specific durable
+// consumer name are the fixed alpha4 NATS/JetStream configuration; and
+// SIMULATIONPROJECTNAMESPACE, SIMULATIONPROJECTNAME, and SIMULATIONEXPERIMENTUID
+// are the downward-API identity vars. The reference framework validates every
+// value at startup, so a missing or inconsistent injection fails fast with a
+// descriptive configuration error rather than a runtime crash.
+func translatorEnvVars(instance *experimentalpha4.SimulationExperiment, cmName string) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "REPOSITORY", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}, Key: "REPOSITORY"}}},
+		{Name: "BASEIMAGE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}, Key: "BASEIMAGE"}}},
+		{Name: "NATS_URL", Value: translatorNATSURL},
+		{Name: "TRANSLATOR_STREAM", Value: translatorStream},
+		{Name: "TRANSLATOR_REQUEST_SUBJECT", Value: translatorRequestSubject(instance.Namespace, instance.Name)},
+		{Name: "TRANSLATOR_READY_SUBJECT_TEMPLATE", Value: translatorReadySubjectTemplate},
+		{Name: "TRANSLATOR_CONSUMER", Value: "translator-" + RunnerUIDPrefix(instance.UID)},
+		simulationProjectNamespaceEnvVar(),
+		simulationProjectEnvVar(),
+		simulationExperimentUIDEnvVar(),
+	}
 }
 
 // translatorVolumes builds the shared workspace and BuildKit socket emptyDirs,
