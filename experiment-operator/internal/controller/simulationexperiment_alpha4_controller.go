@@ -454,7 +454,15 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 		dep.Labels = labels
 		dep.Spec.Selector = metav1Selector(labels)
 		dep.Spec.Template.ObjectMeta.Labels = labels
+		// hostUsers=false provisions a per-Pod user namespace (K8s 1.30+) so the
+		// rootless moby/buildkit:*-rootless sidecar runs as the mapped root
+		// (UID 0 in the userns) its buildkitd requires, while the Translator
+		// container continues to run as its image's non-root UID 1000. The
+		// smoke namespace enforces PodSecurity privileged, which admits user
+		// namespaces. FSGroup 1000 keeps the shared /workspace and /run/buildkit
+		// emptyDirs group-writable by both containers.
 		dep.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{FSGroup: int64Ptr(1000)}
+		dep.Spec.Template.Spec.HostUsers = boolPtr(false)
 		dep.Spec.Template.Spec.Volumes = translatorVolumes(instance.Name)
 
 		translatorCtr := corev1.Container{
@@ -600,14 +608,17 @@ func restrictedSecurityContext() *corev1.SecurityContext {
 }
 
 // buildkitSecurityContext is the required rootless, non-privileged BuildKit
-// compatibility exception: Unconfined seccomp and AppArmor plus the
-// --oci-worker-no-process-sandbox flag, without privilege escalation,
+// compatibility exception. The Pod runs with hostUsers=false so Kubernetes
+// provisions a user namespace; buildkitd (moby/buildkit:*-rootless) must run
+// as the mapped root (UID 0 inside that userns) and therefore sets
+// RunAsNonRoot=false. Unconfined seccomp and AppArmor plus the
+// --oci-worker-no-process-sandbox flag remain, without privilege escalation,
 // privileged mode, host networking, host paths, or host runtime sockets.
 func buildkitSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
-		RunAsUser:                int64Ptr(1000),
-		RunAsGroup:               int64Ptr(1000),
-		RunAsNonRoot:             boolPtr(true),
+		RunAsUser:                int64Ptr(0),
+		RunAsGroup:               int64Ptr(0),
+		RunAsNonRoot:             boolPtr(false),
 		AllowPrivilegeEscalation: boolPtr(false),
 		Privileged:               boolPtr(false),
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},

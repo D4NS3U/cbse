@@ -431,6 +431,9 @@ func TestAlpha4HappyPathProvisioning(t *testing.T) {
 		*transDep.Spec.Template.Spec.SecurityContext.FSGroup != 1000 {
 		t.Fatalf("translator Pod fsGroup = %#v, want 1000", transDep.Spec.Template.Spec.SecurityContext)
 	}
+	if transDep.Spec.Template.Spec.HostUsers == nil || *transDep.Spec.Template.Spec.HostUsers {
+		t.Fatalf("translator Pod hostUsers = %#v, want false (per-Pod user namespace for rootless BuildKit)", transDep.Spec.Template.Spec.HostUsers)
+	}
 
 	tr := containerByName(t, transDep, "translator")
 	if tr.SecurityContext == nil || tr.SecurityContext.RunAsUser == nil || *tr.SecurityContext.RunAsUser != 1000 {
@@ -450,8 +453,14 @@ func TestAlpha4HappyPathProvisioning(t *testing.T) {
 	}
 
 	bk := containerByName(t, transDep, "buildkit")
-	if bk.SecurityContext == nil || bk.SecurityContext.RunAsNonRoot == nil || !*bk.SecurityContext.RunAsNonRoot {
-		t.Fatalf("buildkit RunAsNonRoot = %#v, want true", bk.SecurityContext)
+	// The rootless moby/buildkit:*-rootless sidecar runs as the mapped root
+	// (UID 0) inside the Pod's user namespace (hostUsers=false), so RunAsNonRoot
+	// is false rather than the restricted-profile default.
+	if bk.SecurityContext == nil || bk.SecurityContext.RunAsUser == nil || *bk.SecurityContext.RunAsUser != 0 {
+		t.Fatalf("buildkit RunAsUser = %#v, want 0 (mapped root in the Pod user namespace)", bk.SecurityContext)
+	}
+	if bk.SecurityContext.RunAsNonRoot == nil || *bk.SecurityContext.RunAsNonRoot {
+		t.Fatalf("buildkit RunAsNonRoot = %#v, want false", bk.SecurityContext)
 	}
 	if bk.SecurityContext.Privileged == nil || *bk.SecurityContext.Privileged {
 		t.Fatalf("buildkit Privileged = %#v, want false", bk.SecurityContext.Privileged)
