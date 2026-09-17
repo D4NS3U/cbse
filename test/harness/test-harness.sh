@@ -33,6 +33,14 @@ case "${args}" in
     if [[ -n "${FAKE_VERSION:-}" ]]; then printf '%s' "{\"serverVersion\":{\"gitVersion\":\"${FAKE_VERSION}\"}}";
     else printf '%s' '{"serverVersion":{"gitVersion":"v1.32.5+k3s1"}}'; fi ;;
   *"get nodes"*) cat "${FAKE_NODES_FILE:?FAKE_NODES_FILE is required}" ;;
+  *"get --raw=/metrics"*)
+    # Default: UserNamespacesSupport gate enabled. Set FAKE_USERNS=0 to stub a
+    # cluster with the gate disabled, or FAKE_USERNS=missing for an absent metric.
+    case "${FAKE_USERNS:-1}" in
+      0) printf '%s\n' 'kubernetes_feature_enabled{name="UserNamespacesSupport",stage="BETA"} 0' ;;
+      missing) : ;;
+      *) printf '%s\n' 'kubernetes_feature_enabled{name="UserNamespacesSupport",stage="BETA"} 1' ;;
+    esac ;;
   *"get secret cbse-registry-auth -n cbse-test-system"*) echo kubernetes.io/dockerconfigjson ;;
   *"get secret"*) echo "unexpected registry Secret lookup: ${args}" >&2; exit 9 ;;
   *"auth can-i"*) echo yes ;;
@@ -110,6 +118,12 @@ if env "${common[@]}" FAKE_VERSION=v1.29.4+k3s1 "${root}/test/harness/preflight.
 fi
 if env "${common[@]}" FAKE_NODES_FILE="${tmp}/node_arm64.json" "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted a cluster with no amd64 Node" >&2; exit 1
+fi
+if env "${common[@]}" FAKE_USERNS=0 "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a cluster with UserNamespacesSupport disabled" >&2; exit 1
+fi
+if env "${common[@]}" FAKE_USERNS=missing "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a cluster missing the UserNamespacesSupport metric" >&2; exit 1
 fi
 if env "${common[@]}" OPERATOR_IMAGE=registry.example.test/operator:latest "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted a mutable image" >&2; exit 1

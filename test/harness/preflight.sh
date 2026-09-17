@@ -59,6 +59,23 @@ amd64_ready="$(printf '%s' "${nodes_json}" | jq -r '
   exit 2
 }
 
+# UserNamespacesSupport fast-fail: the alpha4 rootless BuildKit sidecar
+# (moby/buildkit:*-rootless with the direct buildkitd command and
+# --oci-worker-no-process-sandbox) requires the per-Pod user namespace that
+# Kubernetes provisions only when the UserNamespacesSupport feature gate is
+# enabled. The Operator injects hostUsers=false on the Translator Pod, which
+# the API server silently strips (and no user namespace is provisioned) when
+# the gate is off; buildkitd then crashes with "can't enable NoProcessSandbox
+# without Rootless". Fail fast before any cluster or registry mutation so a
+# rootless-BuildKit smoke does not waste a full build on a cluster that cannot
+# host it. See docs/CLUSTER_REQUIREMENTS.md for the node setup.
+userns_metric="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get --raw='/metrics' 2>/dev/null \
+  | grep -E '^kubernetes_feature_enabled\{name="UserNamespacesSupport"' || true)"
+if [[ ! "${userns_metric}" =~ [[:space:]]1[[:space:]]*$ ]]; then
+  echo "UserNamespacesSupport feature gate is not enabled on this cluster; the alpha4 rootless BuildKit Translator requires it. See docs/CLUSTER_REQUIREMENTS.md" >&2
+  exit 2
+fi
+
 for check in \
   "create namespaces" \
   "delete namespaces" \
