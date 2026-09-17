@@ -333,7 +333,7 @@ func validateNamespaceNameUnique(ctx context.Context, db DB, table string) error
 				AND c.contype = 'u'
 				AND cardinality(c.conkey) = 2
 			GROUP BY c.oid
-			HAVING array_agg(a.attname ORDER BY key.position) = ARRAY['project_namespace', 'project_name']
+			HAVING array_agg(a.attname ORDER BY key.position) = ARRAY['project_namespace', 'project_name']::name[]
 		)`,
 		table,
 	).Scan(&exists)
