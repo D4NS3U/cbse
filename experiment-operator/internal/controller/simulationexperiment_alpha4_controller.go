@@ -491,7 +491,13 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 			Command: []string{
 				"buildkitd",
 				"--addr", "unix:///run/buildkit/buildkitd.sock",
+				"--root", "/run/buildkit/data",
+				"--group", "1000",
 				"--oci-worker-no-process-sandbox",
+			},
+			Env: []corev1.EnvVar{
+				{Name: "XDG_RUNTIME_DIR", Value: "/run/buildkit"},
+				{Name: "HOME", Value: "/run/buildkit"},
 			},
 			Resources: effective,
 			VolumeMounts: []corev1.VolumeMount{
@@ -611,17 +617,24 @@ func restrictedSecurityContext() *corev1.SecurityContext {
 // compatibility exception. The Pod runs with hostUsers=false so Kubernetes
 // provisions a user namespace; buildkitd (moby/buildkit:*-rootless) must run
 // as the mapped root (UID 0 inside that userns) and therefore sets
-// RunAsNonRoot=false. Unconfined seccomp and AppArmor plus the
-// --oci-worker-no-process-sandbox flag remain, without privilege escalation,
-// privileged mode, host networking, host paths, or host runtime sockets.
+// RunAsNonRoot=false. The primary group is 1000 (the shared fsGroup) so the
+// Unix sockets buildkitd creates on the shared /run/buildkit emptyDir are
+// group-owned by the same GID the Translator container (UID/GID 1000) uses,
+// letting it reach the buildkitd socket. The CHOWN capability is retained
+// alongside the otherwise-dropped set because buildkitd chowns its trace and
+// listening sockets to that group; without it, rootless buildkitd fails with
+// 'chown ...: operation not permitted' under the per-Pod user namespace.
+// Unconfined seccomp and AppArmor plus the --oci-worker-no-process-sandbox
+// flag remain, without privilege escalation, privileged mode, host
+// networking, host paths, or host runtime sockets.
 func buildkitSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		RunAsUser:                int64Ptr(0),
-		RunAsGroup:               int64Ptr(0),
+		RunAsGroup:               int64Ptr(1000),
 		RunAsNonRoot:             boolPtr(false),
 		AllowPrivilegeEscalation: boolPtr(false),
 		Privileged:               boolPtr(false),
-		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		Capabilities:             &corev1.Capabilities{Add: []corev1.Capability{"CHOWN"}, Drop: []corev1.Capability{"ALL"}},
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
 		AppArmorProfile:          &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
 	}

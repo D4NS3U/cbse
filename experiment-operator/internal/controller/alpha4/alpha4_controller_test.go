@@ -474,8 +474,20 @@ func TestAlpha4HappyPathProvisioning(t *testing.T) {
 	if bk.SecurityContext.AppArmorProfile == nil || bk.SecurityContext.AppArmorProfile.Type != corev1.AppArmorProfileTypeUnconfined {
 		t.Fatalf("buildkit AppArmorProfile = %#v, want Unconfined", bk.SecurityContext.AppArmorProfile)
 	}
-	if got := bk.Command; len(got) != 4 || got[0] != "buildkitd" || got[1] != "--addr" || got[2] != "unix:///run/buildkit/buildkitd.sock" || got[3] != "--oci-worker-no-process-sandbox" {
-		t.Fatalf("buildkit command = %#v, want rootless buildkitd", got)
+	if got := bk.Command; len(got) != 8 || got[0] != "buildkitd" || got[1] != "--addr" || got[2] != "unix:///run/buildkit/buildkitd.sock" ||
+		got[3] != "--root" || got[4] != "/run/buildkit/data" || got[5] != "--group" || got[6] != "1000" ||
+		got[7] != "--oci-worker-no-process-sandbox" {
+		t.Fatalf("buildkit command = %#v, want rootless buildkitd with --root/--group/--oci-worker-no-process-sandbox", got)
+	}
+	// buildkitd runs as the mapped root (UID 0) but with primary GID 1000 so its
+	// sockets on the shared /run/buildkit emptyDir are group-owned by the
+	// Translator's GID; the CHOWN capability lets rootless buildkitd chown its
+	// trace and listening sockets to that group under the per-Pod user namespace.
+	if bk.SecurityContext.RunAsGroup == nil || *bk.SecurityContext.RunAsGroup != 1000 {
+		t.Fatalf("buildkit RunAsGroup = %#v, want 1000", bk.SecurityContext)
+	}
+	if bk.SecurityContext.Capabilities == nil || len(bk.SecurityContext.Capabilities.Add) != 1 || bk.SecurityContext.Capabilities.Add[0] != "CHOWN" {
+		t.Fatalf("buildkit capabilities.Add = %#v, want [CHOWN]", bk.SecurityContext.Capabilities)
 	}
 	if bk.Resources.Limits.Cpu().Cmp(kresource.MustParse("1")) != 0 {
 		t.Fatalf("buildkit cpu limit = %s, want 1", bk.Resources.Limits.Cpu())
