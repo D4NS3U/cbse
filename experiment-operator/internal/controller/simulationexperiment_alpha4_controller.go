@@ -490,6 +490,17 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 			Image: t.BuilderImage,
 			Command: []string{
 				"buildkitd",
+				"--rootless",
+				// overlayfs is the rootless snapshotter: the native (runc)
+				// snapshotter stores extracted layer files with their original
+				// image UIDs and mapped-root buildkitd cannot open/chmod files
+				// owned by other mapped UIDs (e.g. _apt=100, mode 0700) under the
+				// per-Pod user namespace, so every solve fails with "open/chmod
+				// ...var/cache/apt/archives/partial: permission denied".
+				// overlayfs (via fuse-overlayfs or kernel userns overlay) avoids
+				// storing layer files with foreign UIDs and is the standard
+				// rootless-buildkit choice under a user namespace.
+				"--oci-worker-snapshotter", "overlayfs",
 				"--addr", "unix:///run/buildkit/buildkitd.sock",
 				"--root", "/run/buildkit/data",
 				"--group", "1000",
@@ -498,6 +509,23 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 			Env: []corev1.EnvVar{
 				{Name: "XDG_RUNTIME_DIR", Value: "/run/buildkit"},
 				{Name: "HOME", Value: "/run/buildkit"},
+				// BUILDKITD_ROOTLESS=1 makes the direct buildkitd command behave
+				// as the rootless image's default rootlesskit entrypoint would:
+				// it selects the rootless worker defaults (fuse-overlayfs /
+				// userns overlay) rather than the privileged-root defaults.
+				{Name: "BUILDKITD_ROOTLESS", Value: "1"},
+				// TMPDIR points the rootless buildkitd worker's temporary mount
+				// directory at the shared /run/buildkit emptyDir (writable by the
+				// fsGroup 1000 / mapped-root worker). Without it, buildkitd falls
+				// back to the image built-in home (/home/user/.local/tmp), which
+				// is not writable under the per-Pod user namespace and fails every
+				// solve with "failed to create temp dir: mkdir
+				// /home/user/.local/tmp/buildkit-mount...: permission denied".
+				// /run/buildkit itself is the emptyDir mount root and exists at
+				// startup, so it is a safe TMPDIR target; buildkitd creates its
+				// buildkit-mount* subdirectories there alongside the socket and
+				// the --root data directory.
+				{Name: "TMPDIR", Value: "/run/buildkit"},
 			},
 			Resources: effective,
 			VolumeMounts: []corev1.VolumeMount{
@@ -567,6 +595,13 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileRunnerServiceAccount(ctx
 // descriptive configuration error rather than a runtime crash.
 func translatorEnvVars(instance *experimentalpha4.SimulationExperiment, cmName string) []corev1.EnvVar {
 	return []corev1.EnvVar{
+		// HOME points the BuildKit session's auth provider at a writable
+		// directory. The Translator image is a static scratch binary with no
+		// home directory, so without HOME the auth provider defaults to "/"
+		// (read-only) and every registry-pushing solve fails with
+		// "mkdir /.docker: permission denied". /workspace is the shared
+		// emptyDir the Translator already mounts and owns as UID/GID 1000.
+		{Name: "HOME", Value: "/workspace"},
 		{Name: "REPOSITORY", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}, Key: "REPOSITORY"}}},
 		{Name: "BASEIMAGE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}, Key: "BASEIMAGE"}}},
 		{Name: "NATS_URL", Value: translatorNATSURL},
@@ -620,11 +655,19 @@ func restrictedSecurityContext() *corev1.SecurityContext {
 // RunAsNonRoot=false. The primary group is 1000 (the shared fsGroup) so the
 // Unix sockets buildkitd creates on the shared /run/buildkit emptyDir are
 // group-owned by the same GID the Translator container (UID/GID 1000) uses,
-// letting it reach the buildkitd socket. The CHOWN capability is retained
-// alongside the otherwise-dropped set because buildkitd chowns its trace and
-// listening sockets to that group; without it, rootless buildkitd fails with
-// 'chown ...: operation not permitted' under the per-Pod user namespace.
-// Unconfined seccomp and AppArmor plus the --oci-worker-no-process-sandbox
+// letting it reach the buildkitd socket. CHOWN, DAC_OVERRIDE, FOWNER, SETGID,
+// SETUID, and SYS_ADMIN are retained (alongside the otherwise-dropped set):
+// SYS_ADMIN lets the OCI worker's overlayfs snapshotter perform the bind
+// mounts it needs to assemble build inputs; CHOWN/DAC_OVERRIDE/FOWNER let
+// buildkitd adjust and read its snapshots and sockets; SETGID/SETUID support
+// the fuse-overlayfs helper spawn. The overlayfs snapshotter (selected via
+// --oci-worker-snapshotter overlayfs) stores extracted layer files with
+// userns-friendly ownership, avoiding the native-snapshotter "open/chmod
+// ...var/cache/apt/archives/partial: permission denied" failures on files
+// owned by mapped non-root image UIDs. The Pod already runs hostUsers=false
+// (a K8s-provisioned user namespace) and the namespace enforces PodSecurity
+// privileged, so these capabilities inside that userns cannot affect the
+// host. Unconfined seccomp and AppArmor plus the --oci-worker-no-process-sandbox
 // flag remain, without privilege escalation, privileged mode, host
 // networking, host paths, or host runtime sockets.
 func buildkitSecurityContext() *corev1.SecurityContext {
@@ -634,7 +677,7 @@ func buildkitSecurityContext() *corev1.SecurityContext {
 		RunAsNonRoot:             boolPtr(false),
 		AllowPrivilegeEscalation: boolPtr(false),
 		Privileged:               boolPtr(false),
-		Capabilities:             &corev1.Capabilities{Add: []corev1.Capability{"CHOWN"}, Drop: []corev1.Capability{"ALL"}},
+		Capabilities:             &corev1.Capabilities{Add: []corev1.Capability{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "SYS_ADMIN"}, Drop: []corev1.Capability{"ALL"}},
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
 		AppArmorProfile:          &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
 	}

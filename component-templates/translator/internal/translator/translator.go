@@ -170,6 +170,7 @@ func (t *Translator) handle(ctx context.Context, msg messaging.Message) error {
 		if errors.Is(err, context.Canceled) {
 			return err // cancellation: leave unacked, no marker
 		}
+		t.log.Printf("translator: generator failed scenario=%d attempt=%d: %v", scenarioID, attempt, err)
 		return t.emptyFailure(ctx, dir, scenarioID, attempt, readySubject, uid, "generator", msg)
 	}
 
@@ -185,6 +186,7 @@ func (t *Translator) handle(ctx context.Context, msg messaging.Message) error {
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
+		t.log.Printf("translator: build failed scenario=%d attempt=%d: %v", scenarioID, attempt, err)
 		return t.emptyFailure(ctx, dir, scenarioID, attempt, readySubject, uid, "build", msg)
 	}
 
@@ -194,6 +196,7 @@ func (t *Translator) handle(ctx context.Context, msg messaging.Message) error {
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
+		t.log.Printf("translator: digest resolution failed scenario=%d attempt=%d: %v", scenarioID, attempt, err)
 		return t.emptyFailure(ctx, dir, scenarioID, attempt, readySubject, uid, "digest_resolution", msg)
 	}
 
@@ -241,8 +244,11 @@ func (t *Translator) finishSuccess(ctx context.Context, dir string, m workspace.
 
 // emptyFailure atomically writes the empty-failure marker, publishes the
 // empty-image ready message, confirms publication, acknowledges the request,
-// and removes the attempt workspace.
+// and removes the attempt workspace. It logs the failure class so a
+// generator, build, or digest-resolution failure is observable in the
+// Translator container logs (the marker itself is credential-free).
 func (t *Translator) emptyFailure(ctx context.Context, dir string, scenarioID, attempt int, readySubject, uid, class string, msg messaging.Message) error {
+	t.log.Printf("translator: empty-failure scenario=%d attempt=%d class=%s", scenarioID, attempt, class)
 	m := workspace.Marker{
 		Outcome: workspace.OutcomeEmptyFailure, ScenarioID: scenarioID, Attempt: attempt,
 		ReadySubject: readySubject, ExperimentUID: uid, EmptyImage: true, FailureClass: class,

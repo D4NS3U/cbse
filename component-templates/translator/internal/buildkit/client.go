@@ -61,13 +61,26 @@ func SolveFuncFor(c *bkclient.Client, auth *registryauth.Config) SolveFunc {
 				}
 			}
 		}()
+		// The generated attempt directory is both the build context and the
+		// Dockerfile source. The dockerfile.v0 frontend requests the Dockerfile
+		// from a separate local source named "dockerfile" (dockerui.
+		// DefaultLocalNameDockerfile) in addition to the build context named
+		// "context" (dockerui.DefaultLocalNameContext). Registering only
+		// "context" makes the frontend's lookup for "dockerfile" fail with
+		// "no access allowed to dir dockerfile". Both locals point at the same
+		// generated directory so the frontend reads the Dockerfile and the
+		// build context from one place, matching the buildkit client test
+		// convention (DefaultLocalNameDockerfile + DefaultLocalNameContext).
 		resp, err := c.Solve(ctx, nil, bkclient.SolveOpt{
 			Exports: []bkclient.ExportEntry{{
 				Type:  bkclient.ExporterImage,
 				Attrs: attrs,
 			}},
-			LocalMounts: map[string]fsutil.FS{"context": fs},
-			Frontend:    "dockerfile.v0",
+			LocalMounts: map[string]fsutil.FS{
+				"context":    fs,
+				"dockerfile": fs,
+			},
+			Frontend: "dockerfile.v0",
 			FrontendAttrs: map[string]string{
 				"filename": "Dockerfile",
 			},

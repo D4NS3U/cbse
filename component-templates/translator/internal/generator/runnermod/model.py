@@ -26,6 +26,12 @@ def run(arrival_rate, service_rate, run_duration, rng):
 
     state = {"completed": 0, "waits": []}
 
+    # A non-positive horizon produces no arrivals and no completions. SimPy
+    # requires env.run(until) to be greater than the current time (0), so guard
+    # it rather than calling env.run(until=0).
+    if run_duration <= 0:
+        return 0, 0.0
+
     def customer(arrival_time):
         yield env.timeout(arrival_time)
         request = resource.request()
@@ -48,6 +54,10 @@ def run(arrival_rate, service_rate, run_duration, rng):
             t += inter
             if t >= run_duration:
                 break
+            # source is a SimPy process (generator): yield the timeout until
+            # the next arrival time, then spawn the customer process at that
+            # time. env.process requires a generator, so source must yield.
+            yield env.timeout(t - env.now)
             env.process(customer(t))
 
     env.process(source())

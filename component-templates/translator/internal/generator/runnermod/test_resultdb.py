@@ -79,10 +79,15 @@ class TestResultDBSQL(unittest.TestCase):
         self.assertIn("id BIGSERIAL PRIMARY KEY", create[0][0])
         self.assertIn("result JSONB NOT NULL", create[0][0])
 
-    def test_insert_uses_two_transactions(self):
+    def test_insert_uses_single_transaction(self):
         resultdb.insert(7, {"x": 1}, {"host": "h", "port": 5432, "user": "u", "password": "p", "dbname": "d"})
-        # Two `with conn:` blocks: lock+create, then insert.
-        self.assertEqual(self.conn.transactions, 2)
+        # The statement timeout, advisory lock, CREATE TABLE, and INSERT run in
+        # a SINGLE `with conn:` transaction. psycopg 3 closes the connection
+        # when a second `with conn:` block opens after the first commits against
+        # PostgreSQL 18.6, so a single transaction keeps the connection alive
+        # across the whole write while the pg_advisory_xact_lock still releases
+        # at that transaction's commit.
+        self.assertEqual(self.conn.transactions, 1)
 
     def test_insert_parameterized_jsonb(self):
         resultdb.insert(7, {"completed_customers": 8}, {"host": "h", "port": 5432, "user": "u", "password": "p", "dbname": "d"})

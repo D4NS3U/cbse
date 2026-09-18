@@ -1,17 +1,24 @@
 // pgx_connector.go provides the real PostgreSQL connector for the detaildb
 // lookup using pgx v5. It builds a pgx.ConnConfig from separate host and port
-// fields with sslmode=disable and no connection URI string concatenation. It
-// does not set a per-attempt ConnectTimeout: the shared 10-second endpoint
-// contract deadline (applied by databaseendpoint.DialConn through the context)
-// bounds resolution and all candidate connection attempts together, so no
-// candidate receives 10 seconds of its own.
+// fields with sslmode=disable and no connection URI string concatenation. A
+// pgx v5 *pgx.ConnConfig must be created by pgx.ParseConfig (pgx.Connect panics
+// with "config must be created by ParseConfig" on a hand-constructed struct
+// literal because ParseConfig initializes the internal createdByParseConfig
+// marker and defaults). The keyword/value DSN passed to ParseConfig uses
+// separate host and port fields (it is not a postgresql:// URI built by string
+// concatenation); the password is set on the parsed config afterward so it
+// never appears in the parsed string. It does not set a per-attempt
+// ConnectTimeout: the shared 10-second endpoint contract deadline (applied by
+// databaseendpoint.DialConn through the context) bounds resolution and all
+// candidate connection attempts together, so no candidate receives 10 seconds
+// of its own.
 package detaildb
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // PgxConnector is the real pgx v5 Connector for the Scenario Detail Database
@@ -22,18 +29,14 @@ type PgxConnector struct{}
 // separate host and port fields, disables TLS, and applies no per-attempt
 // timeout beyond the caller's context deadline.
 func (PgxConnector) Connect(ctx context.Context, host string, port int32, user, password, dbname string) (Conn, error) {
-	cfg := pgx.ConnConfig{
-		Config: pgconn.Config{
-			Host:          host,
-			Port:          uint16(port),
-			Database:      dbname,
-			User:          user,
-			Password:      password,
-			TLSConfig:     nil, // nil disables TLS (sslmode=disable)
-			RuntimeParams: map[string]string{"sslmode": "disable"},
-		},
+	cfg, err := pgx.ParseConfig(fmt.Sprintf("host=%s port=%d dbname=%s user=%s sslmode=disable", host, port, dbname, user))
+	if err != nil {
+		return nil, err
 	}
-	conn, err := pgx.ConnectConfig(ctx, &cfg)
+	// Set the password on the parsed config so it is never part of the parsed
+	// string and remains a separate driver field.
+	cfg.Password = password
+	conn, err := pgx.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

@@ -474,10 +474,10 @@ func TestAlpha4HappyPathProvisioning(t *testing.T) {
 	if bk.SecurityContext.AppArmorProfile == nil || bk.SecurityContext.AppArmorProfile.Type != corev1.AppArmorProfileTypeUnconfined {
 		t.Fatalf("buildkit AppArmorProfile = %#v, want Unconfined", bk.SecurityContext.AppArmorProfile)
 	}
-	if got := bk.Command; len(got) != 8 || got[0] != "buildkitd" || got[1] != "--addr" || got[2] != "unix:///run/buildkit/buildkitd.sock" ||
-		got[3] != "--root" || got[4] != "/run/buildkit/data" || got[5] != "--group" || got[6] != "1000" ||
-		got[7] != "--oci-worker-no-process-sandbox" {
-		t.Fatalf("buildkit command = %#v, want rootless buildkitd with --root/--group/--oci-worker-no-process-sandbox", got)
+	if got := bk.Command; len(got) != 11 || got[0] != "buildkitd" || got[1] != "--rootless" || got[2] != "--oci-worker-snapshotter" || got[3] != "overlayfs" ||
+		got[4] != "--addr" || got[5] != "unix:///run/buildkit/buildkitd.sock" || got[6] != "--root" || got[7] != "/run/buildkit/data" ||
+		got[8] != "--group" || got[9] != "1000" || got[10] != "--oci-worker-no-process-sandbox" {
+		t.Fatalf("buildkit command = %#v, want rootless buildkitd with --oci-worker-snapshotter overlayfs/--root/--group/--oci-worker-no-process-sandbox", got)
 	}
 	// buildkitd runs as the mapped root (UID 0) but with primary GID 1000 so its
 	// sockets on the shared /run/buildkit emptyDir are group-owned by the
@@ -486,8 +486,19 @@ func TestAlpha4HappyPathProvisioning(t *testing.T) {
 	if bk.SecurityContext.RunAsGroup == nil || *bk.SecurityContext.RunAsGroup != 1000 {
 		t.Fatalf("buildkit RunAsGroup = %#v, want 1000", bk.SecurityContext)
 	}
-	if bk.SecurityContext.Capabilities == nil || len(bk.SecurityContext.Capabilities.Add) != 1 || bk.SecurityContext.Capabilities.Add[0] != "CHOWN" {
-		t.Fatalf("buildkit capabilities.Add = %#v, want [CHOWN]", bk.SecurityContext.Capabilities)
+	// CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, and SYS_ADMIN support the
+	// rootless overlayfs worker inside the per-Pod user namespace
+	// (hostUsers=false). SYS_ADMIN lets the overlayfs snapshotter perform the
+	// bind mounts it needs to assemble build inputs; the others let buildkitd
+	// adjust/read its snapshots and sockets and spawn the fuse-overlayfs
+	// helper. The overlayfs snapshotter avoids the native-snapshotter
+	// "permission denied" failures on layer files owned by mapped non-root
+	// image UIDs.
+	if bk.SecurityContext.Capabilities == nil || len(bk.SecurityContext.Capabilities.Add) != 6 ||
+		bk.SecurityContext.Capabilities.Add[0] != "CHOWN" || bk.SecurityContext.Capabilities.Add[1] != "DAC_OVERRIDE" ||
+		bk.SecurityContext.Capabilities.Add[2] != "FOWNER" || bk.SecurityContext.Capabilities.Add[3] != "SETGID" ||
+		bk.SecurityContext.Capabilities.Add[4] != "SETUID" || bk.SecurityContext.Capabilities.Add[5] != "SYS_ADMIN" {
+		t.Fatalf("buildkit capabilities.Add = %#v, want [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, SYS_ADMIN]", bk.SecurityContext.Capabilities)
 	}
 	if bk.Resources.Limits.Cpu().Cmp(kresource.MustParse("1")) != 0 {
 		t.Fatalf("buildkit cpu limit = %s, want 1", bk.Resources.Limits.Cpu())
