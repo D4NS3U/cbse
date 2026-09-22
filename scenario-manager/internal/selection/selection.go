@@ -1,8 +1,6 @@
-// Package selection implements the alpha4 translation-request selection loop:
-// one process-local serial worker that owns the Created -> Scheduled
-// transition and the publication boundary. It is the alpha4 equivalent of the
-// alpha3 internal/core basic scenario selector (BSSL), consuming the
-// transport-neutral alpha4 library delivered by Slices 04 through 06.
+// Package selection implements the translation-request selection loop: one
+// process-local serial worker that owns the Created -> Scheduled transition and
+// the publication boundary.
 //
 // Each iteration runs recovery-first: it discovers stale unpublished Scheduled
 // claims and applies persistence.RecoverUnpublishedTranslationClaim, then
@@ -19,13 +17,8 @@
 // (owned by the runnerstart scheduler) or PostProcessing (a boundary no-op in
 // this branch). It holds no row lock, queue, leader flag, or cross-replica
 // coordination state; database guarded transitions remain the durable
-// ownership mechanism. Each iteration has a bounded timeout (mirroring
-// internal/core's 30s) and a fixed delay (mirroring internal/core's 5s);
-// cancellation and deadline errors are normal workflow control.
-//
-// This package is a temporary alpha4 placement. Slice 07 moves it to its final
-// internal home; it consumes only the exported 04-06 library surfaces so the
-// move is a mechanical rename.
+// ownership mechanism. Each iteration has a bounded timeout (30s) and a fixed
+// delay (5s); cancellation and deadline errors are normal workflow control.
 package selection
 
 import (
@@ -44,12 +37,12 @@ import (
 const (
 	// iterationTimeout prevents one database, Kubernetes, or NATS call from
 	// holding the single selector worker indefinitely, provided each dependency
-	// observes context cancellation as required by its contract. It mirrors
-	// internal/core's 30s BSL iteration timeout.
+	// observes context cancellation as required by its contract. It is the
+	// canonical 30s selection-loop iteration timeout.
 	iterationTimeout = 30 * time.Second
 	// iterationDelay is the fixed delay between iterations. It starts after an
-	// iteration finishes so slow work never creates a backlog of missed ticks.
-	// It mirrors internal/core's 5s BSL delay.
+	// iteration finishes so slow work never creates a backlog of missed ticks. It
+	// is the canonical 5s selection-loop delay.
 	iterationDelay = 5 * time.Second
 )
 

@@ -19,10 +19,6 @@
 // TranslatorReadyHandled so the adapter ACKs without a database mutation or
 // Job creation. A transient database or Kubernetes lookup failure returns
 // TranslatorReadyRetry so the adapter NAKs for redelivery.
-//
-// This package is a temporary alpha4 placement. Slice 07 moves it to its final
-// internal home; it consumes only the exported 04-06 library surfaces so the
-// move is a mechanical rename.
 package ready
 
 import (

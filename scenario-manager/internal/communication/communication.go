@@ -9,9 +9,6 @@
 // non-JSON ProjectNamespace and ProjectName fields after subject parsing, and
 // core orchestration receives the explicit identity without reconstructing a
 // namespace from process configuration or a normalized subject token.
-//
-// This package is additive and isolated until the alpha4 cutover in a later
-// slice: it does not replace the active alpha3 communication wiring.
 package communication
 
 import (

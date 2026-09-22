@@ -1,5 +1,13 @@
-// Package kube contains helpers for establishing Kubernetes API clients and
-// interacting with SimulationExperiment custom resources.
+// Package kube contains helpers for establishing a Kubernetes API client and
+// listing SimulationExperiment custom resources.
+//
+// The active Scenario Manager composition (internal/core.RunScenarioManager)
+// constructs its controller-runtime client directly from the in-cluster REST
+// config (or SCENARIO_MANAGER_KUBECONFIG) and injects it into the informer,
+// adapters, selection loop, and schedulers; it does not use this package's
+// singleton KubeConnect/Client helpers. These helpers are not imported by the
+// active SM wiring and are exercised only by this package's own unit and
+// integration tests.
 package kube
 
 import (

@@ -52,6 +52,8 @@ func TestValidateIdent(t *testing.T) {
 	}
 }
 
+// pad returns an n-length string of 'a' bytes, used to exercise identifier
+// length boundaries (e.g. the 63-character DNS-label limit).
 func pad(n int) string {
 	b := make([]byte, n)
 	for i := range b {

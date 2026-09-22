@@ -1,9 +1,7 @@
 // Package subject defines the canonical alpha4 NATS subject grammar for the
 // Scenario Manager's communication with the EDS and the Translator.
 //
-// The alpha4 grammar is namespace-aware and replaces the alpha3
-// project-placeholder grammar (cbse.{project}.*) with a fixed three-token
-// grammar of the form:
+// The grammar is namespace-aware and fixed: every subject has the form
 //
 //	cbse.<namespace>.<project>.<domain>.<event>
 //
@@ -16,9 +14,6 @@
 // The grammar is intentionally strict: project and namespace identifiers are
 // never normalized (no lowercasing, no token replacement) and never contain
 // dots, so a subject tokenizes to a fixed, unambiguous sequence.
-//
-// This package is additive and isolated until the alpha4 cutover in a later
-// slice: it does not replace the active alpha3 subject grammar.
 package subject
 
 import (

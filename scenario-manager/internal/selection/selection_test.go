@@ -90,6 +90,8 @@ func phaseExp(ns, name, phase string) *experimentalpha4.SimulationExperiment {
 	return e
 }
 
+// newSelector builds a Selector with a fixed publish-recovery timeout and a
+// shortened loop cadence so a full run() loop test exits promptly.
 func newSelector(t *testing.T, pub communication.TranslationRequestPublisher, deps Dependencies) *Selector {
 	t.Helper()
 	s, err := NewSelector(pub, time.Minute, deps)

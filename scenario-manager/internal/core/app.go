@@ -1,5 +1,6 @@
-// Package app is the alpha4 Scenario Manager composition entry point.
-// RunScenarioManager performs startup validation in the exact order and
+// Package core is the Scenario Manager composition entry point.
+// RunScenarioManager is the active binary entry point invoked by cmd/main.go:
+// it performs startup validation in the exact order and
 // classification required by the SM startup failure class, connects to NATS and
 // JetStream, reconciles streams and consumers, constructs the experiment
 // informer, the four NATS adapters, the selection loop, and the runner-start
@@ -9,12 +10,7 @@
 //
 // It owns no domain logic; it only constructs and starts the components owned by
 // the informer, natsadapter, selection, ready, runnerstart, and observation
-// packages, consuming the 04-06 alpha4 library as-is.
-//
-// This package is a temporary alpha4 placement. Slice 07 moves it to its final
-// internal home (merging into internal/core); it is NOT imported by cmd/main.go
-// in this slice. The active alpha3 binary, CRD, schemes, manifests, and smoke
-// path are unchanged.
+// packages.
 package core
 
 import (
@@ -49,7 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Env var names for the Core DB and NATS, shared with the alpha3 wiring.
+// Env var names for the Core DB connection and the NATS broker URL.
 const (
 	coreDBDSNEnv      = "SCENARIO_MANAGER_CORE_DB_DSN"
 	coreDBUserEnv     = "SCENARIO_MANAGER_CORE_DB_USER"
@@ -71,14 +67,17 @@ type startupConfig struct {
 	publishRecoveryTimeout time.Duration
 }
 
-// RunScenarioManager is the alpha4 Scenario Manager composition entry point. It
-// mirrors internal/core.RunScenarioManager for alpha4: startup validation in
-// the SM startup failure-class order, NATS/JetStream connect + reconcile,
-// construct + start the informer, four NATS adapters, selection loop, and
-// runner-start and observation schedulers, emit the ready log, block on ctx,
-// and join on shutdown. Any startup configuration failure is fatal and
-// terminates the process before any informer, consumer, selector, or scheduler
-// starts.
+// RunScenarioManager is the Scenario Manager composition entry point invoked
+// by cmd/main.go. It performs startup validation in the SM startup
+// failure-class order (runner-start worker count, messaging subject/stream
+// canonicality, Core DB schema, Kubernetes authorization, authentication-free
+// NATS), connects to NATS and JetStream and reconciles streams and consumers,
+// constructs and starts the experiment informer, the four NATS adapters, the
+// selection loop, and the runner-start and observation schedulers, emits the
+// ready log only after every component has started, blocks on ctx, and joins
+// every started component on shutdown. Any startup configuration failure is
+// fatal and terminates the process before any informer, consumer, selector, or
+// scheduler starts.
 func RunScenarioManager(ctx context.Context) {
 	cfg, err := validatePureConfig(os.Getenv)
 	if err != nil {
@@ -212,10 +211,9 @@ func RunScenarioManager(ctx context.Context) {
 
 	<-ctx.Done()
 
-	// Join every started component that owns a join handle, mirroring
-	// internal/core.RunScenarioManager. The NATS consumers stop when the
-	// connection closes; the informer and schedulers have explicit shutdown
-	// joins.
+	// Join every started component that owns a join handle. The NATS consumers
+	// stop when the connection closes; the informer and schedulers have explicit
+	// shutdown joins.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 	var wg sync.WaitGroup

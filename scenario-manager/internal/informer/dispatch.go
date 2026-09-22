@@ -9,12 +9,9 @@
 // block another experiment. The informer does not write
 // SimulationExperiment.status.
 //
-// The dispatch logic (this file) is decoupled from controller-runtime so it can
-// be unit-tested with a fake client. The cache wiring (informer.go) binds a
-// controller-runtime cache to the Dispatcher. This package is a temporary
-// alpha4 placement; Slice 07 moves it to its final internal home, and it
-// consumes only the exported 04-06 library surfaces so the move is a
-// mechanical rename.
+// The dispatch logic (this file) is decoupled from controller-runtime so it
+// can be unit-tested with a fake client. The cache wiring (informer.go) binds a
+// controller-runtime cache to the Dispatcher.
 package informer
 
 import (

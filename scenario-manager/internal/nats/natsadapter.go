@@ -1,8 +1,7 @@
-// Package natsadapter implements the four concrete alpha4 NATS adapters that
-// bind the transport-neutral communication interfaces (Slices 04-06) to a
-// nats.go client: the translation-request publisher, the EDS availability
-// responder, the EDS batch JetStream consumer, and the translator-ready
-// JetStream consumer.
+// natsadapter.go implements the four concrete NATS adapters that bind the
+// transport-neutral communication interfaces to a nats.go client: the
+// translation-request publisher, the EDS availability responder, the EDS batch
+// JetStream consumer, and the translator-ready JetStream consumer.
 //
 // The adapters own transport-level concerns only: exact subject construction,
 // subject parsing and identity validation, strict JSON decode, the lifecycle
@@ -17,10 +16,7 @@
 // unit-tested without a real NATS server: each handler takes the raw subject
 // and payload bytes and returns an ACK/NAK decision (or an availability reply);
 // the subscription wrapper applies the decision to the nats.go message.
-//
-// This package is a temporary alpha4 placement. Slice 07 moves it to its final
-// internal home; it consumes only the exported 04-06 library surfaces so the
-// move is a mechanical rename.
+
 package nats
 
 import (

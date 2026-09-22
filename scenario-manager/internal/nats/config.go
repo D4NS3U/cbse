@@ -1,4 +1,4 @@
-// Package messaging defines the canonical alpha4 NATS messaging contract for
+// Package nats defines the canonical alpha4 NATS messaging contract for
 // the Scenario Manager: subject-template validation, the two shared JetStream
 // streams, the two SM-owned durable consumers, and the per-experiment
 // Translator consumer naming, configuration, and ownership verification.
@@ -7,9 +7,6 @@
 // variables, when explicitly set, must equal the canonical value or startup
 // fails. The Scenario Manager reconciles the two shared streams and its two
 // durable consumers to the exact configuration before business processing.
-//
-// This package is additive and isolated until the alpha4 cutover in a later
-// slice: it does not replace the active alpha3 messaging wiring.
 package nats
 
 import (

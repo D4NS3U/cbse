@@ -40,6 +40,8 @@ func fakeK8s(t *testing.T, objs ...client.Object) client.Client {
 		Build()
 }
 
+// experiment builds a SimulationExperiment fixture with the given phase, an
+// optional SM finalizer, and an optional deletionTimestamp (deleting=true).
 func experiment(namespace, name, uid, phase string, finalizer bool, deleting bool) *experimentalpha4.SimulationExperiment {
 	exp := &experimentalpha4.SimulationExperiment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, UID: types.UID(uid)},
@@ -142,6 +144,8 @@ func newDispatcher(t *testing.T, k8s client.Client, store lifecycle.ProjectStore
 	return d
 }
 
+// waitUntil polls fn until it returns true or the timeout elapses, returning
+// fn's last value. It is a coarse sync aid for goroutine-backed actions.
 func waitUntil(timeout time.Duration, fn func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
