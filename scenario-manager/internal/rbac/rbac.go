@@ -1,4 +1,4 @@
-// Package rbac performs the Slice 06 startup authorization checks. Before
+// Package rbac performs the startup authorization checks. Before
 // Scenario Manager starts informers, NATS consumers, scenario selection,
 // runner-start discovery, or observation, it verifies that its
 // ServiceAccount holds every workload verb and resource the alpha4 contract

@@ -38,9 +38,9 @@ type workerResult struct {
 // observations fail fast. On shutdown the coordinator ignores the returned
 // action and simply drops the key.
 //
-// Scenario-observability records (S06-M3) are emitted only when this replica
-// wins the guarded terminal transition (ok=true): exactly one terminal record
-// per scenario that this replica moves to PostProcessing or Failed. A stale
+// Scenario-observability records are emitted only when this replica wins the
+// guarded terminal transition (ok=true): exactly one terminal record per
+// scenario that this replica moves to PostProcessing or Failed. A stale
 // zero-row transition (another replica won, or the terminal action moved the
 // row) emits no record, so a scenario is logged exactly once even under
 // retries and concurrent replicas. A non-terminal Retry (active/pending Job,

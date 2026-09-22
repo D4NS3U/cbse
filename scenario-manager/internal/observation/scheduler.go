@@ -1,3 +1,13 @@
+// Package observation implements the per-scenario deduplicated observation
+// queue. It discovers every InProcessing scenario on a fixed five-second
+// discovery interval, hands each key to a bounded set of reconciler goroutines
+// that observe the deterministic runner Job through the resource-neutral
+// scheduler adapter, and applies the guarded database transitions dictated by
+// the observation outcome: the monotonic computed-repetitions update,
+// InProcessing -> PostProcessing on Complete, and InProcessing -> Failed on
+// Failed, Collision, or Forbidden. The queue is process-local: a restart loses
+// in-memory state and the immediate discovery reconstructs it from the
+// authoritative database rows.
 package observation
 
 import (

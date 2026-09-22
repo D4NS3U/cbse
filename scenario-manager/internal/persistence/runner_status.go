@@ -7,16 +7,15 @@ import (
 	"fmt"
 )
 
-// This file owns the Slice 06 runner-start and observation persistence
-// surface: the guarded StartingRunners/InProcessing transitions, the
-// monotonic computed-repetitions update, the runner-start and observation
-// projections, and the discovery queries that list StartingRunners and
-// InProcessing scenario IDs in ascending positive-ID order.
+// This file owns the runner-start and observation persistence surface: the
+// guarded StartingRunners/InProcessing transitions, the monotonic
+// computed-repetitions update, the runner-start and observation projections,
+// and the discovery queries that list StartingRunners and InProcessing
+// scenario IDs in ascending positive-ID order.
 //
-// The serial BSL selector no longer owns StartingRunners (see
-// actionableScenarioPredicate); the bounded ordered runner-start scheduler
-// (scenario-manager/internal/runnerstart) discovers StartingRunners
-// rows directly and the per-scenario observation queue
+// The bounded ordered runner-start scheduler
+// (scenario-manager/internal/runnerstart) discovers StartingRunners rows
+// directly and the per-scenario observation queue
 // (scenario-manager/internal/observation) discovers InProcessing rows
 // directly. Both use the deterministic Job name and guarded database
 // transitions so multiple SM replicas converge.

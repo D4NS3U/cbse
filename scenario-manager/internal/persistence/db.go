@@ -9,13 +9,13 @@
 // the package never issues ALTER TABLE repair; an incompatible installation
 // fails startup.
 //
-// All functions take an injected DB so the package is independent of the active
-// alpha3 coredb pool and testable in isolation. Table names default to
+// All functions take an injected DB so the package is independent of the
+// caller's database pool and testable in isolation. Table names default to
 // "project" and "scenario_status" and may be overridden by the legacy env vars
 // for integration tests that run against an isolated schema.
 //
-// This package is additive and isolated until the alpha4 cutover in a later
-// slice: it does not replace the active alpha3 persistence wiring.
+// This package is the active and only Core DB persistence wiring in the
+// Scenario Manager; the earlier alpha3 coredb package has been retired.
 package persistence
 
 import (
@@ -121,8 +121,8 @@ func tableEnv(env, def string) string {
 	return v
 }
 
-// Scenario lifecycle states (mirrored from the alpha3 coredb package so the
-// alpha4 persistence layer is self-contained).
+// Scenario lifecycle states, the canonical state names used by the persistence
+// and lifecycle layers.
 const (
 	ScenarioStateCreated         = "Created"
 	ScenarioStateScheduled       = "Scheduled"

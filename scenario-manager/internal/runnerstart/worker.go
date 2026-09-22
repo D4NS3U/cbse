@@ -68,13 +68,13 @@ type workerResult struct {
 // workflows fail fast. On shutdown the coordinator ignores the returned action
 // (it does not re-delay or transition) and simply drops the ID.
 //
-// Scenario-observability records (S06-M3) are emitted only when this replica
-// wins the guarded transition (ok=true): exactly one creation or adoption
-// record per scenario that advances to InProcessing, and exactly one terminal
-// fail record per scenario that this replica moves to Failed. A stale
-// zero-row transition (another replica won, or the lifecycle gate closed) emits
-// no record, so a scenario is logged exactly once per kind even under retries
-// and concurrent replicas.
+// Scenario-observability records are emitted only when this replica wins the
+// guarded transition (ok=true): exactly one creation or adoption record per
+// scenario that advances to InProcessing, and exactly one terminal fail record
+// per scenario that this replica moves to Failed. A stale zero-row transition
+// (another replica won, or the lifecycle gate closed) emits no record, so a
+// scenario is logged exactly once per kind even under retries and concurrent
+// replicas.
 func (s *Scheduler) reconcile(ctx context.Context, d dispatch) workerResult {
 	// Gate-race cleanup retry: only delete, no projection load, no Start, no
 	// state transition. This follows the terminal cleanup retry cadence,

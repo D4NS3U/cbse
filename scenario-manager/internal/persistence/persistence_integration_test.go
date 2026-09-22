@@ -33,7 +33,8 @@ func openTestDB(t *testing.T) (*sql.DB, string) {
 	user := os.Getenv(itUserEnv)
 	pass := os.Getenv(itPasswordEnv)
 	// Inject credentials into the DSN via the user@host form expected by pgx.
-	// The base DSN is a URL; merge credentials like the alpha3 connect helper.
+	// The base DSN is a URL; merge credentials by parsing it and setting the
+	// user info.
 	connStr, err := mergeCredentials(dsn, user, pass)
 	if err != nil {
 		t.Fatalf("merge credentials: %v", err)
@@ -55,7 +56,7 @@ func openTestDB(t *testing.T) (*sql.DB, string) {
 		t.Fatalf("create schema %s: %v", schema, err)
 	}
 	// Force the search_path to the isolated schema so the unqualified table
-	// names resolve there, avoiding collision with any alpha3 tables.
+	// names resolve there, avoiding collision with other tables.
 	if _, err := db.Exec(fmt.Sprintf(`SET search_path TO %s`, schema)); err != nil {
 		_ = db.Close()
 		t.Fatalf("set search_path: %v", err)
@@ -68,7 +69,7 @@ func openTestDB(t *testing.T) (*sql.DB, string) {
 }
 
 func mergeCredentials(base, user, pass string) (string, error) {
-	// Reuse the alpha3 approach: parse the base DSN URL and set the user info.
+	// Parse the base DSN URL and set the user info.
 	parsed, err := url.Parse(base)
 	if err != nil {
 		return "", err

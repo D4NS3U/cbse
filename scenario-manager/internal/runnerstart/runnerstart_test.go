@@ -867,7 +867,7 @@ func contains(s []int, v int) bool {
 	return false
 }
 
-// ---- S06-M3 scenario-observability logging ----
+// ---- scenario-observability logging ----
 
 // startSchedulerWithLogger builds and starts a scheduler wired with the given
 // recorder so the test can assert scenario-observability records.

@@ -9,9 +9,8 @@ import (
 
 // ScenarioIntakeRecord is the per-scenario subset the EDS batch handler maps
 // from a transport-neutral communication.ScenarioRecord before insertion. It
-// is the persistence-layer analogue of the alpha3 coredb.ScenarioStatusRecord
-// intake shape, restricted to the columns the EDS supplies; the remaining
-// scenario_status columns take their schema defaults (state=Created,
+// is restricted to the columns the EDS supplies; the remaining scenario_status
+// columns take their schema defaults (state=Created,
 // number_of_computed_reps=0, translation_attempts=0, container_image=NULL,
 // translation_*_at=NULL).
 type ScenarioIntakeRecord struct {

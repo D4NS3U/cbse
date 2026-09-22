@@ -16,9 +16,9 @@ import (
 // The project table has exactly three columns (id, project_namespace,
 // project_name) with a UNIQUE (project_namespace, project_name) constraint and
 // no mutable status, component-count, or experiment-UID columns. The
-// scenario_status table requires the alpha4 translation_publish_started_at
-// TIMESTAMPTZ NULL column in addition to the alpha3 scenario columns and a
-// single-column FK project_id -> project.id ON DELETE CASCADE.
+// scenario_status table requires the translation_publish_started_at TIMESTAMPTZ
+// NULL column alongside the core scenario columns and a single-column FK
+// project_id -> project.id ON DELETE CASCADE.
 func EnsureSchema(ctx context.Context, db DB) error {
 	if ctx == nil {
 		return fmt.Errorf("context must not be nil")

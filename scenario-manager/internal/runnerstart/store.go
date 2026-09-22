@@ -1,8 +1,8 @@
-// Package runnerstart implements the bounded ordered runner-start scheduler
-// (Slice 06 S06-M4). It discovers every StartingRunners scenario from the Core
-// DB in ascending positive-ID order, de-duplicates the process-local ready,
-// delayed, and in-flight sets by scenario-status ID, dispatches the lowest
-// currently eligible ID to a free reconciler, and applies the guarded database
+// Package runnerstart implements the bounded ordered runner-start scheduler.
+// It discovers every StartingRunners scenario from the Core DB in ascending
+// positive-ID order, de-duplicates the process-local ready, delayed, and
+// in-flight sets by scenario-status ID, dispatches the lowest currently
+// eligible ID to a free reconciler, and applies the guarded database
 // transition dictated by the resource-neutral scheduler adapter outcome. A
 // transient failure records a process-local nextEligibleAt five seconds after
 // the attempt completes without occupying a reconciler; when the delay expires
@@ -113,7 +113,7 @@ func (c Config) withDefaults() Config {
 	return out
 }
 
-// validateConfig returns a programmer error if Workers is outside 1..64. The
+// validateWorkers returns a programmer error if Workers is outside 1..64. The
 // startup configuration package performs the env-parse and SM-startup fatal
 // check; this guard defends direct construction (tests and wiring).
 func validateWorkers(workers int) error {

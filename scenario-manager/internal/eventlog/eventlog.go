@@ -1,11 +1,11 @@
-// Package eventlog provides the lightweight Slice 06 scenario-observability
-// logger. Per S06-M3, Scenario Manager emits exactly two kinds of records per
-// scenario: one Job creation or adoption record (when the runner-start
-// reconciler creates or confirms the deterministic Job) and one terminal
-// scenario-outcome record (when the scenario reaches a terminal state — Failed
-// at runner start, or Completed or Failed during observation). SM does not log
-// every successful repetition or every unchanged observation poll, and no
-// record carries credentials or recipe payloads.
+// Package eventlog provides the lightweight scenario-observability logger.
+// Scenario Manager emits exactly two kinds of records per scenario: one Job
+// creation or adoption record (when the runner-start reconciler creates or
+// confirms the deterministic Job) and one terminal scenario-outcome record
+// (when the scenario reaches a terminal state — Failed at runner start, or
+// Completed or Failed during observation). SM does not log every successful
+// repetition or every unchanged observation poll, and no record carries
+// credentials or recipe payloads.
 //
 // The Logger interface is resource-neutral so the runner-start and observation
 // schedulers can emit records without importing Kubernetes types. A NopLogger

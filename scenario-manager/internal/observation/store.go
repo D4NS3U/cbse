@@ -104,6 +104,7 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
+// validateWorkers returns a programmer error if Workers is outside 1..64.
 func validateWorkers(n int) error {
 	if n < 1 || n > 64 {
 		return fmt.Errorf("observation workers must be in [1,64], got %d", n)

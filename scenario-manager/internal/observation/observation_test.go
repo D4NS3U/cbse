@@ -702,7 +702,7 @@ func TestMonotonicCountNeverDecreases(t *testing.T) {
 	}
 }
 
-// ---- S06-M3 scenario-observability logging ----
+// ---- scenario-observability logging ----
 
 // TestObservationLogsCompleteRecord asserts a Completed outcome emits exactly
 // one terminal complete record carrying the full repetition count.

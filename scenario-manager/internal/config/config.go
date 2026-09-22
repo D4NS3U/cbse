@@ -1,9 +1,9 @@
-// Package config parses Slice 06 Scenario Manager startup configuration from
-// the environment. Slice 06 introduces a single tunable: the number of
-// concurrent runner-start workers. The observation scheduler uses a fixed four
-// workers and is not configurable. A malformed, zero, negative, or
-// out-of-range worker count is a fatal startup error: it must fail SM startup
-// before scenario selection or runner-start discovery begins.
+// Package config parses Scenario Manager startup configuration from the
+// environment. The single tunable is the number of concurrent runner-start
+// workers. The observation scheduler uses a fixed four workers and is not
+// configurable. A malformed, zero, negative, or out-of-range worker count is a
+// fatal startup error: it must fail SM startup before scenario selection or
+// runner-start discovery begins.
 package config
 
 import (

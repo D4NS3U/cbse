@@ -7,8 +7,9 @@
 // finalizer operations. NATS messaging cleanup is injected through the
 // MessagingCleaner interface so unit tests exercise the ordering with fakes.
 //
-// This package is additive and isolated until the alpha4 cutover in a later
-// slice: it does not replace the active alpha3 lifecycle wiring.
+// This package is the active and only experiment lifecycle wiring in the
+// Scenario Manager; the earlier alpha2 and alpha3 lifecycle paths have been
+// retired.
 package lifecycle
 
 import (

@@ -26,7 +26,8 @@ type ProjectStore interface {
 
 // DBProjectStore adapts a persistence.Store to the ProjectStore interface by
 // delegating to the persistence package functions. It is constructed in the
-// alpha4 wiring (Slice 07) and injected into the lifecycle actions.
+// Scenario Manager composition (internal/core) and injected into the
+// lifecycle actions.
 type DBProjectStore struct{ Store persistence.Store }
 
 // ProjectIDByNamespaceAndName resolves the project id for the exact pair.

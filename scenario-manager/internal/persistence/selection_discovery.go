@@ -26,8 +26,7 @@ type TranslationCandidate struct {
 // StaleTranslationClaim identifies the exact Scheduled translation attempt
 // found by stale-claim discovery. Carrying the attempt with the id lets the
 // later recovery update reject a row that was reclaimed between discovery and
-// use. It mirrors the alpha3 coredb.TranslationRecoveryCandidate shape so the
-// alpha4 selection loop is self-contained.
+// use.
 type StaleTranslationClaim struct {
 	ID                 int
 	TranslationAttempt int
@@ -43,7 +42,7 @@ type StaleTranslationClaim struct {
 // The selection loop owns Created -> Scheduled only. It must not discover
 // StartingRunners (owned by the runnerstart scheduler) or PostProcessing (a
 // boundary no-op in this branch), so this query filters on state = Created
-// exclusively, unlike the alpha3 actionable-scenario predicate.
+// exclusively.
 func NextCreatedScenarioForTranslation(ctx context.Context, db DB) (*TranslationCandidate, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -31,7 +31,7 @@ func TestRecorderCapturesAndCopies(t *testing.T) {
 	}
 }
 
-// TestRecordCarriesAllRequiredFields documents the S06-M3 field contract: the
+// TestRecordCarriesAllRequiredFields documents the field contract: the
 // record carries exactly the required scenario fields and never credentials or
 // recipe payloads.
 func TestRecordCarriesAllRequiredFields(t *testing.T) {

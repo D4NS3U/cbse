@@ -37,7 +37,7 @@ func TestNextStaleUnpublishedTranslationClaimValidation(t *testing.T) {
 }
 
 // Ensure the discovery candidate structs compile and carry the documented
-// fields so the selection loop can rely on them without importing coredb.
+// fields so the selection loop can rely on them directly.
 func TestTranslationCandidateFields(t *testing.T) {
 	c := TranslationCandidate{ID: 7, ProjectNamespace: "ns", ProjectName: "proj", TranslationAttempt: 2}
 	if c.ID != 7 || c.ProjectNamespace != "ns" || c.ProjectName != "proj" || c.TranslationAttempt != 2 {

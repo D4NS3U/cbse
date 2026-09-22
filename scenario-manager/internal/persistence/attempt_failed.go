@@ -15,15 +15,11 @@ import (
 // A false result means the row was no longer Scheduled for the exact attempt
 // (stale): the caller treats the ready as handled without a transition.
 //
-// This function is the alpha4 analogue of the alpha3
-// coredb.MarkScenarioTranslationAttemptFailed used by the Translator-ready
-// workflow. It is distinct from MarkScenarioTranslationPublishFailed, which
+// This function is distinct from MarkScenarioTranslationPublishFailed, which
 // targets only the pre-publish failure case (both publication timestamps null)
-// owned by the selection loop. The Slice 06.5 ready workflow owns the
-// empty-image path; this function is the minimal additive persistence
-// transition that path requires (see the slice's resolution guidance for a
-// missing domain function that is genuinely part of this slice's owned
-// deliverables).
+// owned by the selection loop. The Translator-ready workflow owns the
+// empty-image path; this function is the persistence transition that path
+// applies.
 func MarkScenarioTranslationAttemptFailed(ctx context.Context, db DB, scenarioID, attempt, maxAttempts int) (bool, string, error) {
 	if scenarioID <= 0 {
 		return false, "", errPositiveID
