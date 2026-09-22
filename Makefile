@@ -8,9 +8,9 @@ export GOCACHE
 KUBECTL_VERSION ?= v1.32.5
 KUBECTL ?= $(ROOT)/bin/kubectl-$(KUBECTL_VERSION)
 RUN_ID ?=
-CBSE_REGISTRY ?= docker.io/d4ns3u/cbse-testing
-TEST_IMAGE_VERSION ?= 26.7.16
-CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,trans-mock
+CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test
+TEST_IMAGE_VERSION ?= $(shell date -u +%-y.%-m.%-d)
+CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database
 
 .PHONY: help test-fast test-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools verify-generated
 
@@ -25,18 +25,20 @@ help:
 
 test-fast: verify-generated
 	$(TEST_DIR)/harness/test-harness.sh
-	@unformatted="$$(gofmt -l $$(find experiment-operator scenario-manager $(TEST_DIR)/e2e -name '*.go' -type f))"; \
+	@unformatted="$$(gofmt -l $$(find experiment-operator scenario-manager component-templates/translator $(TEST_DIR)/e2e -name '*.go' -type f))"; \
 	if [[ -n "$${unformatted}" ]]; then echo "Unformatted Go files:"; echo "$${unformatted}"; exit 1; fi
 	cd experiment-operator && go vet ./...
 	cd scenario-manager && go vet ./...
+	cd component-templates/translator && go vet ./...
 	cd scenario-manager && go test -tags=integration -run '^$$' ./...
 	cd experiment-operator && go test -tags=e2e -run '^$$' ./test/e2e
 	cd $(TEST_DIR)/e2e && go vet -tags=e2e ./...
 	cd $(TEST_DIR)/e2e && go test -tags=e2e -run '^$$' ./...
 	cd scenario-manager && go test -race ./...
+	cd component-templates/translator && go test -race ./...
 	$(MAKE) -C experiment-operator setup-envtest
 	cd experiment-operator && \
-	KUBEBUILDER_ASSETS="$$(./bin/setup-envtest use $$(go list -m -f '{{.Version}}' k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}') --bin-dir "$(ROOT)/experiment-operator/bin" -p path)" \
+	KUBEBUILDER_ASSETS="$$(./bin/setup-envtest use $$(go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}') --bin-dir "$(ROOT)/experiment-operator/bin" -p path)" \
 	go test ./...
 
 verify-generated:

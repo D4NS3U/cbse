@@ -1,4 +1,4 @@
-apiVersion: experiment.cbse.terministic.de/alpha3
+apiVersion: experiment.cbse.terministic.de/alpha4
 kind: SimulationExperiment
 metadata:
   name: CBSE_PROJECT
@@ -8,18 +8,14 @@ metadata:
 spec:
   defaultServiceType: ClusterIP
   detailDatabase:
-    image: CBSE_SUPPORT_IMAGE
-    command: ["python", "-c"]
-    args: ["import time; time.sleep(3600)"]
+    image: CBSE_DETAIL_DB_IMAGE
     dbname: simulation_db
     user: smoke
     password: smoke
     port: 5432
     serviceType: ClusterIP
   resultDatabase:
-    image: CBSE_SUPPORT_IMAGE
-    command: ["python", "-c"]
-    args: ["import time; time.sleep(3600)"]
+    image: CBSE_POSTGRES_IMAGE
     dbname: result_db
     user: smoke
     password: smoke
@@ -27,14 +23,15 @@ spec:
     serviceType: ClusterIP
   translator:
     image: CBSE_TRANS_IMAGE
-    repository: smoke-repository
-    baseimage: smoke-base
+    repository: CBSE_RUNNER_REPOSITORY
+    baseimage: CBSE_RUNNER_BASE_IMAGE
+    builderImage: CBSE_BUILDER_IMAGE
+    registryAuthSecretRef:
+      name: cbse-registry-auth
     port: 8080
     serviceType: ClusterIP
   postProcessingService:
     image: CBSE_SUPPORT_IMAGE
-    command: ["python", "-c"]
-    args: ["import time; time.sleep(3600)"]
     port: 8081
     serviceType: ClusterIP
   experimentalDesignService:

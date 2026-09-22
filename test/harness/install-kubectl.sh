@@ -1,4 +1,27 @@
 #!/usr/bin/env bash
+# install-kubectl.sh — download and verify a pinned kubectl binary.
+#
+# Fetches a specific kubectl release for the host OS and architecture from
+# dl.k8s.io, verifies it against the official SHA256 checksum, installs it to
+# OUTPUT with mode 0755, and prints the client version. The smoke harness uses
+# this to obtain a kubectl matching the test cluster's expected version skew
+# rather than relying on a host-installed binary. Architecture names are
+# normalized (x86_64/amd64 -> amd64, arm64/aarch64 -> arm64); the OS is taken
+# from `uname -s` lowercased.
+#
+# Inputs / environment:
+#   KUBECTL_VERSION (default v1.32.5) kubectl release tag to download.
+#   OUTPUT          (required) destination path for the kubectl binary.
+#
+# Exit codes:
+#   0  kubectl downloaded, checksum-verified, installed, and version printed.
+#   1  checksum verification failed (downloaded digest != official checksum).
+#   2  unsupported architecture, or OUTPUT not writable.
+#
+# Side effects:
+#   Writes the executable kubectl binary to OUTPUT (0755). Downloads to a temp
+#   file first, verifies in place, then atomically moves it over OUTPUT; the
+#   temp file and checksum file are removed on EXIT.
 set -euo pipefail
 
 version="${KUBECTL_VERSION:-v1.32.5}"

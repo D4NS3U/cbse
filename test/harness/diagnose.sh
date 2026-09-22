@@ -1,4 +1,29 @@
 #!/usr/bin/env bash
+# diagnose.sh — collect post-run cluster diagnostics into the artifact dir.
+#
+# Gathers the run namespace's resources, events, pod descriptions,
+# SimulationExperiment YAML, per-pod container images, and per-pod logs
+# (current and previous container instances) so a failed smoke run can be
+# triaged from the artifacts alone. It is read-only against the cluster and
+# idempotent: if the target namespace does not exist it writes a note to
+# cluster-state.txt and exits 0. Typically invoked from smoke.sh's finish
+# trap after a run, success or failure.
+#
+# Inputs / environment:
+#   KUBECTL    (required) path to the pinned kubectl binary.
+#   KUBECONFIG (required) dedicated test-cluster kubeconfig.
+#   RUN_ID     (required) 1-30 lowercase DNS-label chars.
+#   CBSE_TEST_NAMESPACE (default cbse-e2e-<RUN_ID>) namespace to inspect.
+#   CBSE_ARTIFACT_DIR   (default <root>/artifacts/test/<RUN_ID>) output dir.
+#
+# Exit codes:
+#   0  diagnostics written, or the namespace is absent.
+#   2  RUN_ID is not a valid DNS label.
+#
+# Side effects:
+#   Creates <artifact_dir>/logs/ and writes cluster-state.txt, events.txt,
+#   pod-descriptions.txt, simulationexperiments.yaml, images.txt, and
+#   logs/<pod>.log + logs/<pod>-previous.log. No cluster mutation.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -210,16 +210,22 @@ def build_batch_payload(
     behavior reproducible across repeated runs.
     """
 
+    # The reference Translator's Detail DB lookup contract requires
+    # recipe_info.parameterset_id (a positive integer 1..4) so the example
+    # generator can look up one of the four fixed rows initialized by the
+    # repository-built Scenario Detail Database image
+    # (public.simulation_parameters). Cycle parameterset_id 1..4 across the
+    # scenarios so each scenario resolves a distinct fixed row. Keep
+    # number_of_reps >= 2 so each scenario runs at least two repetitions as
+    # distinct completion indexes through one indexed Job.
     scenarios: list[dict[str, Any]] = []
     for idx in range(1, scenarios_per_batch + 1):
+        parameterset_id = ((seed_base + idx - 1) % 4) + 1
         scenarios.append(
             {
                 "priority": idx,
                 "number_of_reps": 10 + idx,
-                "recipe_info": {
-                    "scenario": f"{project}-scenario-{seed_base + idx}",
-                    "seed": seed_base + idx,
-                },
+                "recipe_info": {"parameterset_id": parameterset_id},
                 "confidence_metric": round(0.90 + (idx * 0.01), 3),
             }
         )

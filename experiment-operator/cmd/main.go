@@ -14,6 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Command experiment-operator runs the Kubernetes controller manager for the
+// SimulationExperiment custom resource. It wires only the alpha4 API into the
+// runtime scheme and registers the alpha4 reconciler with the
+// controller-runtime manager, then serves metrics, health, and webhook
+// endpoints. The alpha2 and alpha3 API groups are not registered here and are
+// not served or reconciled.
 package main
 
 import (
@@ -39,7 +45,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	experimentalpha3 "github.com/D4NS3U/cbse/experiment-operator/api/alpha3"
+	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
 	"github.com/D4NS3U/cbse/experiment-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -49,13 +55,21 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+// init registers the Kubernetes core API group and the experiment-operator
+// alpha4 API group into the shared runtime scheme so the manager can decode
+// SimulationExperiment objects and the built-in kinds it reconciles.
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(experimentalpha3.AddToScheme(scheme))
+	utilruntime.Must(experimentalpha4.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
+// main parses operator flags, configures TLS for the metrics and webhook
+// servers, builds the controller-runtime manager, registers the alpha4
+// SimulationExperiment reconciler, and blocks on mgr.Start until the process
+// receives SIGTERM/SIGINT. It exits non-zero on any setup failure.
+//
 // nolint:gocyclo
 func main() {
 	var metricsAddr string
@@ -212,25 +226,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.SimulationExperimentReconciler{
+	if err := (&controller.Alpha4SimulationExperimentReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimulationExperiment")
 		os.Exit(1)
 	}
-	// Do not register the legacy alpha2 controller. The CRD serves alpha2 and
-	// alpha3 without a conversion webhook, so both endpoints expose the same
-	// underlying object. A separate alpha2 watcher would therefore also see
-	// alpha3 resources and could overwrite their status. Alpha3 is the active
-	// API and the only reconciliation authority.
-	// nolint:goconst
-	// if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-	// 	if err := webhookalpha2.SetupSimulationExperimentWebhookWithManager(mgr); err != nil {
-	// 		setupLog.Error(err, "unable to create webhook", "webhook", "SimulationExperiment")
-	// 		os.Exit(1)
-	// 	}
-	// }
+	// alpha4 is the only served and reconciled API version. alpha2 and alpha3
+	// are retired: they are not registered, not served by the CRD, and not
+	// reconciled. There is no legacy controller, conversion webhook, or
+	// compatibility mode.
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

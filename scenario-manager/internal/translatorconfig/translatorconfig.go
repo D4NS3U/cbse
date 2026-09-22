@@ -21,11 +21,11 @@ const (
 	// PublishRecoveryTimeoutEnv configures how long an unpublished Scheduled
 	// claim may remain untouched before higher-level orchestration can recover it.
 	PublishRecoveryTimeoutEnv = "SCENARIO_MANAGER_TRANS_PUBLISH_RECOVERY_TIMEOUT"
-	// DefaultMaxAttempts is the v1 fallback when the environment is unset or
-	// invalid.
+	// DefaultMaxAttempts is the attempt limit used when the environment is
+	// unset or invalid.
 	DefaultMaxAttempts = 3
-	// DefaultPublishRecoveryTimeout is the v1 fallback for unpublished-claim
-	// recovery windows when the environment is unset or invalid.
+	// DefaultPublishRecoveryTimeout is the recovery timeout used when the
+	// environment is unset or invalid.
 	DefaultPublishRecoveryTimeout = time.Minute
 )
 

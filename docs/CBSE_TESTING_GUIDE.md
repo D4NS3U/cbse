@@ -2,6 +2,8 @@
 
 This guide is the human-facing entry point for the current CBSE implementation and its Kubernetes test system. It is intentionally practical: it explains what works today, where the important code lives, and how to interpret a smoke-test run.
 
+> **Cluster requirements**: CBSE needs Kubernetes >= 1.30 with the `UserNamespacesSupport` feature gate enabled (for the reference Translator's rootless BuildKit sidecar) and experiment namespaces that permit the sidecar's unconfined seccomp/AppArmor profiles (Pod Security enforce `privileged`). See [`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md) for the exact enablement steps, prerequisites, and verification; it is the source a future Helm chart's prerequisites must reference.
+
 ## 1. What CBSE currently does
 
 CBSE is a Kubernetes-native research prototype for preparing simulation experiments. The tested path is:
@@ -56,10 +58,19 @@ All shared test infrastructure is contained below [`test/`](../test/):
 ```text
 test/
 ├── harness/       Shell orchestration: preflight, lock, build, diagnose, cleanup
-├── e2e/           Kustomize manifests and Go/Ginkgo smoke assertions
-├── mocks/          EDS and translator mock source plus Dockerfiles
+├── e2e/           Kustomize manifests and Go/Ginkgo smoke assertions, images.lock.env
+├── mocks/          EDS mock source plus Dockerfile (alpha3 translator mock retained for the smoke profile)
 └── compat/eds-sm/ Deprecated fixtures retained only for compatibility
 ```
+
+The alpha4 reference components live under `component-templates/`:
+`component-templates/translator/` (the reference Translator Go module, its
+Dockerfile, and the `runner-base/` Python/SimPy/Psycopg base) and
+`component-templates/scenario-detail-database/` (the reference Detail Database
+image and initialization SQL). See those directories' README files for the
+component contracts. The shared source-image lock is `test/e2e/images.lock.env`;
+`test/harness/image-lock.sh` loads and validates it for both `build-images.sh`
+and `preflight.sh`.
 
 Component-local Go tests remain under `experiment-operator/test/` because that is the conventional Go package layout. They are still run by the root commands below.
 
@@ -68,16 +79,63 @@ Component-local Go tests remain under `experiment-operator/test/` because that i
 | Command | Use it when | What it does not do |
 | --- | --- | --- |
 | `make test-fast` | Any Go, CRD, Dockerfile, manifest, or test-harness change | Does not contact K3s or build/push images |
-| `make publish-test-images` | You need new private Docker Hub test images | Does not deploy to K3s |
+| `make publish-test-images` | You need new University Harbor test images | Does not deploy to K3s |
 | `make test-smoke` | Operator, Scenario Manager, mock, image, or Kubernetes integration change | Does not retain a namespace unless asked |
 | `make test-diagnose RUN_ID=<id>` | A retained failure needs fresh diagnostics | Does not change workloads |
 | `make test-clean RUN_ID=<id>` | `CBSE_KEEP_ON_FAILURE=1` retained a failed namespace | Does not delete the shared CRD or `cbse-test-system` |
 
 Set `CBSE_KEEP_NAMESPACE=1` on `make test-smoke` to retain a successful run's namespace for manual inspection. Clean it with the ownership-checked `make test-clean RUN_ID=<id>` command when finished.
 
-The fast suite checks generated code, formatting, harness self-tests, vetting, Scenario Manager race tests, and the operator's `envtest` suite.
+The fast suite checks generated code, formatting, harness self-tests, vetting
+(operator, Scenario Manager, and the isolated Translator module), Scenario
+Manager and Translator race tests, and the operator's `envtest` suite. The
+Translator module is vetted and tested with `GOWORK=off` so its buildkit/docker
+dependencies do not affect the operator or Scenario Manager workspace.
 
-The smoke suite uses a pinned Kubernetes 1.32 `kubectl`, verifies the expected K3s API server and permissions, acquires a Kubernetes Lease, creates a unique `cbse-e2e-<run-id>` namespace, and deploys images by digest. It never deploys test resources to `default` or `kube-system`.
+The smoke suite uses a pinned Kubernetes 1.32 `kubectl`, verifies the expected
+K3s API server and permissions, requires Kubernetes 1.30 or newer with a
+`linux/amd64` `Ready` schedulable Node, acquires a Kubernetes Lease, creates a
+unique `cbse-e2e-<run-id>` namespace, and deploys images by digest. Test images
+are published by `test/harness/build-images.sh` from the locked source images in
+`test/e2e/images.lock.env`. The five shared components (`exop`, `sm`, `eds-mock`,
+`translator`, `runner-base`) use the flat layout
+(`${CBSE_REGISTRY}:<component>.test.<version>`, digest
+`${CBSE_REGISTRY}@sha256:<hex>`); the reference Scenario Detail Database uses the
+nested layout (`${CBSE_REGISTRY}/scenario-detail-database:<version>`, digest
+`${CBSE_REGISTRY}/scenario-detail-database@sha256:<hex>`). Generated runner
+images are published to `${CBSE_REGISTRY}/cbse-test-runner`. It never deploys
+test resources to `default` or `kube-system`.
+
+### Component build and image contract
+
+All six component images use the **nested** repository layout
+`${CBSE_REGISTRY}/<component>:<version>` (for example
+`${CBSE_REGISTRY}/sm:26.9.16`); there is no flat `${CBSE_REGISTRY}:<component>.test.<version>`
+form. The version tag is the build date in `YY.M.D` form (no leading zeros;
+overridable via `TEST_IMAGE_VERSION`). The reference Scenario Detail Database uses
+the same nested layout under `${CBSE_REGISTRY}/scenario-detail-database:<version>`.
+Generated runner images are published to `${CBSE_REGISTRY}/cbse-test-runner`.
+It never deploys test resources to `default` or `kube-system`.
+
+The exact component tokens and their repository layouts are:
+
+| Token | Layout | Canonical tag | Digest output |
+| --- | --- | --- | --- |
+| `exop`, `sm`, `eds-mock`, `translator`, `runner-base`, `scenario-detail-database` | nested | `${CBSE_REGISTRY}/<token>:<version>` | `${CBSE_REGISTRY}/<token>@sha256:<hex>` |
+
+`TEST_IMAGE_VERSION` defaults to the build date (`$(date -u +%-y.%-m.%-d)`) when
+unset, and uses a non-normalizing `YY.M.D` format validated against
+`^[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}$`; single-digit month/day are accepted
+as-is and never rewritten (optional zero-padding is permitted by the regex, but
+the harness does not normalize). `build-images.sh` records `DETAIL_DB_IMAGE` in
+`images.env` as the immutable nested digest reference; with `SKIP_BUILD=1`,
+`DETAIL_DB_IMAGE` must be supplied already as an immutable digest reference and a
+mutable (floating-tag) value is rejected by preflight. All CR, manifest, and
+smoke references use the immutable digest form, never a floating tag.
+Generated-runner cleanup targets only `${CBSE_REGISTRY}/cbse-test-runner`; it must
+never delete or prune the reference Detail Database repository
+(`${CBSE_REGISTRY}/scenario-detail-database`) or any other shared reference
+repository.
 
 ## 5. How to read a smoke-test result
 
@@ -121,7 +179,7 @@ Common starting points:
 | Symptom | First files to inspect | Likely layer |
 | --- | --- | --- |
 | Preflight failure | `preflight.txt` | kubeconfig, API server, permissions, registry authentication |
-| `ImagePullBackOff` | `events.txt`, `pod-descriptions.txt` | digest/reference or the `dockerhub-auth` pull Secret |
+| `ImagePullBackOff` | `events.txt`, `pod-descriptions.txt` | digest/reference or the `cbse-registry-auth` pull Secret |
 | `CrashLoopBackOff` | `pod-descriptions.txt`, affected `logs/*.log` | application startup, permissions, database, or NATS configuration |
 | CR phase is `Error` | `simulationexperiments.yaml`, operator log | reconciliation or experiment specification |
 | Database assertion fails | `database.txt`, Scenario Manager and EDS logs | NATS subject, JetStream processing, or persistence |
