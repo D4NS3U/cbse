@@ -1,3 +1,9 @@
+// Package sqldoc asserts the reference Scenario Detail Database SQL schema
+// against the checked-in initialization SQL so the Translator's detaildb
+// lookup contract (the public.simulation_parameters table, its five INTEGER
+// columns and CHECK constraints, and the four immutable seed rows) stays in
+// lockstep with the repository-owned SQL. The tests skip when the reference
+// SQL file is absent.
 package sqldoc
 
 import (
@@ -7,9 +13,9 @@ import (
 	"testing"
 )
 
-// scenarioDetailSQLPath is the repository-owned reference Detail DB
-// initialization SQL, owned by Slice 05. Resolved relative to the package dir
-// so the test runs under `go test` without a symlink.
+// scenarioDetailSQLPath is the repository-owned reference Scenario Detail
+// Database initialization SQL. Resolved relative to the package dir so the
+// test runs under `go test` without a symlink.
 const scenarioDetailSQLPath = "../../../scenario-detail-database/10-simulation-parameters.sql"
 
 func readSQL(t *testing.T) string {

@@ -103,6 +103,11 @@ func (c *Client) VerifyAndResolve(ctx context.Context, tagRef, expectedRepo, uid
 	return digest, nil
 }
 
+// verifyAnnotations is the registry-side identity check: it reports whether the
+// resolved manifest carries all three framework-owned identity annotations
+// (experiment-uid, scenario-id, translation-attempt) exactly matching the
+// request. It mirrors imageref.VerifyAnnotations, rebuilding the annotation
+// keys from the framework prefix instead of importing the imageref constants.
 func verifyAnnotations(ann map[string]string, uid string, scenarioID, attempt int) error {
 	const p = "experiment.cbse.terministic.de"
 	want := map[string]string{
@@ -172,6 +177,10 @@ func (c *Client) authorize(ctx context.Context, host, wwwAuth string) (string, e
 	}
 }
 
+// bearer exchanges a Bearer WWW-Authenticate challenge for an access token.
+// It parses realm, service, and scope; builds the token endpoint URL; sends the
+// request with basic credentials for host when available; and returns
+// "Bearer <token>". A token-endpoint error or an empty token is a failure.
 func (c *Client) bearer(ctx context.Context, host, wwwAuth string) (string, error) {
 	realm, service, scope := parseBearerChallenge(wwwAuth)
 	if realm == "" {
@@ -236,6 +245,11 @@ func basicAuth(user, pass string) string {
 	return base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
 }
 
+// do performs the manifest GET with the OCI image manifest, Docker
+// distribution v2, and OCI index Accept media types and an optional
+// Authorization header. It returns the response body, headers, status code, and
+// any transport error; it does not interpret the status, leaving 401, 404, and
+// 4xx/5xx handling to getManifest.
 func (c *Client) do(ctx context.Context, manifestURL, authHeader string) ([]byte, http.Header, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, manifestURL, nil)
 	if err != nil {
@@ -257,6 +271,10 @@ func (c *Client) do(ctx context.Context, manifestURL, authHeader string) ([]byte
 	return body, resp.Header, resp.StatusCode, nil
 }
 
+// manifestURL builds the v2 manifest URL for the repository name and tag or
+// digest ref on host. It selects plain HTTP only for loopback hosts and HTTPS
+// for all others, matching NewClient's transport policy so a remote registry is
+// never contacted over an unencrypted connection.
 func (c *Client) manifestURL(host, name, ref string) string {
 	scheme := "https"
 	if isLoopback(host) {

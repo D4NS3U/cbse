@@ -89,6 +89,9 @@ func (c *Client) Fetch(ctx context.Context) (Message, error) {
 	}
 }
 
+// ensureSub creates the pull subscription on the first Fetch and caches both
+// the subscription and any creation error. A failed first PullSubscribe is not
+// retried: the cached error is returned on every subsequent call.
 func (c *Client) ensureSub() error {
 	if c.sub != nil || c.subErr != nil {
 		return c.subErr

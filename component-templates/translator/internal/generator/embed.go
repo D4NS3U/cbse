@@ -2,6 +2,7 @@
 // entrypoint, and the database_endpoint contract package) as embedded files
 // the generator copies into every generated runner. The modules contain no
 // credentials and are shipped code, not separately deployed services.
+
 package generator
 
 import (
