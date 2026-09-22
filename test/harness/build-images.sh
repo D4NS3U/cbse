@@ -1,4 +1,39 @@
 #!/usr/bin/env bash
+# build-images.sh — build and push the CBSE component test images.
+#
+# Builds the selected components (default alpha4 reference set: experiment
+# operator, scenario manager, EDS mock, real translator, runner base, and the
+# scenario detail database) and pushes each to the NESTED repository layout
+# <CBSE_REGISTRY>/<component>:<version> with a date-versioned canonical tag plus
+# an immutable provenance tag. It then writes a digest-pinned images.env that
+# smoke.sh sources to render the experiment manifest. Source images come from
+# the checked-in test/e2e/images.lock.env via image-lock.sh and have no
+# environment override.
+#
+# Inputs / environment:
+#   CBSE_REGISTRY (default registry.unibw.de/i31bdase/cbse-test) registry
+#              prefix; each component gets <registry>/<component>:<version>.
+#   TEST_IMAGE_VERSION (default today's YY.M.D) canonical tag; must be YY.M.D.
+#   RUN_ID   (default timestamp+random) part of the immutable provenance tag.
+#   CBSE_IMAGE_ARTIFACT_DIR (default <root>/artifacts/test-images/<ver>/<run_id>)
+#              output directory for logs, metadata, and images.env.
+#   CBSE_REGISTRY_AUTH_FILE (optional) dedicated Docker config.json for push
+#              credentials; copied into an isolated DOCKER_CONFIG so the host
+#              Docker contexts/builders/plugins are preserved.
+#   CBSE_IMAGE_COMPONENTS (default exop,sm,eds-mock,translator,runner-base,
+#              scenario-detail-database) comma-separated component selection.
+#
+# Exit codes:
+#   0  all selected components built and pushed; images.env written.
+#   1  a build did not report a containerimage.digest.
+#   2  missing docker/jq, bad TEST_IMAGE_VERSION format, unreadable auth file,
+#      or a bad CBSE_IMAGE_COMPONENTS token.
+#
+# Side effects:
+#   Pushes images to the registry (canonical + immutable provenance tags) with
+#   buildx --push --platform linux/amd64. Writes images.env, summary.txt,
+#   build-<name>.log, <name>.metadata.json, and build-info.env under the
+#   artifact dir. An isolated DOCKER_CONFIG temp dir is removed on EXIT.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -29,6 +64,12 @@ source "${root}/test/harness/image-lock.sh"
 load_image_lock "${lock_file}"
 
 # --- Component selection -----------------------------------------------------
+# validate_components parses CBSE_IMAGE_COMPONENTS as a comma list and rejects
+# empty input, unknown tokens, and duplicates. Only the supported component
+# names (exop, sm, eds-mock, trans-mock, translator, runner-base,
+# scenario-detail-database) are accepted; trans-mock is the synthetic mock kept
+# for harness self-tests while the default alpha4 set builds the real
+# translator.
 validate_components() {
   [[ -n "${components}" ]] || { echo "CBSE_IMAGE_COMPONENTS is empty" >&2; return 1; }
   local IFS=','
@@ -49,6 +90,9 @@ validate_components() {
 }
 validate_components
 
+# component_enabled returns success when the named component is present in the
+# comma-separated CBSE_IMAGE_COMPONENTS list. The surrounding commas make the
+# substring test match whole tokens only (e.g. "sm" does not match "eds-mock").
 component_enabled() {
   [[ ",${components}," == *",$1,"* ]]
 }
@@ -96,6 +140,13 @@ build_nested() {
     "${dockerfile}" "${context}" "${title}" "$@"
 }
 
+# _build runs a single docker buildx build --push for linux/amd64, tagging the
+# image with both the canonical <version> tag and the immutable provenance tag,
+# embedding IMAGE_VERSION/VCS_REF build args and OCI title labels, writing the
+# build log and metadata file under the artifact dir, and appending the
+# digest-pinned <image_var>=<repo>@<digest> line to images.env. It fails if
+# buildx did not report a containerimage.digest. build_nested is the public
+# wrapper that computes the nested repository and tags and forwards to _build.
 _build() {
   local name="$1" image_var="$2" out_repo="$3" canonical="$4" immutable="$5" dockerfile="$6" context="$7" title="$8"
   shift 8

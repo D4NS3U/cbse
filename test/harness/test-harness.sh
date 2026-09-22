@@ -1,4 +1,33 @@
 #!/usr/bin/env bash
+# test-harness.sh — self-test for the CBSE test harness scripts.
+#
+# Stubs kubectl, docker, curl, and Harbor in a temp directory, then exercises
+# the harness end to end with fake state: preflight pass and reject cases
+# (wrong server, old version, no amd64 node, UserNamespacesSupport off/missing,
+# mutable image, missing kubeconfig, locked-image override, partial skip-build
+# set); build-images nested layout, locked build args, default vs. custom
+# components, and rejection of unknown/duplicate tokens and locked-image
+# overrides; registry-cleanup annotation verification and unsafe-repo refusal;
+# diagnose on an absent namespace; acquire-lock Lease contention; and clean
+# idempotency. It also grep-checks repo-structure invariants (Makefile
+# defaults, nested tag layout, lock loading, pull-secret name). Run by the
+# verification gate and `make test-fast` to keep the harness internally
+# consistent.
+#
+# Inputs / environment:
+#   (none required) all binaries are stubbed in a temp dir; PATH is extended
+#   with that dir. The fake kubectl honors FAKE_SERVER, FAKE_VERSION,
+#   FAKE_NODES_FILE, and FAKE_USERNS to drive preflight reject cases.
+#
+# Exit codes:
+#   0  all self-tests passed (prints "Harness self-tests passed.").
+#   1  an assertion failed (a stub did not behave as required).
+#   Other non-zero propagated from a script under test via set -e.
+#
+# Side effects:
+#   Read-only against the repository (reads Makefile, build-images.sh,
+#   preflight.sh, manifests, README). All cluster/registry/docker interactions
+#   are stubbed into a temp directory that is removed on EXIT.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

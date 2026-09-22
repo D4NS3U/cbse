@@ -11,8 +11,9 @@
 # supplies POSTGRES_USER, POSTGRES_PASSWORD, and POSTGRES_DB from
 # spec.detailDatabase at runtime; the initialization SQL runs as that account,
 # which owns the reference table. Translator later connects with the same
-# POSTGRES_USER account to read the four rows. See slice 05 of the
-# simrunner-start-and-container-creation change for the contract.
+# POSTGRES_USER account to read the four rows. This is the active alpha4
+# Scenario Detail Database image; the four rows are the immutable inputs the
+# reference Translator's example generator looks up by parameterset_id.
 
 # syntax=docker/dockerfile:1.7
 ARG POSTGRES_IMAGE

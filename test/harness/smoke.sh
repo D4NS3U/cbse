@@ -1,4 +1,47 @@
 #!/usr/bin/env bash
+# smoke.sh — full-stack CBSE smoke run orchestrator (make test-smoke entry point).
+#
+# Runs one complete smoke run against the test cluster: preflight; acquire the
+# cbse-smoke-lock Lease; build (or reuse via SKIP_BUILD=1) the component images;
+# apply the alpha4 SimulationExperiment CRD server-side (rejecting any served
+# non-alpha4 version or non-pipeline-managed CRD unless CBSE_ALLOW_CRD_UPGRADE);
+# create the ephemeral cbse-e2e-<RUN_ID> namespace with the run ownership label
+# and the registry pull secret; apply the support stack; wait for the core-db,
+# NATS, EDS mock, operator, and scenario-manager Deployments to roll out and
+# for the Scenario Manager to log readiness; apply the experiment manifest;
+# and run the Ginkgo e2e suite. The finish trap tears it all down.
+#
+# Inputs / environment:
+#   KUBECTL, KUBECONFIG (required).
+#   RUN_ID   (default timestamp+random; validated as a 1-30 lowercase DNS label)
+#            names the ephemeral namespace and becomes the Lease holderIdentity.
+#   CBSE_REGISTRY (default registry.unibw.de/i31bdase/cbse-test) image prefix.
+#   TEST_IMAGE_VERSION (default 26.7.16) canonical image tag (YY.M.D).
+#   CBSE_REGISTRY_AUTH_FILE  passed to build-images.sh for push credentials.
+#   SKIP_BUILD=1  reuse pre-built images from OPERATOR_IMAGE, SM_IMAGE, EDS_IMAGE,
+#            TRANS_IMAGE, RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE instead of building.
+#   CBSE_KEEP_ON_FAILURE=1  retain the namespace if the run fails (for debugging).
+#   CBSE_KEEP_NAMESPACE=1  retain the namespace unconditionally.
+#   CBSE_ALLOW_CRD_UPGRADE=1  allow applying an existing non-pipeline-managed CRD.
+#   CBSE_PULL_SECRET_NAME (default cbse-registry-auth),
+#   CBSE_PULL_SECRET_NAMESPACE (default cbse-test-system).
+#
+# Exit codes:
+#   0  preflight, build, deploy, and the e2e suite all passed.
+#   1  e2e failure, or the Scenario Manager did not report readiness in time.
+#   2  RUN_ID is not a valid DNS label.
+#   4  CRD check failed: a served/storage version other than alpha4, or an
+#      existing CRD not pipeline-managed without CBSE_ALLOW_CRD_UPGRADE=1.
+#   Other non-zero propagated from preflight/build via set -e.
+#
+# Side effects:
+#   Creates namespace cbse-test-system (idempotent) and the ephemeral
+#   cbse-e2e-<RUN_ID>; creates the cbse-smoke-lock Lease; applies the CRD
+#   server-side; builds/pushes images (unless SKIP_BUILD); applies the support
+#   stack and the experiment manifest; runs `go test -tags=e2e`. Writes
+#   junit.xml, summary.json, preflight.txt, stack.yaml, experiment.yaml, and
+#   images.env under artifacts/test/<RUN_ID>. The finish trap runs diagnose.sh
+#   and deletes the namespace and Lease unless retention is requested.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -30,6 +73,12 @@ export CBSE_TEST_NAMESPACE="${namespace}"
 export CBSE_TEST_PROJECT="${project}"
 export CBSE_ARTIFACT_DIR="${artifact_dir}"
 
+# finish is the EXIT trap that finalizes a smoke run regardless of outcome. It
+# runs diagnose.sh against the ephemeral namespace (if created), writes
+# summary.json, deletes the namespace unless CBSE_KEEP_NAMESPACE or
+# CBSE_KEEP_ON_FAILURE retained it, releases the cbse-smoke-lock Lease if this
+# run still holds it, and re-exits with the original status so the caller sees
+# the real result. INT/TERM are also trapped (exit 130).
 finish() {
   status=$?
   set +e

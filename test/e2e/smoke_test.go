@@ -1,5 +1,14 @@
 //go:build e2e
 
+// Package e2e is the CBSE full-stack smoke suite. It runs against a live
+// cluster that smoke.sh has already provisioned (Experiment Operator, Scenario
+// Manager, core DB, NATS/JetStream, EDS mock, and the alpha4 reference
+// Translator) and verifies the end-to-end experiment lifecycle through
+// Kubernetes resources and the three PostgreSQL databases (Core, Result, and
+// Scenario Detail). The ordered specs cover owned-resource reconciliation,
+// deterministic EDS intake, the full reference Translator build/run/publish
+// chain, idempotent re-reconciliation, and garbage collection of owned
+// resources and persisted rows.
 package e2e
 
 import (
@@ -27,6 +36,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// The "full-stack smoke" container is the ordered Ginkgo root for the suite.
+// It shares one controller-runtime client and the smoke.sh-provisioned
+// namespace across all specs, which run in declaration order: owned-resource
+// reconciliation, deterministic intake, the reference end-to-end chain,
+// idempotent re-reconciliation, and finally cleanup.
 var _ = Describe("full-stack smoke", Ordered, func() {
 	var (
 		ctx       context.Context
@@ -50,6 +64,11 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
+	// Verifies the experiment reaches InProgress and that the operator
+	// reconciled the complete owned resource set: the detaildb, resultdb, and
+	// translator Deployments carry owner references and the project label, and
+	// their matching Services, DB credential Secrets, and translator ConfigMap
+	// all exist.
 	It("reaches InProgress with the complete owned resource set", func() {
 		key := types.NamespacedName{Namespace: namespace, Name: project}
 		Eventually(func(g Gomega) string {
@@ -75,6 +94,12 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-translator-cfg"}, &corev1.ConfigMap{})).To(Succeed())
 	})
 
+	// Verifies EDS intake persisted exactly one project and four deterministic
+	// scenario_status rows in Created state, each carrying the parameterset_id
+	// recipe_info the reference Translator's Detail DB lookup resolves. The full
+	// Created -> PostProcessing chain is asserted by the reference end-to-end
+	// spec below; this spec writes the persisted rows to the artifact directory
+	// for triage.
 	It("persists one project and four deterministic Created scenarios", func() {
 		Eventually(func() string {
 			return queryDatabase(fmt.Sprintf(
@@ -98,8 +123,8 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			// project and its four scenario_status rows with the
 			// parameterset_id recipe_info the reference Translator's Detail DB
 			// lookup expects; the full end-to-end chain (Created ->
-			// PostProcessing + Result DB rows) is verified by the dedicated
-			// S07-A3 spec below.
+			// PostProcessing + Result DB rows) is verified by the reference
+			// end-to-end spec below.
 			Eventually(func() string {
 				return queryDatabase(fmt.Sprintf(
 					"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.recipe_info ? 'parameterset_id') FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
@@ -114,16 +139,16 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		)))
 	})
 
-	// S07-A3 — Reference end-to-end smoke: replace the synthetic Translator
-	// mock with the reference template in the full smoke path. With the
-	// alpha4 selection loop always running (no SELECTOR_ENABLED disable),
-	// drive one scenario through the full chain: request consumption -> Detail
-	// DB parameter lookup -> SimPy context generation from the digest-pinned
-	// runner base -> rootless sidecar build -> authenticated registry push ->
-	// immutable digest publication -> runner Job creation -> non-root model
-	// execution -> PostgreSQL Result DB persistence -> scenario transition
-	// through InProcessing to PostProcessing. This spec does NOT delete the
-	// experiment; the cleanup spec owns deletion.
+	// Reference end-to-end smoke: the smoke path runs the real alpha4 reference
+	// Translator (not a synthetic mock). With the alpha4 selection loop always
+	// running (no SELECTOR_ENABLED disable), this spec drives one scenario
+	// through the full chain: request consumption -> Detail DB parameter lookup
+	// -> SimPy context generation from the digest-pinned runner base -> rootless
+	// sidecar build -> authenticated registry push -> immutable digest
+	// publication -> runner Job creation -> non-root model execution ->
+	// PostgreSQL Result DB persistence -> scenario transition through
+	// InProcessing to PostProcessing. This spec does NOT delete the experiment;
+	// the cleanup spec owns deletion.
 	It("drives one scenario through the full reference Translator chain to PostProcessing and persists results", func() {
 		// 1. Wait for at least one scenario to reach PostProcessing. The full
 		// chain (Detail DB lookup, rootless BuildKit build, authenticated
@@ -296,6 +321,9 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			"expected %d distinct effective seeds, got %d", numberOfReps, len(effectiveSeeds))
 	})
 
+	// Verifies a metadata-only update (an annotation timestamp) is reconciled
+	// idempotently: the operator does not create duplicate owned Deployments,
+	// so the project-labeled Deployment count stays at three.
 	It("reconciles an idempotent metadata update without duplicating children", func() {
 		key := types.NamespacedName{Namespace: namespace, Name: project}
 		experiment := &experimentalpha4.SimulationExperiment{}
@@ -315,6 +343,11 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 
+	// Verifies garbage collection: deleting the SimulationExperiment removes
+	// the owned translator Deployment via owner-reference cascade and cascades
+	// to the persisted database rows so the project and scenario_status tables
+	// are empty. Skipped when CBSE_RETAIN_RESOURCES=1 leaves the run intact for
+	// inspection.
 	It("garbage-collects owned resources and cascades persisted state", func() {
 		if os.Getenv("CBSE_RETAIN_RESOURCES") == "1" {
 			Skip("retained E2E run requested; leaving SimulationExperiment, owned resources, and database rows intact")
@@ -341,12 +374,20 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 	})
 })
 
+// requiredEnv returns a required environment variable trimmed of surrounding
+// whitespace, failing the spec at the caller's line when it is unset or empty.
+// The smoke harness sets every CBSE_* variable before running the suite.
 func requiredEnv(name string) string {
 	value := strings.TrimSpace(os.Getenv(name))
 	ExpectWithOffset(1, value).NotTo(BeEmpty(), "%s must be set", name)
 	return value
 }
 
+// queryDatabase executes a SQL query against the Core DB (deployment/core-db,
+// database scenarios, user cbse_test) via kubectl exec + psql, returning the
+// trimmed pipe-separated stdout. On any exec failure it returns a
+// "query-error: ..." string rather than failing the spec, so Eventually callers
+// can keep polling; assertions check for that prefix where relevant.
 func queryDatabase(query string) string {
 	kubectl := requiredEnv("KUBECTL")
 	namespace := requiredEnv("CBSE_TEST_NAMESPACE")
@@ -372,7 +413,7 @@ func queryDatabase(query string) string {
 // targets the Result DB instead of the Core DB: the alpha4 smoke fixture
 // configures the Result DB with dbname=result_db, user=smoke, password=smoke.
 // PGPASSWORD is exported so psql authenticates without a TTY prompt. It is used
-// by the S07-A3 reference end-to-end smoke to query scenario_<id>_results.
+// by the reference end-to-end smoke to query scenario_<id>_results.
 func queryResultDatabase(query string) string {
 	kubectl := requiredEnv("KUBECTL")
 	namespace := requiredEnv("CBSE_TEST_NAMESPACE")
@@ -398,8 +439,8 @@ func queryResultDatabase(query string) string {
 // Detail DB (the repository-built deployment/<project>-detaildb Deployment that
 // initializes public.simulation_parameters). It mirrors queryDatabase but
 // targets the Detail DB: the alpha4 smoke fixture configures the Detail DB with
-// dbname=simulation_db, user=smoke, password=smoke. It is used by the S07-A3
-// reference end-to-end smoke to look up the fixed parameter row identified by
+// dbname=simulation_db, user=smoke, password=smoke. It is used by the reference
+// end-to-end smoke to look up the fixed parameter row identified by
 // recipe_info.parameterset_id.
 func queryDetailDatabase(query string) string {
 	kubectl := requiredEnv("KUBECTL")
@@ -429,6 +470,9 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
+// writeDatabaseArtifact writes the given query result to database.txt under
+// CBSE_ARTIFACT_DIR so a run's persisted scenario rows are captured alongside
+// the JUnit artifacts. It is a no-op when CBSE_ARTIFACT_DIR is unset.
 func writeDatabaseArtifact(contents string) {
 	directory := strings.TrimSpace(os.Getenv("CBSE_ARTIFACT_DIR"))
 	if directory == "" {

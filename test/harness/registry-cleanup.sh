@@ -67,6 +67,9 @@ api_path="projects/${project}/repositories/${repo}/artifacts"
 uid_prefix="$(printf '%s' "${uid}" | tr -d -- '-' | tr '[:upper:]' '[:lower:]' | cut -c1-12)"
 tag_prefix="runner-${uid_prefix}-s"
 
+# fail logs a cleanup message to stderr and, when CBSE_CLEANUP_FAIL_LOG is
+# set, appends it to that file so per-candidate failures are captured for
+# triage. It never prints credentials or request headers.
 fail() {
   echo "registry-cleanup: $*" >&2
   if [[ -n "${fail_log}" ]]; then echo "registry-cleanup: $*" >>"${fail_log}"; fi
@@ -83,6 +86,10 @@ harbor_get() {
   rm -f "${tmp}"
 }
 
+# harbor_delete issues a Harbor DELETE for the given artifact digest and
+# returns the HTTP status code. Deletion is by digest so Harbor removes every
+# tag attached to that digest, which is why verify_and_delete inspects the
+# complete tag set before calling this.
 harbor_delete() {
   local digest="$1"
   curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "${auth_header}" \
@@ -192,6 +199,10 @@ verify_and_delete() {
 # Collect candidates: recorded tags/digests plus discovered prefix matches.
 declare -a refs=()
 declare -a is_tags=()
+# add_candidate records a candidate artifact reference (a tag or a digest)
+# for cleanup, skipping empty values and deduping against already-recorded
+# refs. It classifies the reference into is_tags (1 for a tag, 0 for a sha256
+# digest) so verify_and_delete knows how to derive the expected tag.
 add_candidate() {
   local r="$1"
   [[ -n "${r}" ]] || return 0

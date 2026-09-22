@@ -1,4 +1,45 @@
 #!/usr/bin/env bash
+# preflight.sh — validate cluster, credentials, and image lock before mutation.
+#
+# Runs every check the smoke suite needs before it mutates the cluster or
+# registry: the kubeconfig points at the expected test API server and context;
+# the server is Kubernetes >= 1.30; at least one linux/amd64 Ready schedulable
+# Node exists; the UserNamespacesSupport feature gate is enabled (required by
+# the rootless BuildKit Translator sidecar); the admin can perform every verb
+# the suite uses; the pull Secret exists with the right type; the source-image
+# lock is valid; docker/buildx and registry connectivity work (unless
+# SKIP_BUILD=1); skip-build images are immutable digests; the registry auth
+# file has credentials for the registry host; the cleanup adapter exists; and
+# the Harbor generated-runner repository is reachable (200 or 404). Every check
+# is read-only: no cluster or registry mutation happens here.
+#
+# Inputs / environment:
+#   KUBECTL    (required) path to the pinned kubectl binary.
+#   KUBECONFIG (required) dedicated test-cluster kubeconfig (must be readable).
+#   CBSE_EXPECTED_APISERVER (default https://192.168.101.245:6443) required
+#              API server; a mismatch aborts to protect the wrong cluster.
+#   CBSE_EXPECTED_CONTEXT   (default default) required current-context.
+#   CBSE_PULL_SECRET_NAME      (default cbse-registry-auth).
+#   CBSE_PULL_SECRET_NAMESPACE (default cbse-test-system).
+#   CBSE_REGISTRY          (default registry.unibw.de/i31bdase/cbse-test).
+#   CBSE_REGISTRY_AUTH_FILE   required when building or when supplied; must be
+#              a non-empty Docker config with creds for the registry host.
+#   SKIP_BUILD=1  skip docker/registry checks and require pre-built digest
+#              images (OPERATOR_IMAGE, SM_IMAGE, EDS_IMAGE, TRANS_IMAGE,
+#              RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE) instead.
+#   CBSE_HARBOR_API, CBSE_HARBOR_PROJECT, CBSE_RUNNER_REPO  Harbor defaults.
+#
+# Exit codes:
+#   0  all preflight checks passed.
+#   2  any check failed (wrong cluster/context, old version, no amd64 node,
+#      UserNamespacesSupport off, missing permission, missing/wrong pull
+#      Secret, bad image lock, docker/buildx missing, registry unreachable,
+#      auth file invalid/missing creds, cleanup adapter missing, Harbor runner
+#      repo unreachable).
+#
+# Side effects:
+#   None. Only read-only kubectl/curl/jq inspections; no cluster or registry
+#   mutation.
 set -euo pipefail
 
 kubectl_bin="${KUBECTL:?KUBECTL is required}"
