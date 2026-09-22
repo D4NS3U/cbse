@@ -30,14 +30,28 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+// containerKind classifies a container under validation as a regular (app)
+// container, an ordinary init container, or a native sidecar init container (an
+// init container with restartPolicy=Always, supported on Kubernetes 1.30+).
+// The kind selects which probe, lifecycle, and restartPolicy rules apply.
 type containerKind int
 
 const (
+	// regularContainer is a Pod spec.Containers entry.
 	regularContainer containerKind = iota
+	// ordinaryInitContainer is an init container without restartPolicy.
 	ordinaryInitContainer
+	// nativeSidecarContainer is an init container with restartPolicy=Always.
 	nativeSidecarContainer
 )
 
+// validateContainerComposition validates the regular and init containers of
+// the Pod spec. It enforces exactly one regular container named "runner" (whose
+// image, command, args, workingDir, and lifecycle CBSE supplies), that every
+// container name is a unique DNS-1123 label across both container lists, and that
+// an init container with a restartPolicy selects the supported native-sidecar
+// behavior (Always). It then delegates per-container validation and host-port
+// conflict detection.
 func validateContainerComposition(spec *corev1.PodSpec, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	seenNames := map[string]struct{}{}
@@ -80,6 +94,9 @@ func validateContainerComposition(spec *corev1.PodSpec, path *field.Path) field.
 	return errs
 }
 
+// validateContainerName requires a non-empty DNS-1123-label container name and
+// rejects duplicates across the regular and init container lists (tracked by the
+// shared seen map).
 func validateContainerName(name string, path *field.Path, seen map[string]struct{}) field.ErrorList {
 	var errs field.ErrorList
 	if name == "" {
@@ -94,6 +111,14 @@ func validateContainerName(name string, path *field.Path, seen map[string]struct
 	return errs
 }
 
+// validateContainer validates a single container of the given kind. It rejects
+// unsupported fields, applies runner-specific constraints (CBSE supplies the
+// runner image/command/args/workingDir/lifecycle and forbids restartPolicy on
+// regular containers), requires an image for non-runner containers, forbids
+// probes and lifecycle hooks on ordinary init containers, and delegates env,
+// resources, ports, mounts, probes, lifecycle, pull policy, and security-context
+// validation. grace is the effective termination grace period used to bound
+// lifecycle sleep and probe behavior.
 func validateContainer(container *corev1.Container, path *field.Path, kind containerKind, runner bool, volumeTypes map[string]bool, terminationGrace *int64) field.ErrorList {
 	allowed := fieldSet(
 		"Name", "Image", "Command", "Args", "WorkingDir", "Ports", "EnvFrom", "Env",
@@ -165,6 +190,8 @@ func validateContainer(container *corev1.Container, path *field.Path, kind conta
 	return errs
 }
 
+// validateEnv validates each env var: a DNS env-var name, mutual exclusion of
+// value and valueFrom, and the selected valueFrom source.
 func validateEnv(vars []corev1.EnvVar, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	for i := range vars {
@@ -185,6 +212,9 @@ func validateEnv(vars []corev1.EnvVar, path *field.Path) field.ErrorList {
 	return errs
 }
 
+// validateEnvVarSource requires exactly one valueFrom source and validates the
+// selected source. FieldRef is restricted to the downward-API fields CBSE allows
+// (downwardEnvFields); resourceFieldRef divisor defaulting is disabled.
 func validateEnvVarSource(source *corev1.EnvVarSource, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	count := 0
@@ -212,6 +242,8 @@ func validateEnvVarSource(source *corev1.EnvVarSource, path *field.Path) field.E
 	return errs
 }
 
+// validateKeySelector validates a ConfigMap/Secret key selector: a
+// DNS-subdomain object name and a non-empty ConfigMap key.
 func validateKeySelector(name, key string, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if name == "" {
@@ -227,6 +259,9 @@ func validateKeySelector(name, key string, path *field.Path) field.ErrorList {
 	return errs
 }
 
+// validateEnvFrom validates each envFrom source: an optional env-var-name
+// prefix and exactly one of configMapRef or secretRef, each with a DNS-subdomain
+// name.
 func validateEnvFrom(sources []corev1.EnvFromSource, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	for i := range sources {
@@ -253,6 +288,7 @@ func validateEnvFrom(sources []corev1.EnvFromSource, path *field.Path) field.Err
 	return errs
 }
 
+// validateObjectReferenceName requires a non-empty DNS-subdomain object name.
 func validateObjectReferenceName(name string, path *field.Path) field.ErrorList {
 	if name == "" {
 		return field.ErrorList{required(path, "name is required")}
@@ -260,6 +296,13 @@ func validateObjectReferenceName(name string, path *field.Path) field.ErrorList 
 	return messagesAsErrors(path, apierrors.NameIsDNSSubdomain(name, false))
 }
 
+// validateResources validates a container's resource requirements. It rejects
+// unsupported fields (only Limits and Requests are allowed), forbids resource
+// names outside the alpha4 allow-list, and enforces that non-overcommittable
+// resources (huge pages and extended resources) carry a matching limit equal to
+// the request, while ordinary resources only require request <= limit.
+// Huge-page references require a CPU or memory request or limit so a Pod is
+// never admitted on huge pages alone.
 func validateResources(resources *corev1.ResourceRequirements, path *field.Path) field.ErrorList {
 	errs := rejectNonZeroFields(reflect.ValueOf(resources).Elem(), path, fieldSet("Limits", "Requests"))
 	resourceNames := map[corev1.ResourceName]struct{}{}
@@ -316,6 +359,11 @@ func validateResources(resources *corev1.ResourceRequirements, path *field.Path)
 	return errs
 }
 
+// isAllowedContainerResourceName reports whether a resource name is permitted
+// in an alpha4 container. CPU, memory, and ephemeral-storage are always allowed;
+// hugepages_<size> is allowed when the size suffix parses to a positive whole
+// quantity; other extended resources (qualified names containing "/") are
+// allowed, while the requests.* and kubernetes.io/ namespaces are not.
 func isAllowedContainerResourceName(name corev1.ResourceName) bool {
 	if len(utilvalidation.IsQualifiedName(string(name))) != 0 {
 		return false
@@ -335,6 +383,10 @@ func isAllowedContainerResourceName(name corev1.ResourceName) bool {
 	return len(utilvalidation.IsQualifiedName("requests."+raw)) == 0
 }
 
+// validateResourceQuantity validates a single resource quantity: it must be
+// non-negative, survive rounding to Kubernetes milli precision unchanged, and
+// (for extended resources) be a whole number. Huge-page quantities must be an
+// integer multiple of the page size encoded in the resource name.
 func validateResourceQuantity(name corev1.ResourceName, quantity resource.Quantity, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if quantity.Sign() < 0 {
@@ -357,18 +409,26 @@ func validateResourceQuantity(name corev1.ResourceName, quantity resource.Quanti
 	return errs
 }
 
+// isHugePageResource reports whether name is a hugepages.* resource.
 func isHugePageResource(name corev1.ResourceName) bool {
 	return strings.HasPrefix(string(name), corev1.ResourceHugePagesPrefix)
 }
 
+// isExtendedResource reports whether name is a user extended resource (a
+// qualified name containing "/" but not in the kubernetes.io/ namespace).
 func isExtendedResource(name corev1.ResourceName) bool {
 	return strings.Contains(string(name), "/") && !strings.Contains(string(name), "kubernetes.io/")
 }
 
+// isNonOvercommittable reports whether a resource must be requested and
+// limited equally (huge pages and extended resources cannot be overcommitted).
 func isNonOvercommittable(name corev1.ResourceName) bool {
 	return isHugePageResource(name) || isExtendedResource(name)
 }
 
+// validateContainerPorts validates each named container port: unique port
+// names, a required in-range containerPort, an in-range hostPort when set, and a
+// TCP/UDP/SCTP protocol.
 func validateContainerPorts(ports []corev1.ContainerPort, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	seenNames := map[string]struct{}{}
@@ -398,6 +458,8 @@ func validateContainerPorts(ports []corev1.ContainerPort, path *field.Path) fiel
 	return errs
 }
 
+// validateHostPortConflicts rejects a protocol/hostIP/hostPort tuple used by
+// more than one regular container.
 func validateHostPortConflicts(containers []corev1.Container, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	seen := map[string]struct{}{}
@@ -421,6 +483,11 @@ func validateHostPortConflicts(containers []corev1.Container, path *field.Path) 
 	return errs
 }
 
+// validateMountsAndDevices validates a container's volumeMounts and
+// volumeDevices against the Pod's declared volumes. Mounts must reference an
+// existing volume, have a unique backstep-free mountPath, and use supported
+// propagation and recursive-read-only modes; block devices must reference a PVC
+// volume and cannot share a name or path with a mount.
 func validateMountsAndDevices(container *corev1.Container, volumeTypes map[string]bool, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	mountPaths := map[string]struct{}{}
@@ -515,6 +582,7 @@ func validateMountsAndDevices(container *corev1.Container, volumeTypes map[strin
 	return errs
 }
 
+// validateNoBacksteps rejects a path containing a ".." component.
 func validateNoBacksteps(value string, path *field.Path) field.ErrorList {
 	for _, part := range strings.Split(filepath.ToSlash(value), "/") {
 		if part == ".." {
@@ -524,14 +592,22 @@ func validateNoBacksteps(value string, path *field.Path) field.ErrorList {
 	return nil
 }
 
+// probeClass labels the three probe kinds for kind-specific validation rules.
 type probeClass int
 
 const (
+	// probeLiveness is a liveness probe.
 	probeLiveness probeClass = iota
+	// probeReadiness is a readiness probe.
 	probeReadiness
+	// probeStartup is a startup probe.
 	probeStartup
 )
 
+// validateProbe validates a single probe of the given class. It requires a
+// valid handler, non-negative timing fields, a positive termination grace when
+// set, forbids terminationGracePeriodSeconds on readiness probes, and requires
+// successThreshold of 1 (when supplied) for liveness and startup probes.
 func validateProbe(probe *corev1.Probe, path *field.Path, grace int64, class probeClass) field.ErrorList {
 	if probe == nil {
 		return nil
@@ -561,11 +637,15 @@ func validateProbe(probe *corev1.Probe, path *field.Path, grace int64, class pro
 	return errs
 }
 
+// validateProbeHandler validates the action of a probe (exec, httpGet,
+// tcpSocket, or grpc) via the shared handler validator with lifecycle=false.
 func validateProbeHandler(handler *corev1.ProbeHandler, path *field.Path) field.ErrorList {
 	common := handlerView{exec: handler.Exec, httpGet: handler.HTTPGet, tcpSocket: handler.TCPSocket, grpc: handler.GRPC}
 	return validateHandler(common, path, 0, false)
 }
 
+// validateLifecycle validates a container lifecycle: only PostStart and PreStop
+// are allowed, each delegated to the lifecycle handler validator.
 func validateLifecycle(lifecycle *corev1.Lifecycle, path *field.Path, grace int64) field.ErrorList {
 	errs := rejectNonZeroFields(reflect.ValueOf(lifecycle).Elem(), path, fieldSet("PostStart", "PreStop"))
 	if lifecycle.PostStart != nil {
@@ -577,10 +657,16 @@ func validateLifecycle(lifecycle *corev1.Lifecycle, path *field.Path, grace int6
 	return errs
 }
 
+// validateLifecycleHandler validates a single lifecycle handler (exec,
+// httpGet, tcpSocket, or sleep) via the shared handler validator with
+// lifecycle=true.
 func validateLifecycleHandler(handler *corev1.LifecycleHandler, path *field.Path, grace int64) field.ErrorList {
 	return validateHandler(handlerView{exec: handler.Exec, httpGet: handler.HTTPGet, tcpSocket: handler.TCPSocket, sleep: handler.Sleep}, path, grace, true)
 }
 
+// handlerView flattens the exec/httpGet/tcpSocket/grpc/sleep action pointers of
+// a probe or lifecycle handler into a single struct so validateHandler can
+// enforce "exactly one action" uniformly across both.
 type handlerView struct {
 	exec      *corev1.ExecAction
 	httpGet   *corev1.HTTPGetAction
@@ -589,6 +675,12 @@ type handlerView struct {
 	sleep     *corev1.SleepAction
 }
 
+// validateHandler validates a probe or lifecycle handler. It requires exactly
+// one action and validates each: exec needs a command; httpGet needs a path,
+// port, scheme, and headers; tcpSocket needs a port; grpc needs a port (and is
+// forbidden for lifecycle, which has no grpc action on Kubernetes 1.30); sleep
+// is allowed only for lifecycle and must be positive and no longer than the Pod
+// termination grace.
 func validateHandler(handler handlerView, path *field.Path, grace int64, lifecycle bool) field.ErrorList {
 	var errs field.ErrorList
 	count := 0
@@ -630,6 +722,8 @@ func validateHandler(handler handlerView, path *field.Path, grace int64, lifecyc
 	return errs
 }
 
+// validateHTTPGet validates an HTTP GET probe/lifecycle action: a required
+// path, a valid port, an HTTP/HTTPS scheme, and valid header names.
 func validateHTTPGet(action *corev1.HTTPGetAction, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if action.Path == "" {
@@ -645,6 +739,8 @@ func validateHTTPGet(action *corev1.HTTPGetAction, path *field.Path) field.Error
 	return errs
 }
 
+// validatePort validates an int-or-string port: a numeric port must be in
+// range and a named port must be a valid port name.
 func validatePort(port intstr.IntOrString, path *field.Path) field.ErrorList {
 	switch port.Type {
 	case intstr.Int:
@@ -659,6 +755,8 @@ func validatePort(port intstr.IntOrString, path *field.Path) field.ErrorList {
 	}
 }
 
+// validatePullAndTermination validates the imagePullPolicy and
+// terminationMessagePolicy enums against the supported values.
 func validatePullAndTermination(container *corev1.Container, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if container.ImagePullPolicy != "" && container.ImagePullPolicy != corev1.PullAlways && container.ImagePullPolicy != corev1.PullIfNotPresent && container.ImagePullPolicy != corev1.PullNever {
@@ -670,6 +768,11 @@ func validatePullAndTermination(container *corev1.Container, path *field.Path) f
 	return errs
 }
 
+// validateContainerSecurityContext validates a container security context. Only
+// RunAsUser, RunAsGroup, and ReadOnlyRootFilesystem are allowed; RunAsUser and
+// RunAsGroup must be positive valid user/group IDs. Privileged mode, capability
+// changes, seccomp/AppArmor profiles, and the other hardening fields are owned
+// by CBSE and rejected here.
 func validateContainerSecurityContext(context *corev1.SecurityContext, path *field.Path) field.ErrorList {
 	if context == nil {
 		return nil
@@ -680,6 +783,8 @@ func validateContainerSecurityContext(context *corev1.SecurityContext, path *fie
 	return errs
 }
 
+// validatePositiveID validates a positive RunAsUser or RunAsGroup (when user
+// is true it applies user-ID rules, otherwise group-ID rules).
 func validatePositiveID(value *int64, path *field.Path, user bool) field.ErrorList {
 	if value == nil {
 		return nil

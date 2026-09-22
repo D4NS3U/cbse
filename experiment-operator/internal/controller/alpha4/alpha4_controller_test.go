@@ -105,6 +105,9 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// localEnvtestAssets locates the envtest kube-apiserver/etcd binaries under the
+// module's bin/k8s directory when KUBEBUILDER_ASSETS is unset, returning the
+// absolute path or "" if it cannot be found.
 func localEnvtestAssets() string {
 	if os.Getenv("KUBEBUILDER_ASSETS") != "" {
 		return ""
@@ -127,6 +130,9 @@ func localEnvtestAssets() string {
 
 const shaA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+// validExperiment builds a SimulationExperiment fixture in the test namespace
+// with a digest-pinned image-based detail DB, a host-based result DB, and a
+// fully specified translator that passes provisioning validation.
 func validExperiment(name string) *experimentalpha4.SimulationExperiment {
 	return &experimentalpha4.SimulationExperiment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: alpha4TestNamespace},
@@ -195,6 +201,8 @@ func dockerConfigSecret(auths map[string]string, credHelpers map[string]string, 
 	}
 }
 
+// ensureRegistrySecret deletes any existing cbse-registry-auth Secret and, when
+// sec is non-nil, (re)creates it in the test namespace.
 func ensureRegistrySecret(t *testing.T, sec *corev1.Secret) {
 	t.Helper()
 	ctx := context.Background()
@@ -209,12 +217,17 @@ func ensureRegistrySecret(t *testing.T, sec *corev1.Secret) {
 	}
 }
 
+// deleteRegistrySecret removes the cbse-registry-auth Secret from the test
+// namespace.
 func deleteRegistrySecret(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	_ = alpha4Client.Delete(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "cbse-registry-auth", Namespace: alpha4TestNamespace}})
 }
 
+// newReconciler builds an Alpha4SimulationExperimentReconciler against the
+// shared envtest client and scheme, injecting probe as the DB availability
+// probe (nil uses the default pgx probe).
 func newReconciler(probe func(ctx context.Context, ep dbendpoint.Endpoint) error) *controller.Alpha4SimulationExperimentReconciler {
 	return &controller.Alpha4SimulationExperimentReconciler{
 		Client:  alpha4Client,
@@ -223,6 +236,8 @@ func newReconciler(probe func(ctx context.Context, ep dbendpoint.Endpoint) error
 	}
 }
 
+// createExperiment creates exp in the test namespace and returns its
+// namespaced name, failing the test on a create error.
 func createExperiment(t *testing.T, exp *experimentalpha4.SimulationExperiment) types.NamespacedName {
 	t.Helper()
 	ctx := context.Background()
@@ -260,6 +275,9 @@ func drive(t *testing.T, r *controller.Alpha4SimulationExperimentReconciler, key
 	return last
 }
 
+// markTranslatorReady flips the experiment's Translator Deployment status to one
+// ready replica so the readiness check can advance. It is a no-op if the
+// Deployment is absent or already ready.
 func markTranslatorReady(t *testing.T, key types.NamespacedName) {
 	t.Helper()
 	ctx := context.Background()
@@ -282,6 +300,7 @@ func markTranslatorReady(t *testing.T, key types.NamespacedName) {
 	}
 }
 
+// getExperiment fetches the experiment for key, failing the test on error.
 func getExperiment(t *testing.T, key types.NamespacedName) *experimentalpha4.SimulationExperiment {
 	t.Helper()
 	inst := &experimentalpha4.SimulationExperiment{}
@@ -291,6 +310,7 @@ func getExperiment(t *testing.T, key types.NamespacedName) *experimentalpha4.Sim
 	return inst
 }
 
+// mustExist fails the test unless the named object exists in the test namespace.
 func mustExist(t *testing.T, obj client.Object, name string) {
 	t.Helper()
 	if err := alpha4Client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: alpha4TestNamespace}, obj); err != nil {
@@ -298,6 +318,8 @@ func mustExist(t *testing.T, obj client.Object, name string) {
 	}
 }
 
+// mustNotExist fails the test unless the named object is absent from the test
+// namespace.
 func mustNotExist(t *testing.T, obj client.Object, name string) {
 	t.Helper()
 	err := alpha4Client.Get(context.Background(), types.NamespacedName{Name: name, Namespace: alpha4TestNamespace}, obj)
@@ -309,6 +331,8 @@ func mustNotExist(t *testing.T, obj client.Object, name string) {
 	}
 }
 
+// containerByName returns the container named name from dep, failing the test
+// if it is absent.
 func containerByName(t *testing.T, dep *appsv1.Deployment, name string) corev1.Container {
 	for _, c := range dep.Spec.Template.Spec.Containers {
 		if c.Name == name {
@@ -319,6 +343,7 @@ func containerByName(t *testing.T, dep *appsv1.Deployment, name string) corev1.C
 	return corev1.Container{}
 }
 
+// hasVolume reports whether dep declares a volume named name.
 func hasVolume(dep *appsv1.Deployment, name string) bool {
 	for _, v := range dep.Spec.Template.Spec.Volumes {
 		if v.Name == name {
@@ -328,6 +353,8 @@ func hasVolume(dep *appsv1.Deployment, name string) bool {
 	return false
 }
 
+// hasMount reports whether container c mounts the volume name with the given
+// read-only flag.
 func hasMount(c corev1.Container, name string, readOnly bool) bool {
 	for _, m := range c.VolumeMounts {
 		if m.Name == name && m.ReadOnly == readOnly {

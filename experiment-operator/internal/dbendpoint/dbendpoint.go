@@ -2,11 +2,13 @@
 // shared by the Experiment Operator availability probe, the Translator Detail
 // DB client, and the generated runner Result DB client.
 //
-// Only the Operator availability probe lives in this slice. It resolves an
-// alpha4 DatabaseSpec host to a single address, opens one connection, runs
-// SELECT 1 exactly once, closes the connection, and retains no pool. The
-// resolution and connection seams are interfaces so callers (and tests) can
-// inject a resolver and connector without a live DNS server or PostgreSQL.
+// Only the Operator availability probe is driven from this module; the
+// Translator and runner clients live in their own modules and depend on this
+// contract. It resolves an alpha4 DatabaseSpec host to a single address, opens
+// one connection, runs SELECT 1 exactly once, closes the connection, and
+// retains no pool. The resolution and connection seams are interfaces so
+// callers (and tests) can inject a resolver and connector without a live DNS
+// server or PostgreSQL.
 package dbendpoint
 
 import (
@@ -94,6 +96,7 @@ func ClassifyHost(host string) (Classified, error) {
 	return Classified{Kind: HostDNS, Normalized: trimmed}, nil
 }
 
+// addrKind maps a parsed address to its HostKind.
 func addrKind(addr netip.Addr) HostKind {
 	if addr.Is4() {
 		return HostIPv4
@@ -154,6 +157,7 @@ type Resolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
+// defaultResolver adapts net.DefaultResolver to the Resolver interface.
 type defaultResolver struct{}
 
 func (defaultResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {

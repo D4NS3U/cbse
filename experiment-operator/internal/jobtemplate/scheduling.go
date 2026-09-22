@@ -25,8 +25,15 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+// strictLabelSelectorOptions is the shared LabelSelector validation options
+// passed to every affinity and topology-spread LabelSelector validation in
+// this package.
 var strictLabelSelectorOptions = metav1validation.LabelSelectorValidationOptions{}
 
+// validateScheduling validates the Pod scheduling fields: nodeSelector labels,
+// affinity (node, pod, anti), tolerations, topology-spread constraints, a
+// DNS-subdomain priorityClassName, a DNS-subdomain non-empty runtimeClassName,
+// and a PreemptLowerPriority/Never preemptionPolicy.
 func validateScheduling(spec *corev1.PodSpec, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	errs = append(errs, sanitizeErrors(metav1validation.ValidateLabels(spec.NodeSelector, path.Child("nodeSelector")))...)
@@ -49,6 +56,8 @@ func validateScheduling(spec *corev1.PodSpec, path *field.Path) field.ErrorList 
 	return errs
 }
 
+// validateAffinity validates a Pod affinity's node, pod, and anti-affinity
+// terms when present.
 func validateAffinity(affinity *corev1.Affinity, path *field.Path) field.ErrorList {
 	if affinity == nil {
 		return nil
@@ -66,6 +75,8 @@ func validateAffinity(affinity *corev1.Affinity, path *field.Path) field.ErrorLi
 	return errs
 }
 
+// validateNodeAffinity validates a NodeAffinity: the required node selector and
+// each preferred term (weight in 1..100 and a valid node selector term).
 func validateNodeAffinity(affinity *corev1.NodeAffinity, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if affinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
@@ -82,6 +93,8 @@ func validateNodeAffinity(affinity *corev1.NodeAffinity, path *field.Path) field
 	return errs
 }
 
+// validateNodeSelector requires at least one node selector term and validates
+// each term.
 func validateNodeSelector(selector *corev1.NodeSelector, path *field.Path) field.ErrorList {
 	if len(selector.NodeSelectorTerms) == 0 {
 		return field.ErrorList{required(path.Child("nodeSelectorTerms"), "at least one node selector term is required")}
@@ -93,6 +106,8 @@ func validateNodeSelector(selector *corev1.NodeSelector, path *field.Path) field
 	return errs
 }
 
+// validateNodeSelectorTerm validates the matchExpressions and matchFields of a
+// node selector term.
 func validateNodeSelectorTerm(term *corev1.NodeSelectorTerm, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	for i := range term.MatchExpressions {
@@ -104,6 +119,12 @@ func validateNodeSelectorTerm(term *corev1.NodeSelectorTerm, path *field.Path) f
 	return errs
 }
 
+// validateNodeSelectorRequirement validates a single node selector requirement.
+// When fieldSelector is true (a matchFields entry) only metadata.name with In or
+// NotIn and exactly one DNS-subdomain value is allowed; otherwise
+// (matchExpressions) it validates the key as a label name and the operator's
+// value-count rules (In/NotIn need values, Exists/DoesNotExist forbid them,
+// Gt/Lt take exactly one).
 func validateNodeSelectorRequirement(requirement *corev1.NodeSelectorRequirement, path *field.Path, fieldSelector bool) field.ErrorList {
 	var errs field.ErrorList
 	if fieldSelector {
@@ -141,6 +162,8 @@ func validateNodeSelectorRequirement(requirement *corev1.NodeSelectorRequirement
 	return errs
 }
 
+// validatePodAffinity validates a PodAffinity's required and preferred terms
+// (preferred weights must be in 1..100).
 func validatePodAffinity(affinity *corev1.PodAffinity, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	for i := range affinity.RequiredDuringSchedulingIgnoredDuringExecution {
@@ -157,6 +180,8 @@ func validatePodAffinity(affinity *corev1.PodAffinity, path *field.Path) field.E
 	return errs
 }
 
+// validatePodAntiAffinity validates a PodAntiAffinity's required and preferred
+// terms (preferred weights must be in 1..100).
 func validatePodAntiAffinity(affinity *corev1.PodAntiAffinity, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	for i := range affinity.RequiredDuringSchedulingIgnoredDuringExecution {
@@ -173,6 +198,9 @@ func validatePodAntiAffinity(affinity *corev1.PodAntiAffinity, path *field.Path)
 	return errs
 }
 
+// validatePodAffinityTerm validates a single pod affinity/anti-affinity term:
+// the labelSelector and namespaceSelector, each DNS-1123-label namespace, a
+// required topologyKey label, and the matchLabelKeys/mismatchLabelKeys rules.
 func validatePodAffinityTerm(term *corev1.PodAffinityTerm, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	errs = append(errs, sanitizeErrors(metav1validation.ValidateLabelSelector(term.LabelSelector, strictLabelSelectorOptions, path.Child("labelSelector")))...)
@@ -189,6 +217,10 @@ func validatePodAffinityTerm(term *corev1.PodAffinityTerm, path *field.Path) fie
 	return errs
 }
 
+// validateAffinityLabelKeys validates a pod affinity term's matchLabelKeys and
+// mismatchLabelKeys. Both require a labelSelector; matchLabelKeys must be valid
+// label names and must not overlap the labelSelector keys or the
+// mismatchLabelKeys.
 func validateAffinityLabelKeys(match, mismatch []string, selector *metav1.LabelSelector, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if (len(match) != 0 || len(mismatch) != 0) && selector == nil {
@@ -215,6 +247,9 @@ func validateAffinityLabelKeys(match, mismatch []string, selector *metav1.LabelS
 	return errs
 }
 
+// labelSelectorKeys returns the set of label keys a LabelSelector references
+// (matchLabels plus each matchExpressions key), used to detect overlap with
+// matchLabelKeys.
 func labelSelectorKeys(selector *metav1.LabelSelector) map[string]struct{} {
 	keys := map[string]struct{}{}
 	if selector == nil {
@@ -229,6 +264,9 @@ func labelSelectorKeys(selector *metav1.LabelSelector) map[string]struct{} {
 	return keys
 }
 
+// validateTolerations validates each toleration: a label-name key (or an empty
+// key with operator Exists), an Equal/Exists operator with the matching value
+// rules, a supported taint effect, and tolerationSeconds only with NoExecute.
 func validateTolerations(tolerations []corev1.Toleration, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	for i := range tolerations {
@@ -261,6 +299,11 @@ func validateTolerations(tolerations []corev1.Toleration, path *field.Path) fiel
 	return errs
 }
 
+// validateTopologySpread validates each topology-spread constraint: a positive
+// maxSkew, a required topologyKey, a DoNotSchedule/ScheduleAnyway action, a
+// unique topologyKey+whenUnsatisfiable pair, a positive minDomains (only with
+// DoNotSchedule), the node/taint inclusion policies, the labelSelector, and
+// matchLabelKeys.
 func validateTopologySpread(constraints []corev1.TopologySpreadConstraint, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	seenPairs := map[string]struct{}{}
@@ -298,6 +341,8 @@ func validateTopologySpread(constraints []corev1.TopologySpreadConstraint, path 
 	return errs
 }
 
+// validateNodeInclusionPolicy validates a topology-spread node or taint
+// inclusion policy as Honor or Ignore when set.
 func validateNodeInclusionPolicy(policy *corev1.NodeInclusionPolicy, path *field.Path) field.ErrorList {
 	if policy != nil && *policy != corev1.NodeInclusionPolicyHonor && *policy != corev1.NodeInclusionPolicyIgnore {
 		return field.ErrorList{invalid(path, "policy must be Honor or Ignore")}
@@ -305,6 +350,9 @@ func validateNodeInclusionPolicy(policy *corev1.NodeInclusionPolicy, path *field
 	return nil
 }
 
+// validateTopologyMatchLabelKeys validates a topology-spread constraint's
+// matchLabelKeys: they require a labelSelector, must be valid label names, and
+// must not overlap the labelSelector keys.
 func validateTopologyMatchLabelKeys(keys []string, selector *metav1.LabelSelector, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if len(keys) != 0 && selector == nil {

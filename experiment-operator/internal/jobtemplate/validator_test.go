@@ -629,6 +629,12 @@ func TestInternalBoundaryUsesOnlyPublicExternalKubernetesAPIs(t *testing.T) {
 	}
 }
 
+// collectFieldCensus walks root's type tree and emits a sorted list of
+// "path=classification" lines classifying every exported JSON field as
+// "allowed" or "prohibited" by the alpha4 runner Job-template policy. The
+// restricted map mirrors the validator's allow-lists; a field is allowed only
+// when it and every ancestor that is a restricted type are allowed. The census
+// drives the field-coverage conformance test.
 func collectFieldCensus(root reflect.Type, rootPath string) []string {
 	restricted := map[reflect.Type]map[string]struct{}{
 		reflect.TypeOf(batchv1.JobTemplateSpec{}): fieldSet("ObjectMeta", "Spec"),
@@ -706,6 +712,7 @@ func collectFieldCensus(root reflect.Type, rootPath string) []string {
 	return lines
 }
 
+// containsString reports whether want is in values.
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -715,6 +722,8 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
+// assertCensusClassification fails the test unless at least one census line
+// ends with suffix, asserting that a field classification is present.
 func assertCensusClassification(t *testing.T, lines []string, suffix string) {
 	t.Helper()
 	for _, line := range lines {
@@ -725,6 +734,10 @@ func assertCensusClassification(t *testing.T, lines []string, suffix string) {
 	t.Fatalf("field census is missing classification suffix %q", suffix)
 }
 
+// completeTemplate returns a Job template fixture that exercises every field
+// the alpha4 policy allows: two regular containers (the runner plus a sidecar),
+// two init containers (one ordinary, one native sidecar), all six volume
+// sources, full scheduling and runtime config, and a complete resource set.
 func completeTemplate() *batchv1.JobTemplateSpec {
 	mode := int32(0640)
 	terminationGrace := int64(30)
@@ -834,22 +847,31 @@ func completeTemplate() *batchv1.JobTemplateSpec {
 	}
 }
 
+// execProbe returns a minimal exec liveness/startup probe fixture.
 func execProbe() *corev1.Probe {
 	return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"check"}}}, SuccessThreshold: 1}
 }
 
+// sleepLifecycle returns a Lifecycle with a PreStop sleep of the given
+// seconds.
 func sleepLifecycle(seconds int64) *corev1.Lifecycle {
 	return &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{Sleep: &corev1.SleepAction{Seconds: seconds}}}
 }
 
+// validVolumeResourceFieldRef returns a DownwardAPI volume
+// ResourceFieldSelector fixture (the runner's limits.cpu with a 1m divisor).
 func validVolumeResourceFieldRef() *corev1.ResourceFieldSelector {
 	return &corev1.ResourceFieldSelector{ContainerName: "runner", Resource: "limits.cpu", Divisor: resource.MustParse("1m")}
 }
 
+// projectedDownward returns the DownwardAPI file of the projected volume in
+// completeTemplate so a test can mutate it in place.
 func projectedDownward(template *batchv1.JobTemplateSpec) *corev1.DownwardAPIVolumeFile {
 	return &template.Spec.Template.Spec.Volumes[5].Projected.Sources[2].DownwardAPI.Items[0]
 }
 
+// pullSecretNames returns the names of a list of LocalObjectReference in
+// order.
 func pullSecretNames(refs []corev1.LocalObjectReference) []string {
 	names := make([]string, len(refs))
 	for i, ref := range refs {
@@ -858,6 +880,7 @@ func pullSecretNames(refs []corev1.LocalObjectReference) []string {
 	return names
 }
 
+// quantityPointer parses value and returns a pointer to it.
 func quantityPointer(value string) *resource.Quantity {
 	quantity := resource.MustParse(value)
 	return &quantity

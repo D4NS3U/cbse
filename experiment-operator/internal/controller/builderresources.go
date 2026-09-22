@@ -8,6 +8,8 @@ import (
 )
 
 var (
+	// defaultBuilderCPULimit and defaultBuilderMemLimit are the BuildKit sidecar
+	// limits EffectiveBuilderResources applies when the spec omits them.
 	defaultBuilderCPULimit = kresource.MustParse("1")
 	defaultBuilderMemLimit = kresource.MustParse("2Gi")
 )

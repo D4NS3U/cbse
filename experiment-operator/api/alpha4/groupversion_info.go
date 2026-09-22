@@ -14,7 +14,18 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package alpha4 contains API Schema definitions for the experiment alpha4 API group.
+// Package alpha4 defines the SimulationExperiment custom resource for the
+// experiment.cbse.terministic.de/v1alpha4 API group. It is the only active API
+// version: the CRD serves and stores alpha4, the controller-manager registers
+// only alpha4 into its runtime scheme, and the alpha4 reconciler reconciles
+// it. The retired alpha2 and alpha3 groups are not served and have no
+// conversion webhook.
+//
+// These types are consumed by the experiment-operator controller, the
+// scenario-manager lifecycle gate, and the e2e harness. Many spec fields are
+// immutable after creation (enforced by CEL validations) so that an in-flight
+// experiment's topology cannot change underneath running workloads; the
+// intended update path is to delete and recreate the SimulationExperiment.
 // +kubebuilder:object:generate=true
 // +groupName=experiment.cbse.terministic.de
 package alpha4

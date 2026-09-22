@@ -14,7 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package alpha3 contains API Schema definitions for the experiment alpha3 API group.
+// Package alpha3 contains the retired alpha3 API schema for the
+// experiment.cbse.terministic.de group. It is not the active path: it is not
+// registered into the controller-manager scheme, not served by the CRD, and
+// not reconciled. Alpha4 is the only active version; this package remains only
+// to preserve generated deepcopy types for reference.
 // +kubebuilder:object:generate=true
 // +groupName=experiment.cbse.terministic.de
 package alpha3

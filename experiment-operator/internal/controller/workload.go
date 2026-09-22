@@ -13,9 +13,9 @@ const (
 )
 
 // alpha4 Translator NATS/JetStream configuration injected by the Operator.
-// These values are fixed for alpha4 (see slice 04): the NATS URL and stream
-// name are the in-cluster smoke deployment values, and the ready-subject
-// template is the canonical literal the reference framework validates verbatim.
+// These values are fixed for alpha4: the NATS URL and stream name are the
+// in-cluster smoke deployment values, and the ready-subject template is the
+// canonical literal the reference framework validates verbatim.
 const (
 	translatorNATSURL              = "nats://sm-eds-nats:4222"
 	translatorStream               = "cbse_translator"
@@ -25,8 +25,8 @@ const (
 // workloadLabels returns the shared labels carried by every Operator-managed
 // workload: a short app name and the two reserved identity labels the downward
 // API exposes to containers as SIMULATIONPROJECTNAME and SIMULATIONEXPERIMENTUID.
-// Per the alpha4 identity contract (slice 04) every Operator-managed Pod template
-// carries both the project and full experiment UID labels; metadata.name and
+// Per the alpha4 identity contract every Operator-managed Pod template carries
+// both the project and full experiment UID labels; metadata.name and
 // metadata.uid would identify the Pod rather than the owning experiment and are
 // not used for these two values.
 func workloadLabels(appName, projectName, experimentUID string) map[string]string {

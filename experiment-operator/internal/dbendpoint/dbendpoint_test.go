@@ -51,6 +51,8 @@ func TestClassifyHost(t *testing.T) {
 	}
 }
 
+// fakeConn is a test double for Conn that counts Ping/Close calls and returns
+// canned errors.
 type fakeConn struct {
 	pingErr   error
 	closeErr  error
@@ -68,6 +70,8 @@ func (c *fakeConn) Close(ctx context.Context) error {
 	return c.closeErr
 }
 
+// fakeConnector is a test double for Connector that counts Connect calls and
+// returns either a canned error or a fixed Conn.
 type fakeConnector struct {
 	conn  Conn
 	err   error
@@ -82,6 +86,8 @@ func (c *fakeConnector) Connect(ctx context.Context, host string, port int32, us
 	return c.conn, nil
 }
 
+// fakeResolver is a test double for Resolver that counts LookupIPAddr calls
+// and returns a canned address list or error.
 type fakeResolver struct {
 	addrs []net.IPAddr
 	err   error
@@ -93,6 +99,7 @@ func (r *fakeResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPA
 	return r.addrs, r.err
 }
 
+// ipAddr parses s into a net.IPAddr for fakeResolver address lists.
 func ipAddr(s string) net.IPAddr {
 	return net.IPAddr{IP: net.ParseIP(s)}
 }

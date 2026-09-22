@@ -24,7 +24,12 @@ import (
 
 // +kubebuilder:object:generate=true
 
-// SimulationExperimentSpec defines the desired state of an alpha4 experiment.
+// SimulationExperimentSpec defines the desired state of an alpha4 experiment:
+// the detail and result PostgreSQL databases, the translator, and the three
+// scenario services (post-processing, experimental-design, and an optional
+// runner). The detailDatabase and resultDatabase fields are immutable after
+// creation (enforced by CEL); to change either, delete and recreate the
+// SimulationExperiment so an in-flight experiment's data sources cannot move.
 // +kubebuilder:validation:XValidation:rule="self.detailDatabase == oldSelf.detailDatabase",message="spec.detailDatabase is immutable; delete and recreate the SimulationExperiment"
 // +kubebuilder:validation:XValidation:rule="self.resultDatabase == oldSelf.resultDatabase",message="spec.resultDatabase is immutable; delete and recreate the SimulationExperiment"
 type SimulationExperimentSpec struct {
@@ -54,14 +59,29 @@ type SimulationExperimentSpec struct {
 	DefaultServiceType ServiceType `json:"defaultServiceType,omitempty"`
 }
 
+// ServiceType selects how a component Service is exposed on the cluster. It
+// is a constrained subset of corev1.ServiceType that the controller is
+// permitted to render for the databases, translator, and scenario services.
 type ServiceType string
 
 const (
-	ServiceTypeClusterIP    ServiceType = "ClusterIP"
-	ServiceTypeNodePort     ServiceType = "NodePort"
+	// ServiceTypeClusterIP exposes the service on a cluster-internal IP only.
+	ServiceTypeClusterIP ServiceType = "ClusterIP"
+	// ServiceTypeNodePort exposes the service on each node's IP at a static
+	// port in the NodePort range (30000-32767).
+	ServiceTypeNodePort ServiceType = "NodePort"
+	// ServiceTypeLoadBalancer exposes the service through a cloud-provided load
+	// balancer.
 	ServiceTypeLoadBalancer ServiceType = "LoadBalancer"
 )
 
+// DatabaseSpec configures one of the experiment's PostgreSQL databases: the
+// detail DB (scenario inputs) or the result DB (scenario outputs). Exactly one
+// of Image (a container image the controller deploys and exposes) or Host (an
+// existing, reachable database) must be set; the controller rejects a spec
+// that supplies neither or both. Port is required, and NodePort applies only
+// when ServiceType is NodePort.
+//
 // +kubebuilder:validation:Required
 type DatabaseSpec struct {
 	// Either Image or Host must be specified (enforced by the controller).
@@ -94,6 +114,15 @@ type DatabaseSpec struct {
 	Args []string `json:"args,omitempty"`
 }
 
+// TranslatorSpec configures the reference translator deployment: its runtime
+// image, the Git repository and base image it builds from, the rootless
+// BuildKit builder sidecar image and resources, and the Service that fronts
+// it. The image, repository, baseimage, builderImage, serviceType, port,
+// builderResources, command, args, and nodePort fields are all immutable after
+// creation (enforced by CEL); a change requires deleting and recreating the
+// SimulationExperiment. RegistryAuthSecretRef must reference a Secret named
+// cbse-registry-auth holding the Docker config the builder uses to pull images.
+//
 // +kubebuilder:validation:Required
 // +kubebuilder:validation:XValidation:rule="self.image == oldSelf.image",message="spec.translator.image is immutable; delete and recreate the SimulationExperiment"
 // +kubebuilder:validation:XValidation:rule="self.repository == oldSelf.repository",message="spec.translator.repository is immutable; delete and recreate the SimulationExperiment"
@@ -145,13 +174,19 @@ type TranslatorSpec struct {
 	Args []string `json:"args,omitempty"`
 }
 
-// RunnerSpec defines optional runner Job customization.
+// RunnerSpec defines optional customization for the Simulation Runner Job.
+// The jobTemplate field is immutable after creation (enforced by CEL); to
+// change it, delete and recreate the SimulationExperiment. When jobTemplate is
+// omitted the controller applies its default runner Job template.
 // +kubebuilder:validation:XValidation:rule="has(self.jobTemplate) == has(oldSelf.jobTemplate) && (!has(self.jobTemplate) || self.jobTemplate == oldSelf.jobTemplate)",message="spec.runner.jobTemplate is immutable; delete and recreate the SimulationExperiment"
 type RunnerSpec struct {
 	// +kubebuilder:validation:Optional
 	JobTemplate *batchv1.JobTemplateSpec `json:"jobTemplate,omitempty"`
 }
 
+// PostProcessingSpec configures the post-processing scenario service
+// deployment and the Service that fronts it.
+//
 // +kubebuilder:validation:Required
 type PostProcessingSpec struct {
 	Image string `json:"image"`
@@ -180,6 +215,9 @@ type PostProcessingSpec struct {
 	Args []string `json:"args,omitempty"`
 }
 
+// ExperimentalDesignServiceSpec configures the experimental-design scenario
+// service deployment: the design name, its image, and the Service that fronts
+// it.
 type ExperimentalDesignServiceSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Design string `json:"design,omitempty"`
@@ -208,6 +246,11 @@ type ExperimentalDesignServiceSpec struct {
 	Port int32 `json:"port,omitempty"`
 }
 
+// SimulationExperimentStatus is the observed state the reconciler writes to
+// the status subresource. Phase is the lifecycle phase (Pending,
+// Provisioning, InProgress, Completed, Failed, Error), Message carries a
+// human-readable detail string for the current phase, and Metrics holds
+// count-based progress observed by the controller.
 type SimulationExperimentStatus struct {
 	// +kubebuilder:validation:Enum=Pending;Provisioning;InProgress;Completed;Failed;Error
 	Phase   string         `json:"phase,omitempty"`
@@ -215,11 +258,20 @@ type SimulationExperimentStatus struct {
 	Metrics *StatusMetrics `json:"metrics,omitempty"`
 }
 
+// StatusMetrics holds scenario-count progress the controller observes during
+// a run.
 type StatusMetrics struct {
 	// +kubebuilder:validation:Minimum=0
 	ScenarioCount int64 `json:"scenarioCount,omitempty"`
 }
 
+// SimulationExperiment is the root CRD kind for the alpha4 API group. A
+// single instance describes a complete experiment topology (databases,
+// translator, and scenario services) that the alpha4 reconciler materializes
+// into Kubernetes Deployments, Services, and Jobs. It is the storage version,
+// is namespaced, and reports progress through the status subresource. The
+// object name must be a lowercase DNS label of at most 63 characters (enforced
+// by CEL) so it is safe to use as a label value on owned resources.
 // +kubebuilder:object:root=true
 // +kubebuilder:storageversion
 // +kubebuilder:subresource:status
@@ -235,6 +287,8 @@ type SimulationExperiment struct {
 	Status            SimulationExperimentStatus `json:"status,omitempty"`
 }
 
+// SimulationExperimentList is the list kind for SimulationExperiment, required
+// by the Kubernetes API machinery for collection (LIST) operations.
 // +kubebuilder:object:root=true
 type SimulationExperimentList struct {
 	metav1.TypeMeta `json:",inline"`
@@ -242,6 +296,9 @@ type SimulationExperimentList struct {
 	Items           []SimulationExperiment `json:"items"`
 }
 
+// init registers the SimulationExperiment and SimulationExperimentList types
+// with the scheme builder so they are added to any runtime scheme that calls
+// AddToScheme.
 func init() {
 	SchemeBuilder.Register(&SimulationExperiment{}, &SimulationExperimentList{})
 }

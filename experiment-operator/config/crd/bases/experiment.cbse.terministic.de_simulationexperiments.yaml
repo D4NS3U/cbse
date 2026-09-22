@@ -30,6 +30,14 @@ spec:
     name: alpha4
     schema:
       openAPIV3Schema:
+        description: |-
+          SimulationExperiment is the root CRD kind for the alpha4 API group. A
+          single instance describes a complete experiment topology (databases,
+          translator, and scenario services) that the alpha4 reconciler materializes
+          into Kubernetes Deployments, Services, and Jobs. It is the storage version,
+          is namespaced, and reports progress through the status subresource. The
+          object name must be a lowercase DNS label of at most 63 characters (enforced
+          by CEL) so it is safe to use as a label value on owned resources.
         properties:
           apiVersion:
             description: |-
@@ -49,17 +57,33 @@ spec:
           metadata:
             type: object
           spec:
-            description: SimulationExperimentSpec defines the desired state of an
-              alpha4 experiment.
+            description: |-
+              SimulationExperimentSpec defines the desired state of an alpha4 experiment:
+              the detail and result PostgreSQL databases, the translator, and the three
+              scenario services (post-processing, experimental-design, and an optional
+              runner). The detailDatabase and resultDatabase fields are immutable after
+              creation (enforced by CEL); to change either, delete and recreate the
+              SimulationExperiment so an in-flight experiment's data sources cannot move.
             properties:
               defaultServiceType:
                 default: ClusterIP
+                description: |-
+                  ServiceType selects how a component Service is exposed on the cluster. It
+                  is a constrained subset of corev1.ServiceType that the controller is
+                  permitted to render for the databases, translator, and scenario services.
                 enum:
                 - ClusterIP
                 - NodePort
                 - LoadBalancer
                 type: string
               detailDatabase:
+                description: |-
+                  DatabaseSpec configures one of the experiment's PostgreSQL databases: the
+                  detail DB (scenario inputs) or the result DB (scenario outputs). Exactly one
+                  of Image (a container image the controller deploys and exposes) or Host (an
+                  existing, reachable database) must be set; the controller rejects a spec
+                  that supplies neither or both. Port is required, and NodePort applies only
+                  when ServiceType is NodePort.
                 properties:
                   args:
                     default: []
@@ -93,6 +117,10 @@ spec:
                     type: integer
                   serviceType:
                     default: ClusterIP
+                    description: |-
+                      ServiceType selects how a component Service is exposed on the cluster. It
+                      is a constrained subset of corev1.ServiceType that the controller is
+                      permitted to render for the databases, translator, and scenario services.
                     enum:
                     - ClusterIP
                     - NodePort
@@ -107,6 +135,10 @@ spec:
                 - user
                 type: object
               experimentalDesignService:
+                description: |-
+                  ExperimentalDesignServiceSpec configures the experimental-design scenario
+                  service deployment: the design name, its image, and the Service that fronts
+                  it.
                 properties:
                   args:
                     default: []
@@ -137,6 +169,10 @@ spec:
                     type: integer
                   serviceType:
                     default: ClusterIP
+                    description: |-
+                      ServiceType selects how a component Service is exposed on the cluster. It
+                      is a constrained subset of corev1.ServiceType that the controller is
+                      permitted to render for the databases, translator, and scenario services.
                     enum:
                     - ClusterIP
                     - NodePort
@@ -144,6 +180,9 @@ spec:
                     type: string
                 type: object
               postProcessingService:
+                description: |-
+                  PostProcessingSpec configures the post-processing scenario service
+                  deployment and the Service that fronts it.
                 properties:
                   args:
                     default: []
@@ -170,6 +209,10 @@ spec:
                     type: integer
                   serviceType:
                     default: ClusterIP
+                    description: |-
+                      ServiceType selects how a component Service is exposed on the cluster. It
+                      is a constrained subset of corev1.ServiceType that the controller is
+                      permitted to render for the databases, translator, and scenario services.
                     enum:
                     - ClusterIP
                     - NodePort
@@ -179,6 +222,13 @@ spec:
                 - image
                 type: object
               resultDatabase:
+                description: |-
+                  DatabaseSpec configures one of the experiment's PostgreSQL databases: the
+                  detail DB (scenario inputs) or the result DB (scenario outputs). Exactly one
+                  of Image (a container image the controller deploys and exposes) or Host (an
+                  existing, reachable database) must be set; the controller rejects a spec
+                  that supplies neither or both. Port is required, and NodePort applies only
+                  when ServiceType is NodePort.
                 properties:
                   args:
                     default: []
@@ -212,6 +262,10 @@ spec:
                     type: integer
                   serviceType:
                     default: ClusterIP
+                    description: |-
+                      ServiceType selects how a component Service is exposed on the cluster. It
+                      is a constrained subset of corev1.ServiceType that the controller is
+                      permitted to render for the databases, translator, and scenario services.
                     enum:
                     - ClusterIP
                     - NodePort
@@ -8944,6 +8998,15 @@ spec:
                   rule: has(self.jobTemplate) == has(oldSelf.jobTemplate) && (!has(self.jobTemplate)
                     || self.jobTemplate == oldSelf.jobTemplate)
               translator:
+                description: |-
+                  TranslatorSpec configures the reference translator deployment: its runtime
+                  image, the Git repository and base image it builds from, the rootless
+                  BuildKit builder sidecar image and resources, and the Service that fronts
+                  it. The image, repository, baseimage, builderImage, serviceType, port,
+                  builderResources, command, args, and nodePort fields are all immutable after
+                  creation (enforced by CEL); a change requires deleting and recreating the
+                  SimulationExperiment. RegistryAuthSecretRef must reference a Secret named
+                  cbse-registry-auth holding the Docker config the builder uses to pull images.
                 properties:
                   args:
                     items:
@@ -9054,6 +9117,10 @@ spec:
                     type: string
                   serviceType:
                     default: ClusterIP
+                    description: |-
+                      ServiceType selects how a component Service is exposed on the cluster. It
+                      is a constrained subset of corev1.ServiceType that the controller is
+                      permitted to render for the databases, translator, and scenario services.
                     enum:
                     - ClusterIP
                     - NodePort
@@ -9114,10 +9181,19 @@ spec:
             - message: spec.resultDatabase is immutable; delete and recreate the SimulationExperiment
               rule: self.resultDatabase == oldSelf.resultDatabase
           status:
+            description: |-
+              SimulationExperimentStatus is the observed state the reconciler writes to
+              the status subresource. Phase is the lifecycle phase (Pending,
+              Provisioning, InProgress, Completed, Failed, Error), Message carries a
+              human-readable detail string for the current phase, and Metrics holds
+              count-based progress observed by the controller.
             properties:
               message:
                 type: string
               metrics:
+                description: |-
+                  StatusMetrics holds scenario-count progress the controller observes during
+                  a run.
                 properties:
                   scenarioCount:
                     format: int64

@@ -76,8 +76,8 @@ var alpha4ExperimentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 // two-container rootless BuildKit Translator Deployment and Service, the
 // Translator ConfigMap, and the deterministic runner ServiceAccount.
 //
-// After the alpha4 cutover this is the only registered reconciler; alpha2 and
-// alpha3 are not served or reconciled.
+// This is the only reconciler registered by the operator's controller-manager;
+// alpha2 and alpha3 are not served or reconciled.
 type Alpha4SimulationExperimentReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -103,7 +103,7 @@ func (r *Alpha4SimulationExperimentReconciler) Reconcile(ctx context.Context, re
 		return r.checkReadiness(ctx, instance)
 	default:
 		// InProgress, Error, and terminal phases are not Operator-owned beyond
-		// provisioning in this slice.
+		// provisioning.
 		return ctrl.Result{}, nil
 	}
 }
@@ -752,9 +752,12 @@ func (r *Alpha4SimulationExperimentReconciler) setErrorStatus(ctx context.Contex
 	return r.patchPhase(ctx, instance, alpha4PhaseError, message)
 }
 
-// SetupWithManager wires the alpha4 reconciler. It is intentionally not called
-// by main.go until the alpha4 cutover slice; tests may use it to start an
-// isolated controller against the alpha4 envtest CRD.
+// SetupWithManager wires the alpha4 reconciler to the controller-runtime
+// manager: it watches SimulationExperiment resources and owns the Deployments,
+// Services, Secrets, ConfigMaps, and ServiceAccounts it creates, so the
+// manager enqueues the experiment when any owned resource changes. main.go
+// calls this once at startup; tests may also use it to start an isolated
+// controller against the alpha4 envtest CRD.
 func (r *Alpha4SimulationExperimentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&experimentalpha4.SimulationExperiment{}).
@@ -772,15 +775,6 @@ func metav1ObjectName(instance *experimentalpha4.SimulationExperiment, name stri
 	return metav1.ObjectMeta{Name: name, Namespace: instance.Namespace}
 }
 
-// runnerServiceAccountName returns the deterministic runner ServiceAccount
-// name simrunner-<12-char-UID-prefix>, where the prefix is derived from the
-// live experiment UID by lowercasing, stripping hyphens, and keeping the first
-// 12 characters. This mirrors the UIDPrefix derivation in the Scenario Manager
-// (scenario-manager/internal/nats) so both modules independently
-// produce the same fixed contract name without a cross-module dependency. The
-// derivation is duplicated by contract: the experiment-operator is a separate
-// Go module and must not import the Scenario Manager internal package.
-
 func metav1Selector(labels map[string]string) *metav1.LabelSelector {
 	return &metav1.LabelSelector{MatchLabels: labels}
 }
@@ -797,7 +791,13 @@ func RunnerUIDPrefix(uid types.UID) string {
 }
 
 // RunnerServiceAccountName returns the deterministic runner ServiceAccount
-// name for the given experiment UID.
+// name simrunner-<12-char-UID-prefix> for the given experiment UID, where the
+// prefix is RunnerUIDPrefix(uid). This mirrors the UIDPrefix derivation in the
+// Scenario Manager (scenario-manager/internal/nats) so both modules
+// independently produce the same fixed contract name without a cross-module
+// dependency. The derivation is duplicated by contract: the experiment-operator
+// is a separate Go module and must not import the Scenario Manager internal
+// package.
 func RunnerServiceAccountName(uid types.UID) string {
 	return "simrunner-" + RunnerUIDPrefix(uid)
 }

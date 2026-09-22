@@ -14,6 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Command experiment-operator runs the Kubernetes controller manager for the
+// SimulationExperiment custom resource. It wires only the alpha4 API into the
+// runtime scheme and registers the alpha4 reconciler with the
+// controller-runtime manager, then serves metrics, health, and webhook
+// endpoints. The alpha2 and alpha3 API groups are not registered here and are
+// not served or reconciled.
 package main
 
 import (
@@ -49,6 +55,9 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+// init registers the Kubernetes core API group and the experiment-operator
+// alpha4 API group into the shared runtime scheme so the manager can decode
+// SimulationExperiment objects and the built-in kinds it reconciles.
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
@@ -56,6 +65,11 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// main parses operator flags, configures TLS for the metrics and webhook
+// servers, builds the controller-runtime manager, registers the alpha4
+// SimulationExperiment reconciler, and blocks on mgr.Start until the process
+// receives SIGTERM/SIGINT. It exits non-zero on any setup failure.
+//
 // nolint:gocyclo
 func main() {
 	var metricsAddr string

@@ -532,15 +532,23 @@ func TestDuplicateJobTemplateFieldValidationModes(t *testing.T) {
 	}
 }
 
+// minimalPolicyTemplate returns the smallest Job template the alpha4 runner
+// policy accepts: a single "runner" container and nothing else.
 func minimalPolicyTemplate() *batchv1.JobTemplateSpec {
 	return &batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "runner"}}}}}}
 }
 
+// removeJobTemplateServerMetadata strips the creationTimestamp fields the API
+// server injects into a fetched Job template so the unstructured object
+// round-trips through an update without a malformed-object rejection.
 func removeJobTemplateServerMetadata(raw map[string]interface{}) {
 	unstructured.RemoveNestedField(raw, "spec", "runner", "jobTemplate", "metadata", "creationTimestamp")
 	unstructured.RemoveNestedField(raw, "spec", "runner", "jobTemplate", "spec", "template", "metadata", "creationTimestamp")
 }
 
+// expectImmutableRejection creates an experiment, applies mutate, and asserts
+// that updating it fails with an error mentioning field (the CEL immutability
+// rejection).
 func expectImmutableRejection(t *testing.T, field string, mutate func(*experimentalpha4.SimulationExperiment)) {
 	t.Helper()
 	resource := newExperiment(nextName("immutable"))
@@ -554,6 +562,8 @@ func expectImmutableRejection(t *testing.T, field string, mutate func(*experimen
 	}
 }
 
+// newExperiment returns a fully populated SimulationExperiment fixture in the
+// test namespace that satisfies every alpha4 admission and provisioning rule.
 func newExperiment(name string) *experimentalpha4.SimulationExperiment {
 	return &experimentalpha4.SimulationExperiment{
 		TypeMeta: metav1.TypeMeta{
@@ -594,6 +604,8 @@ func newExperiment(name string) *experimentalpha4.SimulationExperiment {
 	}
 }
 
+// databaseSpec returns an image-based DatabaseSpec fixture named name with a
+// synthetic digest, a NodePort service, and a 5432 port.
 func databaseSpec(name string) experimentalpha4.DatabaseSpec {
 	return experimentalpha4.DatabaseSpec{
 		Image:       "example.invalid/" + name + "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -608,6 +620,8 @@ func databaseSpec(name string) experimentalpha4.DatabaseSpec {
 	}
 }
 
+// builderResources returns a CPU/memory requests-and-limits fixture for the
+// Translator BuildKit sidecar.
 func builderResources() *corev1.ResourceRequirements {
 	return &corev1.ResourceRequirements{
 		Limits: corev1.ResourceList{
@@ -621,6 +635,8 @@ func builderResources() *corev1.ResourceRequirements {
 	}
 }
 
+// runnerJobTemplate returns a minimal Job template fixture with a single runner
+// container and RestartPolicyNever.
 func runnerJobTemplate() *batchv1.JobTemplateSpec {
 	return &batchv1.JobTemplateSpec{
 		Spec: batchv1.JobSpec{
@@ -634,6 +650,8 @@ func runnerJobTemplate() *batchv1.JobTemplateSpec {
 	}
 }
 
+// nextName returns a unique test object name from prefix and an incrementing
+// counter.
 func nextName(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, resourceSequence.Add(1))
 }
@@ -646,10 +664,14 @@ func int64Pointer(value int64) *int64 {
 	return &value
 }
 
+// simulationExperimentGVR returns the alpha4 GroupVersionResource for
+// SimulationExperiment, used for unstructured CRD access in envtest.
 func simulationExperimentGVR() schema.GroupVersionResource {
 	return experimentalpha4.GroupVersion.WithResource("simulationexperiments")
 }
 
+// loadAlpha4CRD loads the generated alpha4 CRD manifest from config/crd/bases
+// so schema-admission tests run against the exact CRD the operator ships.
 func loadAlpha4CRD(t *testing.T) *extensionsv1.CustomResourceDefinition {
 	t.Helper()
 	contents, err := os.ReadFile(filepath.Join("..", "..", "config", "crd", "bases", "experiment.cbse.terministic.de_simulationexperiments.yaml"))
@@ -663,6 +685,8 @@ func loadAlpha4CRD(t *testing.T) *extensionsv1.CustomResourceDefinition {
 	return crd
 }
 
+// requiredProperty returns the named subschema property, failing the test if it
+// is absent.
 func requiredProperty(t *testing.T, schema *extensionsv1.JSONSchemaProps, name string) *extensionsv1.JSONSchemaProps {
 	t.Helper()
 	property, ok := schema.Properties[name]
@@ -672,6 +696,8 @@ func requiredProperty(t *testing.T, schema *extensionsv1.JSONSchemaProps, name s
 	return &property
 }
 
+// requireSchemaRequired asserts that each of fields is listed in the schema's
+// required array.
 func requireSchemaRequired(t *testing.T, schema *extensionsv1.JSONSchemaProps, fields ...string) {
 	t.Helper()
 	required := make(map[string]struct{}, len(schema.Required))
@@ -685,6 +711,8 @@ func requireSchemaRequired(t *testing.T, schema *extensionsv1.JSONSchemaProps, f
 	}
 }
 
+// sortedPropertyNames returns the property names of a schema in sorted order
+// (with an in-place swap for the common two-property case).
 func sortedPropertyNames(schema *extensionsv1.JSONSchemaProps) []string {
 	names := make([]string, 0, len(schema.Properties))
 	for name := range schema.Properties {
@@ -696,6 +724,8 @@ func sortedPropertyNames(schema *extensionsv1.JSONSchemaProps) []string {
 	return names
 }
 
+// hasValidation reports whether the schema has a CEL XValidation with the
+// given rule whose message contains messageFragment.
 func hasValidation(schema *extensionsv1.JSONSchemaProps, rule, messageFragment string) bool {
 	for _, validation := range schema.XValidations {
 		if validation.Rule == rule && strings.Contains(validation.Message, messageFragment) {
@@ -705,6 +735,9 @@ func hasValidation(schema *extensionsv1.JSONSchemaProps, rule, messageFragment s
 	return false
 }
 
+// assertNoPreserveUnknownFields recursively asserts that neither schema nor any
+// nested property, items, or additionalProperties schema enables
+// x-kubernetes-preserve-unknown-fields.
 func assertNoPreserveUnknownFields(t *testing.T, schema *extensionsv1.JSONSchemaProps, path string) {
 	t.Helper()
 	assertNodeDoesNotPreserveUnknownFields(t, schema, path)
@@ -720,6 +753,8 @@ func assertNoPreserveUnknownFields(t *testing.T, schema *extensionsv1.JSONSchema
 	}
 }
 
+// assertNodeDoesNotPreserveUnknownFields asserts that a single schema node
+// does not enable x-kubernetes-preserve-unknown-fields.
 func assertNodeDoesNotPreserveUnknownFields(t *testing.T, schema *extensionsv1.JSONSchemaProps, path string) {
 	t.Helper()
 	if schema.XPreserveUnknownFields != nil && *schema.XPreserveUnknownFields {
@@ -727,6 +762,9 @@ func assertNodeDoesNotPreserveUnknownFields(t *testing.T, schema *extensionsv1.J
 	}
 }
 
+// localEnvtestAssets locates the envtest kube-apiserver/etcd binaries under the
+// module's bin/k8s directory when KUBEBUILDER_ASSETS is unset, returning the
+// absolute path or "" if it cannot be found.
 func localEnvtestAssets() string {
 	if os.Getenv("KUBEBUILDER_ASSETS") != "" {
 		return ""

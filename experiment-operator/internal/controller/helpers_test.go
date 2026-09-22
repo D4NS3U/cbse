@@ -68,6 +68,7 @@ func TestRegistryAuthority(t *testing.T) {
 	}
 }
 
+// b64Auth returns the base64 of "user:pass" for Docker config auth entries.
 func b64Auth(user, pass string) string {
 	return base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
 }
@@ -228,6 +229,7 @@ func TestEffectiveBuilderResources(t *testing.T) {
 	})
 }
 
+// validDigest returns name with a synthetic 64-hex sha256 digest suffix.
 func validDigest(name string) string {
 	return name + "@sha256:" + strings.Repeat("a", 64)
 }

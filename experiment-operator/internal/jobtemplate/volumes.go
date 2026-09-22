@@ -27,6 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+// validateVolumes validates each volume: a unique DNS-1123-label name and a
+// supported volume source.
 func validateVolumes(volumes []corev1.Volume, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	seen := map[string]struct{}{}
@@ -48,6 +50,9 @@ func validateVolumes(volumes []corev1.Volume, path *field.Path) field.ErrorList 
 	return errs
 }
 
+// validateVolumeSource validates a single volume source. Only EmptyDir,
+// ConfigMap, Secret, PersistentVolumeClaim, DownwardAPI, and Projected are
+// allowed, and exactly one source may be set.
 func validateVolumeSource(source *corev1.VolumeSource, path *field.Path) field.ErrorList {
 	allowed := fieldSet("EmptyDir", "ConfigMap", "Secret", "PersistentVolumeClaim", "DownwardAPI", "Projected")
 	errs := rejectNonZeroFields(reflect.ValueOf(source).Elem(), path, allowed)
@@ -85,6 +90,7 @@ func validateVolumeSource(source *corev1.VolumeSource, path *field.Path) field.E
 	return errs
 }
 
+// validateEmptyDir validates an emptyDir volume: a non-negative sizeLimit.
 func validateEmptyDir(source *corev1.EmptyDirVolumeSource, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if source.SizeLimit != nil && source.SizeLimit.Sign() < 0 {
@@ -93,6 +99,8 @@ func validateEmptyDir(source *corev1.EmptyDirVolumeSource, path *field.Path) fie
 	return errs
 }
 
+// validateConfigMapVolume validates a ConfigMap volume: a required DNS-subdomain
+// name, a valid defaultMode, and valid item key/path/mode entries.
 func validateConfigMapVolume(source *corev1.ConfigMapVolumeSource, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if source.Name == "" {
@@ -105,6 +113,8 @@ func validateConfigMapVolume(source *corev1.ConfigMapVolumeSource, path *field.P
 	return errs
 }
 
+// validateSecretVolume validates a Secret volume: a required DNS-subdomain
+// secretName, a valid defaultMode, and valid item key/path/mode entries.
 func validateSecretVolume(source *corev1.SecretVolumeSource, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if source.SecretName == "" {
@@ -117,6 +127,8 @@ func validateSecretVolume(source *corev1.SecretVolumeSource, path *field.Path) f
 	return errs
 }
 
+// validatePVCVolume validates a PVC volume: a required DNS-subdomain
+// claimName.
 func validatePVCVolume(source *corev1.PersistentVolumeClaimVolumeSource, path *field.Path) field.ErrorList {
 	if source.ClaimName == "" {
 		return field.ErrorList{required(path.Child("claimName"), "claimName is required")}
@@ -124,6 +136,8 @@ func validatePVCVolume(source *corev1.PersistentVolumeClaimVolumeSource, path *f
 	return messagesAsErrors(path.Child("claimName"), apierrors.NameIsDNSSubdomain(source.ClaimName, false))
 }
 
+// validateDownwardAPIVolume validates a DownwardAPI volume: a valid defaultMode
+// and item field/resource selectors with unique backstep-free paths.
 func validateDownwardAPIVolume(source *corev1.DownwardAPIVolumeSource, path *field.Path) field.ErrorList {
 	errs := validateMode(source.DefaultMode, path.Child("defaultMode"))
 	seen := map[string]struct{}{}
@@ -135,6 +149,9 @@ func validateDownwardAPIVolume(source *corev1.DownwardAPIVolumeSource, path *fie
 	return errs
 }
 
+// validateProjectedVolume validates a Projected volume: a valid defaultMode and
+// a list of projections, each carrying exactly one of Secret, ConfigMap, or
+// DownwardAPI, with unique item paths across the whole volume.
 func validateProjectedVolume(source *corev1.ProjectedVolumeSource, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	errs = append(errs, validateMode(source.DefaultMode, path.Child("defaultMode"))...)
@@ -165,6 +182,8 @@ func validateProjectedVolume(source *corev1.ProjectedVolumeSource, path *field.P
 	return errs
 }
 
+// validateSecretProjection validates a Secret projection: a DNS-subdomain name
+// and item key/path/mode entries with paths unique within the seen map.
 func validateSecretProjection(source *corev1.SecretProjection, path *field.Path, seen map[string]struct{}) field.ErrorList {
 	var errs field.ErrorList
 	if source.Name == "" {
@@ -180,6 +199,8 @@ func validateSecretProjection(source *corev1.SecretProjection, path *field.Path,
 	return errs
 }
 
+// validateConfigMapProjection validates a ConfigMap projection: a DNS-subdomain
+// name and item key/path/mode entries with paths unique within the seen map.
 func validateConfigMapProjection(source *corev1.ConfigMapProjection, path *field.Path, seen map[string]struct{}) field.ErrorList {
 	var errs field.ErrorList
 	if source.Name == "" {
@@ -195,6 +216,8 @@ func validateConfigMapProjection(source *corev1.ConfigMapProjection, path *field
 	return errs
 }
 
+// validateDownwardAPIProjection validates a DownwardAPI projection: item
+// field/resource selectors with paths unique within the seen map.
 func validateDownwardAPIProjection(source *corev1.DownwardAPIProjection, path *field.Path, seen map[string]struct{}) field.ErrorList {
 	var errs field.ErrorList
 	for i := range source.Items {
@@ -205,6 +228,8 @@ func validateDownwardAPIProjection(source *corev1.DownwardAPIProjection, path *f
 	return errs
 }
 
+// validateKeyToPaths validates a list of KeyToPath items and enforces unique
+// paths within the list.
 func validateKeyToPaths(items []corev1.KeyToPath, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	seen := map[string]struct{}{}
@@ -216,6 +241,8 @@ func validateKeyToPaths(items []corev1.KeyToPath, path *field.Path) field.ErrorL
 	return errs
 }
 
+// validateKeyToPath validates a single KeyToPath item: a required ConfigMap key
+// and a relative backstep-free path, plus a valid mode.
 func validateKeyToPath(item *corev1.KeyToPath, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if item.Key == "" {
@@ -232,6 +259,9 @@ func validateKeyToPath(item *corev1.KeyToPath, path *field.Path) field.ErrorList
 	return errs
 }
 
+// validateDownwardAPIFile validates a single DownwardAPI file: a relative
+// backstep-free path, exactly one of fieldRef or resourceFieldRef (with
+// containerName required for volume projections), and a valid mode.
 func validateDownwardAPIFile(item *corev1.DownwardAPIVolumeFile, path *field.Path, volume bool) field.ErrorList {
 	var errs field.ErrorList
 	if item.Path == "" {
@@ -257,6 +287,10 @@ func validateDownwardAPIFile(item *corev1.DownwardAPIVolumeFile, path *field.Pat
 	return errs
 }
 
+// downwardVolumeFields and downwardEnvFields are the Pod downward-API field
+// paths CBSE permits for volume and env-var projections respectively. Volume
+// projections may read labels and annotations as a whole; env projections may
+// read the scalar identity and status fields but not labels or annotations.
 var (
 	downwardVolumeFields = map[string]struct{}{
 		"metadata.name": {}, "metadata.namespace": {}, "metadata.labels": {},
@@ -269,6 +303,10 @@ var (
 	}
 )
 
+// validateObjectFieldSelector validates a downward-API ObjectFieldSelector. It
+// requires APIVersion v1 and a fieldPath in the allowed set. For subscripted
+// metadata.labels['k'] / metadata.annotations['k'] paths the subscript must be a
+// qualified name (lowercased for annotations).
 func validateObjectFieldSelector(selector *corev1.ObjectFieldSelector, path *field.Path, allowed map[string]struct{}) field.ErrorList {
 	var errs field.ErrorList
 	if selector.APIVersion != "" && selector.APIVersion != "v1" {
@@ -300,6 +338,8 @@ func validateObjectFieldSelector(selector *corev1.ObjectFieldSelector, path *fie
 	return errs
 }
 
+// splitSubscriptedPath splits a "base['subscript']" field path into its base
+// and subscript, reporting whether a subscript was present.
 func splitSubscriptedPath(value string) (string, string, bool) {
 	open := strings.Index(value, "['")
 	if open < 0 || !strings.HasSuffix(value, "']") {
@@ -308,6 +348,9 @@ func splitSubscriptedPath(value string) (string, string, bool) {
 	return value[:open], value[open+2 : len(value)-2], true
 }
 
+// validateResourceFieldSelector validates a downward-API ResourceFieldSelector.
+// Volume projections require a containerName, the resource must be one CBSE
+// allows, and a non-zero divisor must be valid for that resource.
 func validateResourceFieldSelector(selector *corev1.ResourceFieldSelector, path *field.Path, volume bool) field.ErrorList {
 	var errs field.ErrorList
 	if volume && selector.ContainerName == "" {
@@ -323,6 +366,9 @@ func validateResourceFieldSelector(selector *corev1.ResourceFieldSelector, path 
 	return errs
 }
 
+// isAllowedDownwardResource reports whether a resource name is exposed by the
+// Kubernetes 1.30 downward API and permitted by CBSE: the cpu/memory/
+// ephemeral-storage limits and requests, plus the hugepages variants.
 func isAllowedDownwardResource(name string) bool {
 	switch name {
 	case "limits.cpu", "limits.memory", "limits.ephemeral-storage", "requests.cpu", "requests.memory", "requests.ephemeral-storage":
@@ -332,6 +378,9 @@ func isAllowedDownwardResource(name string) bool {
 	}
 }
 
+// validResourceDivisor reports whether a non-zero divisor string is allowed
+// for the resource. CPU accepts 1 or 1m; other resources accept a single-unit
+// binary/decimal quantity.
 func validResourceDivisor(resourceName, divisor string) bool {
 	if strings.HasSuffix(resourceName, ".cpu") {
 		return divisor == "1m" || divisor == "1"
@@ -344,6 +393,7 @@ func validResourceDivisor(resourceName, divisor string) bool {
 	}
 }
 
+// validateMode validates an optional file mode in the range 0000..0777.
 func validateMode(mode *int32, path *field.Path) field.ErrorList {
 	if mode != nil && (*mode < 0 || *mode > 0777) {
 		return field.ErrorList{invalid(path, "file mode must be in the range 0000..0777")}
@@ -351,6 +401,8 @@ func validateMode(mode *int32, path *field.Path) field.ErrorList {
 	return nil
 }
 
+// validateLocalPath validates a volume item path: it must be relative, contain
+// no ".." components, and not start with a bare "..".
 func validateLocalPath(value string, path *field.Path) field.ErrorList {
 	var errs field.ErrorList
 	if filepath.IsAbs(value) {
@@ -368,6 +420,8 @@ func validateLocalPath(value string, path *field.Path) field.ErrorList {
 	return errs
 }
 
+// recordUniquePath records a non-empty path in seen and reports an error if it
+// was already recorded, enforcing unique paths within a volume.
 func recordUniquePath(value string, path *field.Path, seen map[string]struct{}) field.ErrorList {
 	if value == "" {
 		return nil
