@@ -17,13 +17,44 @@ Work is coordinated through Orca's `orchestration` CLI verbs. They, not ad-hoc t
 
 ## Worker model policy
 
-Every worker this manager spawns runs on the **`qwen3.8-27b-nvfp4`** model served by the **`ai.forge`** provider (OpenAI-compatible endpoint, 512K context window, configured in the worker hosts' agent model configuration).
+Every worker this manager spawns runs on the **`qwen3.8-27b-nvfp4`** model served by the **`ai.forge`** provider (OpenAI-compatible endpoint, 512K context window, configured in the worker hosts' agent model configuration). Never substitute another model unless the user explicitly names one for that dispatch.
 
-- Pass `--model qwen3.8-27b-nvfp4` on every `orchestration worker-start` that launches a fresh agent terminal. Never omit it, and never substitute another model unless the user explicitly names one for that dispatch.
-- Omit `--effort` (reasoning-effort preference) unless the selected model is known to support it.
-- `--model` cannot combine with `--terminal` reuse. Reuse a settled terminal for a follow-up Dispatch only when that terminal demonstrably runs on the mandated model (its original start receipt shows the effective model); otherwise release it and start a fresh worker.
-- Verify every start receipt: compare `launch.requested` with `launch.effective`. Never claim the model from the requested arguments alone. If Orca or the worker runtime cannot honor `qwen3.8-27b-nvfp4`, report the mismatch to the user and do not proceed as if the policy were satisfied.
-- The `ai.forge` credentials live in the agents' model configuration (for Pi-based workers: `~/.pi/agent/models.json` / `settings.json`) or credential store. Never embed, echo, or log API keys, and never paste key material into specs, prompts, or reports.
+Enforcement differs by agent type. Orca's launch-time model selection exists only for some agents; for pi it is rejected outright (`invalid_argument: Agent pi does not support launch-time model selection`), so never pass `--model` on a pi launch.
+
+**Agents with launch-time selection (Claude, Codex, Cursor).** Pass `--model qwen3.8-27b-nvfp4` on every fresh `worker-start` for these agents and verify the receipt: `launch.requested` must equal `launch.effective`; never claim the model from the requested arguments alone. `--effort` (reasoning-effort preference) only when the model supports it; `--model` never combines with `--terminal` reuse.
+
+**Pi-based workers (the standard agent for this repository).** Orca's launch-preference registry has no pi entry, so `--model` is structurally unavailable for pi Dispatches (`invalid_argument: Agent pi does not support launch-time model selection`) — never pass it. pi natively supports model selection, so the manager enforces the model with an explicit launch command and adopts the terminal as the worker:
+
+```bash
+orca terminal create --worktree current --title "<task name>" \
+  --command "pi --model ai.forge/qwen3.8-27b-nvfp4" --json
+orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 60000 --json
+orca orchestration worker-start --task <task_id> --terminal <handle> --worktree current --json
+```
+
+The `pi --model <provider>/<model-id>` form names the mandated model explicitly and outranks every settings default, so this path needs no project-trust decision. Require the `tui-idle` wait to succeed before adoption, and pass the same worktree selector on create and adopt. Adoption via `worker-start --terminal <handle>` gives the Dispatch full supervised lifecycle ownership (`worker-stop`, `worker-read`, reuse, and release all apply). Prefer this path for every pi Dispatch whose model must be exact. Do not use `dispatch --inject` for model selection — it leaves the process unsupervised.
+
+**Plain pi launches without explicit argv** (e.g. `worker-start --agent pi` without a pre-made terminal, or a user-started pi) resolve the model from pi's own configuration instead:
+
+1. the trusted repo-root `.pi/settings.json` — `defaultProvider: ai.forge`, `defaultModel: qwen3.8-27b-nvfp4` — which overrides the user's global default for every **trusted** session inside the repository. Decisions are saved in `~/.pi/agent/trust.json`, and the closest saved decision for the directory or any parent applies, so one decision for the common parent directory covers all Orca worktrees beneath it.
+2. the global fallback `~/.pi/agent/settings.json`, which selects a different model — an untrusted worker silently falls back to it (non-interactive runs skip untrusted project resources instead of prompting) and violates this policy.
+
+Preconditions for any pi launch that relies on project settings — verify both, ask the user to fix them otherwise. Never self-approve trust on the user's behalf, never ask a worker to approve its own trust prompt, and never proceed as if the policy were satisfied:
+
+- the repo-root `.pi/settings.json` exists with the mandated provider and model (committed, so fresh Orca worktrees inherit it);
+- a saved trust decision covers the checkout path. The user grants it once (`/trust` inside pi in that checkout, or by approving the startup prompt). Until it exists, an unattended plain launch either hits an interactive trust prompt it must not answer or silently skips project settings — do not dispatch that way; use the explicit-argv path above instead.
+
+**Runtime attestation (replaces receipt verification for pi).** Every pi task spec must require the worker to run
+
+```bash
+printf '%s/%s\n' "$PI_PROVIDER" "$PI_MODEL"
+```
+
+at its first checkpoint and repeat the output in its `worker_done` executive summary. `PI_PROVIDER`/`PI_MODEL` are pi's actually selected model per shell command. Accept a settlement only when the reported line is `ai.forge/qwen3.8-27b-nvfp4` (or the model the user explicitly named for that dispatch). On mismatch: stop the Dispatch per [Kill](#kill), report to the user, and dispatch a replacement after the precondition is fixed. Never accept prose-only model claims.
+
+**Terminal reuse.** Reuse a settled terminal for a follow-up Dispatch only when it demonstrably runs on the mandated model — for pi, by its recorded attestation; for launch-time-selection agents, by `launch.effective`. Otherwise release it and start a fresh worker.
+
+**Credentials.** The `ai.forge` credentials live in the agents' model configuration (for pi: `~/.pi/agent/models.json` and the credential store; the manager never copies them). Never embed, echo, or log API keys, and never paste key material into specs, prompts, or reports.
 
 ## Spawn
 
@@ -40,7 +71,7 @@ Two spawn paths:
 
    ```bash
    orca orchestration worker-start --spec "<task spec>" --worktree current \
-     --agent <agent-id> --model qwen3.8-27b-nvfp4 --json
+     --agent <agent-id> --json
    ```
 
 2. **Planned DAG** — for fan-out with real dependencies. Create Tasks first, then dispatch ready ones:
@@ -49,7 +80,7 @@ Two spawn paths:
    orca orchestration task-create --spec "<task spec>" --deps '["<task-id>", ...]' --json
    orca orchestration task-list --ready --brief --json
    orca orchestration worker-start --task <task_id> --worktree <placement> \
-     --agent <agent-id> --model qwen3.8-27b-nvfp4 --json
+     --agent <agent-id> --json
    ```
 
 Rules:
@@ -58,6 +89,7 @@ Rules:
 - Start the full independent wave **before** the first wait. Workers with no dependency between them are spawned in one batch.
 - If `worker-start` exits non-zero, do **not** relaunch. Read the receipt's `failedStage` and `residualResources`; a start that failed before agent-ready still owns its terminal, which `worker-list` later reports as `reclaimable` — release it with `orchestration worker-release`, never with `terminal close`.
 - Every task spec must be self-contained (see [Task-spec contract](#task-spec-contract)).
+- Pass `--model` only for agents with launch-time selection (Claude, Codex, Cursor); a pi worker must never receive it (see [Worker model policy](#worker-model-policy)).
 
 ## Monitor
 
@@ -135,7 +167,7 @@ orca orchestration worker-list --run <run_id> --terminal-state reclaimable --jso
 
 ```bash
 orca orchestration worker-start --task <task_id> --retry-of <dispatch_id> \
-  --worktree <placement> --agent <agent-id> --model qwen3.8-27b-nvfp4 --json
+  --worktree <placement> --agent <agent-id> --json
 ```
 
 After three consecutive failures for one Task, its dispatch context circuit-breaks and the Task is failed. Do not route around that boundary with a new Run or an unrelated Dispatch — report it and ask the user.
@@ -232,6 +264,7 @@ Every Task this manager dispatches (whether derived from a `FEATURE.md` slice or
 - **Constraints:** invariants, compatibility rules, do-not-touch boundaries, and the guardrails incorporated by reference (`AGENTS.md`, the feature spec).
 - **Ownership:** what this worker may edit and any coordination boundary with sibling workers.
 - **Observable acceptance:** the test, output, or evidence that proves completion (for this repo: `make test-fast` and — for reconciliation/API/CRD/image/manifest paths — `make test-smoke`, plus the slice's named acceptance groups).
+- For a pi worker, the spec must also require the runtime model attestation defined in the [Worker model policy](#worker-model-policy).
 
 Read order for implementation workers: the `FEATURE.md` (if any) → repository `AGENTS.md` → their slice → then code. A spec referencing a slice always beats ad-hoc prompt text.
 
