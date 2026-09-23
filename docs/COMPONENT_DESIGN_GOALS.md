@@ -110,7 +110,7 @@ The EDS should:
 4. Publish the complete batch to the subject returned by Scenario Manager and wait for a JetStream publish acknowledgement.
 5. Make retries safe and remain alive until Kubernetes terminates the Pod.
 
-The repository's [EDS mock](test/mocks/eds/eds_mock.py) is executable protocol documentation. It is a test fixture, not a production template.
+The repository's [EDS mock](../test/mocks/eds/eds_mock.py) is executable protocol documentation. It is a test fixture, not a production template.
 
 ### 1. Announce availability
 
@@ -217,7 +217,7 @@ In the current prototype a Translator should be a long-running, per-experiment c
 5. Publish the ready message through JetStream and wait for its publish acknowledgement.
 6. Acknowledge the request only after the ready message is durably accepted.
 
-The repository's [Translator mock](test/mocks/translator/translator_mock.py) demonstrates the current handshake. It returns synthetic image names and is not a secure image-building implementation.
+The repository's [Translator mock](../test/mocks/translator/translator_mock.py) demonstrates the current handshake. It returns synthetic image names and is not a secure image-building implementation.
 
 ### Request subject and payload
 
@@ -383,7 +383,7 @@ Keep the default log volume proportional to scenarios and failures, not repetiti
 
 Test normal behavior as well as every required environment variable, mounted Secret key and path, subject template, component identity, image or repository reference, and writable workspace named by the active component contract. Also test malformed payloads, duplicate delivery, stale attempts, publish-after-effect crashes, dependency outages, shutdown, and cleanup. Protocol tests should run against NATS/JetStream rather than replacing acknowledgement behavior with mocks alone.
 
-When contributing component, Go, CRD, Dockerfile, or test-harness changes to this repository, follow the root [test contract](AGENTS.md) and [testing guide](docs/CBSE_TESTING_GUIDE.md).
+When contributing component, Go, CRD, Dockerfile, or test-harness changes to this repository, follow the root [test contract](../AGENTS.md) and [testing guide](CBSE_TESTING_GUIDE.md).
 
 ## Implementation checklist
 
@@ -403,10 +403,10 @@ Before treating a custom component image as ready:
 
 ## Source-level references
 
-- [`alpha3` component fields](experiment-operator/api/alpha3/simulationexperiment_types.go)
-- [Operator component provisioning](experiment-operator/internal/controller/simulationexperiment_controller.go)
-- [EDS wire types and acknowledgement behavior](scenario-manager/internal/nats/eds_com.go)
-- [Translator wire types and acknowledgement behavior](scenario-manager/internal/nats/trans_com.go)
-- [Translator durable state transitions](scenario-manager/internal/core/translator_handoff.go)
-- [Current lifecycle selector and placeholders](scenario-manager/internal/core/selector.go)
-- [Current project status](docs/project-status.md)
+- [`alpha3` component fields](../experiment-operator/api/alpha3/simulationexperiment_types.go)
+- [Operator component provisioning](../experiment-operator/internal/controller/simulationexperiment_alpha4_controller.go)
+- [EDS wire types and acknowledgement behavior](../scenario-manager/internal/communication/communication.go)
+- [Translator wire types and acknowledgement behavior](../scenario-manager/internal/communication/communication.go)
+- [Translator durable state transitions](../scenario-manager/internal/ready/ready.go)
+- [Current lifecycle selector and placeholders](../scenario-manager/internal/selection/selection.go)
+- [Current project status](project-status.md)

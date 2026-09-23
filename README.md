@@ -30,7 +30,7 @@ For the full, plain-language overview of what is implemented, what is still miss
 
 ## Start here
 
-Want to supply your own Experimental Design Service, Translator, or PostProcessingService? Start with [Designing Custom CBSE Components](COMPONENT_DESIGN_GOALS.md). It explains the current architecture and scenario lifecycle, the implemented EDS and Translator message contracts, the not-yet-implemented post-processing boundary, container design goals, and a practical implementation checklist.
+Want to supply your own Experimental Design Service, Translator, or PostProcessingService? Start with [Designing Custom CBSE Components](docs/COMPONENT_DESIGN_GOALS.md). It explains the current architecture and scenario lifecycle, the implemented EDS and Translator message contracts, the not-yet-implemented post-processing boundary, container design goals, and a practical implementation checklist.
 
 The most useful follow-up references are:
 
