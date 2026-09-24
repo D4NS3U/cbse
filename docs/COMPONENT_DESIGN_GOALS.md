@@ -423,10 +423,9 @@ Before treating a custom component image as ready:
 
 ## Source-level references
 
-- [`alpha3` component fields](../devlog/changes/README.md) (alpha2/alpha3 retired; alpha4 is the only served and stored version)
+- `alpha2`/`alpha3` component fields (removed with the retired trees; alpha4 is the only served and stored version)
 - [Operator component provisioning](../experiment-operator/internal/controller/simulationexperiment_alpha4_controller.go)
 - [EDS wire types and acknowledgement behavior](../scenario-manager/internal/communication/communication.go)
 - [Translator wire types and acknowledgement behavior](../scenario-manager/internal/communication/communication.go)
 - [Translator durable state transitions](../scenario-manager/internal/ready/ready.go)
 - [Current lifecycle selector and placeholders](../scenario-manager/internal/selection/selection.go)
-- [Current project status](project-status.md)

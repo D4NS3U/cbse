@@ -17,8 +17,6 @@ CBSE is a research-driven framework investigating how container orchestration ca
 
 The current public `SimulationExperiment` API is `alpha4`, the only version the CRD serves and stores; new experiments must use this version, and it targets Kubernetes 1.30 or newer. The codebase and its interfaces are still evolving.
 
-For the full, plain-language overview of what is implemented, what is still missing, and the latest verification results, see [Project status](docs/project-status.md).
-
 ## Architecture
 
 CBSE runs a full simulation experiment on Kubernetes. The implemented and smoke-verified chain:
@@ -56,7 +54,6 @@ Want to supply your own Experimental Design Service, Translator, or PostProcessi
 
 The most useful follow-up references are:
 
-- [Project status](docs/project-status.md) for the exact implemented product boundary.
 - [Testing guide](docs/CBSE_TESTING_GUIDE.md) for repository tests, smoke architecture, and diagnostics.
 - [Cluster requirements](docs/CLUSTER_REQUIREMENTS.md) for the runtime cluster requirements, including the `UserNamespacesSupport` feature gate.
 - [Experiment Operator README](experiment-operator/README.md) for operator development and generated API assets.
