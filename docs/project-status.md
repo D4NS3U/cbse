@@ -1,91 +1,101 @@
 # CBSE project status
 
-Reviewed: 2026-07-15
+Reviewed: 2026-09-23
 
-CBSE is an early research prototype for running simulation experiments on Kubernetes. It has the foundations for describing an experiment, preparing its supporting services, receiving scenarios, and asking a Translator to prepare a scenario. It does **not** yet run simulation containers or produce simulation results.
+CBSE is a research prototype for running simulation experiments on Kubernetes. It provisions an experiment's supporting services, receives scenarios from an Experimental Design Service (EDS), translates each scenario into a simulation-runner image, executes the requested repetitions in Kubernetes Jobs, and persists the results in PostgreSQL so the experiment's scenarios can be post-processed.
 
 ## What the repository contains
 
-- `experiment-operator`: a Kubernetes operator that manages `SimulationExperiment` resources.
-- `scenario-manager`: a service that keeps track of experiments and scenarios in PostgreSQL and coordinates messages through NATS JetStream.
-- `test-env`: Kubernetes manifests and a mock Experimental Design Service (EDS) for testing scenario intake.
+- `experiment-operator`: a Kubernetes operator that manages `SimulationExperiment` resources. The checked-in CRD serves and stores only the `alpha4` API version; `alpha2` and `alpha3` are retired.
+- `scenario-manager`: a service that keeps project and scenario state in PostgreSQL, receives EDS scenario batches through NATS JetStream, and coordinates translation, runner execution, and post-processing state through NATS and JetStream.
+- `component-templates/translator`: the reference Translator. It consumes translation requests, looks up the scenario's model parameters in the Scenario Detail Database, generates a SimPy-based simulation runner, builds the runner image through a rootless BuildKit sidecar, and pushes it to the registry as an immutable digest-pinned reference.
+- `component-templates/scenario-detail-database`: the reference Scenario Detail Database image, holding the `public.simulation_parameters` schema and its four fixed parameter rows.
+- `test`: the test harness — shell orchestration in `test/harness/`, Kustomize manifests and Go/Ginkgo smoke assertions in `test/e2e/`, and mock/support components in `test/mocks/`.
 
-Both Go modules are developed together through the root `go.work` workspace.
+The operator and Scenario Manager are Go modules developed together through the root `go.work` workspace, with the reference Translator as a separate module in the same workspace.
 
 ## What works today
 
-### Experiment definition and setup
+### Experiment definition and provisioning
 
-The public `SimulationExperiment` API is version `alpha3`. It describes two databases, a Translator, a post-processing service, and an Experimental Design Service.
+The public `SimulationExperiment` API is version `alpha4`, and it is the only version the CRD serves and stores. It requires Kubernetes 1.30 or newer.
 
-The operator creates the Kubernetes resources needed for those components (such as Deployments, Services, Secrets, ConfigMaps, and an EDS Pod). It moves an experiment through `Pending`, `Provisioning`, and `InProgress` once the configured components are ready.
+The operator moves an experiment through `Pending`, `Provisioning`, and `InProgress` (or `Error` when provisioning validation fails). Along the way it provisions:
 
-`alpha2` is still served by the CRD only to give existing resources a clear error. The operator does not provision `alpha2` experiments; new resources must use `experiment.cbse.terministic.de/alpha3`.
+- The experiment's Result and Detail database Deployments and Services, plus their connection Secrets.
+- The Translator Deployment with its rootless BuildKit sidecar container, the Translator ConfigMap, and the Translator Service.
+- The deterministic runner ServiceAccount used by the scenario runner Jobs.
 
-### Scenario intake and tracking
+The operator requires the `cbse-registry-auth` registry pull Secret to exist in the experiment namespace, validates it, and uses it as the single pull reference for the database workloads it creates.
 
-The Scenario Manager watches `alpha3` experiments and creates, updates, or deletes the matching project record in PostgreSQL.
+### Scenario intake
 
-An EDS can announce that scenarios are available through NATS. Scenario Manager responds with a project-specific address, accepts scenario batches through JetStream, and stores the received scenarios in PostgreSQL. A batch is stored as one transaction, so it is not partly saved.
+An EDS announces its scenario batches through NATS; the Scenario Manager answers with a project-specific subject. Batches are published through JetStream and stored in PostgreSQL in one transaction, so a batch is never partly saved.
 
-### Translator handoff and basic selection
+### Translation to runner images
 
-Scenario Manager now starts one serial Basic Scenario Selection Logic (BSSL) worker. It checks one scenario at a time, beginning immediately and then every five seconds.
+A selection loop in the Scenario Manager claims scenarios one at a time and publishes durable translation requests to the Translator through JetStream. The reference Translator looks up the scenario's `parameterset_id` in the Scenario Detail Database, generates a SimPy-based runner build context, builds the image through its rootless BuildKit sidecar, and pushes it to the configured runner repository. The ready message carries the pushed image as an immutable digest reference, and the Scenario Manager stores it with the scenario.
 
-For a newly received scenario, BSSL:
+### Runner execution with numbered repetitions
 
-1. Records that the scenario is scheduled for translation.
-2. Sends its recipe information to the Translator through JetStream.
-3. Records that the message was accepted.
-4. Accepts a Translator response containing a container image and moves the scenario to `StartingRunners`.
+For each translated scenario, the Scenario Manager starts one `simrun-*` runner Job. The Job is indexed: its parallelism and completions both equal the scenario's requested `number_of_reps`, so every repetition is one indexed parallel. The runner container runs the digest-pinned generated runner image as a numeric non-root user, and each repetition derives a distinct effective seed.
 
-The handoff uses stored attempt numbers and guarded updates to avoid applying an old response to a newer attempt. If a translation publish is not confirmed, BSSL can retry it or mark it failed after the configured attempt limit.
+### Result persistence
 
-## What is not implemented
+Each completed repetition inserts one result row into the scenario's own `scenario_<id>_results` table in the experiment's Result Database. Rows carry the looked-up model parameters, the effective seed, and the computed result fields. The Scenario Manager tracks the number of computed repetitions per scenario.
 
-- Creating or running simulation runner Jobs/containers.
-- Tracking repetitions, execution progress, results, or experiment completion.
-- Calling a real post-processing service or calculating confidence metrics.
-- Updating `SimulationExperiment.status.metrics.scenarioCount` from Scenario Manager.
-- A completed end-to-end path from an EDS scenario to a finished simulation result.
+### Per-experiment PostProcessing
 
-In particular, the current runner and post-processing steps in BSSL are placeholders. `StartingRunners` is moved to `InProcessing`, but no Kubernetes Job is created. The post-processing placeholder is not connected to a real service.
+When a scenario's computed repetitions reach its requested count, the Scenario Manager moves it through `InProcessing` to the `PostProcessing` state. That is the current end of the implemented workflow.
 
 ## Current workflow boundary
 
 ```text
-SimulationExperiment (alpha3)
+SimulationExperiment (alpha4)
         |
-        +--> Experiment Operator provisions supporting Kubernetes resources
-        |
-        +--> Scenario Manager stores the project in PostgreSQL
+        +--> Experiment Operator provisions Result/Detail DBs, Translator + BuildKit
+             sidecar, and runner ServiceAccount; validates the cbse-registry-auth
+             pull Secret
 
-EDS --> NATS/JetStream --> Scenario Manager --> PostgreSQL scenario records
+EDS --> NATS/JetStream batches --> Scenario Manager --> PostgreSQL scenario records
                                            |
-                                           +--> Translator request
+                                           +--> selection loop: translation request (JetStream)
                                                      |
-Translator ready message <--------------------------+
+Reference Translator (component-templates/translator)
+   Detail DB parameter lookup -> SimPy runner generation
+   -> rootless BuildKit sidecar build -> digest-pinned registry push
+   -> ready message with the pushed digest
                                            |
-                                           +--> scenario marked StartingRunners
-
-No simulation runner or results path exists yet.
+                                           +--> simrun-* runner Job (indexed, one parallel
+                                              per repetition)
+                                                     |
+                                          non-root execution, distinct effective seeds
+                                                     |
+                                          Result DB scenario_<id>_rows
+                                                     |
+                                           +--> scenario reaches PostProcessing
 ```
 
-## Important current limitations
+## Verification
 
-- The operator provisions services; it does not execute the simulation itself.
-- The documented `test-env` EDS test resource still uses `alpha2`. It must be updated to `alpha3` before it can test the current operator/Scenario Manager path.
-- The operator API, deployment assets, and tests are still prototype-quality and may change.
+- `make test-fast` passes at the current revision (generated verification, formatting, vetting, race suites, envtest, and harness self-tests).
+- Green smoke run `20260917130324-e7c707` (2026-09-17): after the one-time `UserNamespacesSupport` enablement, the alpha4 cutover smoke passed 4/4 Ginkgo specs with zero JUnit failures on the dedicated K3s cluster. Provisioning, EDS intake and persistence, idempotent reconciliation, and cleanup all passed; the ephemeral namespace was removed and the smoke Lease released.
+- S07-A3 reference end-to-end (2026-09-18, run `s07a3-20260918113143-6ed834`): the suite gained a spec that drives one scenario through the full reference Translator chain — on-demand runner image creation, runner Job execution, and Result DB persistence. It verified real `scenario_<id>_results` rows for every requested repetition with distinct effective seeds and the scenario in `PostProcessing`. The suite passed 5/5 Ginkgo specs with zero JUnit failures.
 
-## Verification on 2026-07-15
+## Cluster requirements
 
-- `go test -count=1 ./experiment-operator/internal/controller ./experiment-operator/cmd` passed.
-- The BSSL unit tests and Core DB validation tests passed.
-- Database and NATS integration tests were skipped because this environment has no configured PostgreSQL or NATS service.
-- The Kubernetes connectivity test failed because this environment is not running inside a Kubernetes cluster.
+- Kubernetes 1.30 or newer.
+- The `UserNamespacesSupport` feature gate enabled on the cluster — the reference Translator's rootless BuildKit sidecar needs it. See [`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md) for the exact enablement steps, prerequisites, and verification.
+- Experiment namespaces must permit the sidecar's unconfined seccomp and AppArmor profiles (Pod Security enforce `privileged`).
+- A `cbse-registry-auth` Docker-config Secret in each experiment namespace.
+
+## What is not implemented
+
+- Post-processing beyond the experiment `PostProcessing` state: there is no PostProcessingService API or message contract yet, and the Scenario Manager does not call a post-processing workload.
+- Production readiness: the operator, Scenario Manager, and reference components are prototype-quality; the reference Translator and Detail Database are templates, not the only supported integrations.
+- A Helm chart or install tooling; `CLUSTER_REQUIREMENTS.md` is written as the prerequisite reference such a chart must use.
 
 ## Recommended next work
 
-1. Implement a real, idempotent simulation runner and its completion reporting.
-2. Connect runner completion to repetition tracking and real post-processing.
-3. Update the EDS integration manifest from `alpha2` to `alpha3`, then run it in a Kubernetes cluster.
+1. Define and implement the PostProcessingService contract and wire it to scenario completion.
+2. Harden the components toward production use and an installable Helm chart built on the documented cluster prerequisites.

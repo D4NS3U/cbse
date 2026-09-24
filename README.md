@@ -10,19 +10,31 @@ CBSE is a research-driven framework investigating how container orchestration ca
 
 ⚠️ **Research Prototype – Early Development Stage**
 
-CBSE can define and provision an experiment's supporting Kubernetes services, receive scenarios from an Experimental Design Service, and send scenarios to a Translator. It does **not** yet run simulation containers, manage repetitions, or produce results.
+CBSE runs a full simulation experiment on Kubernetes: an Experiment Operator provisions the experiment's supporting services, the Scenario Manager receives scenarios from an Experimental Design Service (EDS) and selects them for translation, a Translator generates and builds the simulation-runner image, `simrun-*` runner Jobs execute the requested repetitions, and results persist in PostgreSQL for post-processing.
 
-The current public `SimulationExperiment` API is `alpha3`; new experiments must use this version. The codebase and its interfaces are still evolving.
+The current public `SimulationExperiment` API is `alpha4`, the only version the CRD serves and stores; new experiments must use this version, and it targets Kubernetes 1.30 or newer. The codebase and its interfaces are still evolving.
+
+The implemented and smoke-verified chain:
 
 - **Experiment Operator (ExOp)**
-  - Provides a tested `alpha3` API for the `SimulationExperiment` Custom Resource Definition (CRD)
-  - Supports creation and lifecycle handling of CR instances
+  - Provides the `alpha4` API for the `SimulationExperiment` Custom Resource Definition (CRD)
+  - Provisions the experiment's Result and Detail database workloads and connection Secrets, the Translator Deployment with its rootless BuildKit sidecar, and the runner ServiceAccount
+  - Validates the `cbse-registry-auth` registry pull Secret in the experiment namespace
+- **Scenario Manager**
+  - Receives scenario batches from an EDS through NATS/JetStream and persists them in PostgreSQL
+  - Runs the scenario selection loop and starts the `simrun-*` runner Jobs
+- **Reference Translator** (`component-templates/translator`)
+  - Generates a SimPy-based simulation runner and builds it through the rootless BuildKit sidecar
+  - Pushes the generated runner image to the registry as an immutable digest-pinned reference
+- **Simulation runners**
+  - `simrun-*` Jobs run the digest-pinned runner image non-root, one indexed repetition per requested repetition, each with a distinct seed
+  - Result rows persist in the experiment's per-scenario PostgreSQL Result DB tables
+- **PostProcessing**
+  - A scenario reaches the `PostProcessing` state once all of its requested repetitions are computed
 
 Not yet implemented:
 
-- Functional experiment execution
-- Scenario orchestration
-- Distributed replication management
+- A post-processing service contract beyond the experiment `PostProcessing` state
 - Production-ready feature set
 
 Interfaces and behavior may change without notice.
@@ -76,4 +88,4 @@ make test-smoke \
   CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
 ```
 
-The default Harbor repository prefix is `registry.unibw.de/i31bdase/cbse-test`; smoke publishes each image beneath it as `exop:<version>`, `sm:<version>`, `eds-mock:<version>`, or `trans-mock:<version>`. Supply a dedicated Docker configuration through `CBSE_REGISTRY_AUTH_FILE`; never commit it. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See [`docs/CBSE_TESTING_GUIDE.md`](docs/CBSE_TESTING_GUIDE.md) for the current architecture, test layout, and artifact-reading guide.
+The default Harbor repository prefix is `registry.unibw.de/i31bdase/cbse-test`; the smoke build publishes the Makefile default six-component image set from `CBSE_IMAGE_COMPONENTS` (`exop`, `sm`, `eds-mock`, `translator`, `runner-base`, `scenario-detail-database`) beneath it, and generated runner images are published to a separate `cbse-test-runner` repository. The cluster must have the `UserNamespacesSupport` feature gate enabled for the reference Translator's rootless BuildKit sidecar — see [`docs/CLUSTER_REQUIREMENTS.md`](docs/CLUSTER_REQUIREMENTS.md). Supply a dedicated Docker configuration through `CBSE_REGISTRY_AUTH_FILE`; never commit it. Each run receives an isolated namespace, is serialized with a Kubernetes Lease, writes diagnostics to `artifacts/test/<run-id>/`, and cleans itself up. See [`docs/CBSE_TESTING_GUIDE.md`](docs/CBSE_TESTING_GUIDE.md) for the current architecture, test layout, and artifact-reading guide.
