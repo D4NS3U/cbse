@@ -4,7 +4,7 @@ Routing evidence for Package A of the [repo-professionalization charter](../repo
 
 ## Program state
 
-- Charter: accepted; user notified 2026-09-24 that the repository **is already public** (D4 resolved: `github.com/D4NS3U/cbse`; local history fully pushed at tip `9f01e82`). The public surface shows the pre-professionalization state until the user lands the P6 commit set; the verified-uncommitted delta is 204 files (+2688/−1847). Packages B/C gate-locked, untouched (B additionally needs M1 + D5).
+- Charter: accepted; D4 resolved and **the P6 checkpoint is landed: the user delegated the commit series to the manager on 2026-09-24 — nine commits pushed to public `main` (`7a05ee8`…`785ab0d`; origin tip `785ab0d`); the public surface now equals the verified tree.** Package B gate-locked (needs M1 + D5 beyond D4); Package C unchanged.
 - Gates: D1 — alpha2/alpha3 confirmed; `test/compat/eds-sm/` + root `hack/` pending user confirmation (sub-steps blocked). D3 — relocate; public `cluster-smoke.yml` deletion blocked on the user's preservation confirmation. D2/D4/D5/D6 informational.
 - Wave plan: Wave 1 = A1 ∥ A2 → Wave 2 = A3 ∥ A4 (R2: A3 serialized behind Wave 1) → Follow-up wave = A2R ∥ A3R (user confirmations received 2026-09-24). **A1–A4 and both follow-up deletions settled `complete` and reviewer-verified on 2026-09-24.** D1 residual deletions executed (eds-sm + hack, with two licensed single-line doc reference fixes); D3 public `cluster-smoke.yml` deletion executed (preservation precondition verified: labs copy shasum `b1295cd3f93b…`). Pending: user checkpoint commits; A4 labs review → cbse-labs creation (D2); the M0 external-reviewer fresh-clone dry-run.
 
