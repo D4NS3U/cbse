@@ -2,7 +2,7 @@
 
 > **Audience:** the repository Manager (the Orca coordinator role defined in the repository-root [`MANAGER.md`](../../../MANAGER.md)).
 > **Purpose:** this document is the intake and problem description for a multi-milestone program. The Manager reads it, asks the user the open decision questions, then authors the required `FEATURE.md` specifications (one per package, under `devlog/changes/<package>/FEATURE.md`) and dispatches worker agents on them per the `MANAGER.md` worker model policy.
-> **Status:** charter accepted by the user; awaiting Manager decomposition. Package A is dispatchable immediately. Packages B and C are gate-locked (see [Milestone gates](#9-milestone-gates-and-user-decision-gates)).
+> **Status:** Package A complete — A1–A4 plus all follow-ups settled and reviewer-verified 2026-09-24 (header pass, SECURITY/D4NS3U, LICENSE appendix; user enabled GitHub private vulnerability reporting). Gate update: **D4 resolved — the repository was already public** at `github.com/D4NS3U/cbse`; the public surface still shows the pre-professionalization state (tip `9f01e82`) until the user lands the uncommitted P6 change set (204 files, +2688/−1847). Next: user commit plan, D2 (cbse-labs per `labs/move-list.md`), M0 external-reviewer fresh-clone dry-run. Package B remains gate-locked (needs M1 stability + D5 ghcr naming in addition to D4); Package C unchanged.
 > **The Manager may not implement anything itself** outside its `MANAGER.md` duties (spec authoring, dispatch, verification, settlement). All file changes belong to workers; all git operations and all actions outside this repository belong to the user.
 
 ## 1. Vision
