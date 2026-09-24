@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# Copyright 2025-2026 Daniel Seufferth
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # test-harness.sh — self-test for the CBSE test harness scripts.
 #
 # Stubs kubectl, docker, curl, and Harbor in a temp directory, then exercises
@@ -119,7 +133,7 @@ if env "${common[@]}" RUNNER_BASE_IMAGE=registry.example.test/runner-base:latest
 fi
 
 # Repository-structure invariants.
-grep -Fqx 'CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test' "${root}/Makefile"
+grep -Fqx 'CBSE_REGISTRY ?=' "${root}/Makefile"
 grep -Fqx 'CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database' "${root}/Makefile"
 grep -Fqx '  local immutable="${repository}:${immutable_suffix}"' "${root}/test/harness/build-images.sh"
 # The flat layout (cbse-test:<component>.test.<version>) is retired; every

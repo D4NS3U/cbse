@@ -8,7 +8,11 @@ export GOCACHE
 KUBECTL_VERSION ?= v1.32.5
 KUBECTL ?= $(ROOT)/bin/kubectl-$(KUBECTL_VERSION)
 RUN_ID ?=
-CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test
+# CBSE_REGISTRY is required for the image-build and cluster targets. It is
+# environment-provided and has no default in this repository; see
+# docs/CBSE_TESTING_GUIDE.md. The consuming targets (publish-test-images,
+# test-smoke, test-e2e-retained) fail fast when it is unset.
+CBSE_REGISTRY ?=
 TEST_IMAGE_VERSION ?= $(shell date -u +%-y.%-m.%-d)
 CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database
 
@@ -18,8 +22,8 @@ help:
 	@echo "CBSE test commands:"
 	@echo "  make test-fast"
 	@echo "  make publish-test-images TEST_IMAGE_VERSION=$(TEST_IMAGE_VERSION)"
-	@echo "  make test-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=$(CBSE_REGISTRY)"
-	@echo "  make test-e2e-retained KUBECONFIG=/path/to/config CBSE_REGISTRY=$(CBSE_REGISTRY)"
+	@echo "  make test-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
+	@echo "  make test-e2e-retained KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
 	@echo "  make test-diagnose RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 	@echo "  make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 
@@ -51,16 +55,19 @@ $(KUBECTL):
 	KUBECTL_VERSION=$(KUBECTL_VERSION) OUTPUT=$@ $(TEST_DIR)/harness/install-kubectl.sh
 
 publish-test-images:
+	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }
 	CBSE_REGISTRY="$(CBSE_REGISTRY)" TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" \
 	  CBSE_IMAGE_COMPONENTS="$(CBSE_IMAGE_COMPONENTS)" \
 	  CBSE_REGISTRY_AUTH_FILE="$(CBSE_REGISTRY_AUTH_FILE)" \
 	  $(TEST_DIR)/harness/build-images.sh
 
 test-smoke: test-tools
+	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }
 	KUBECTL="$(KUBECTL)" CBSE_REGISTRY="$(CBSE_REGISTRY)" \
 	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" $(TEST_DIR)/harness/smoke.sh
 
 test-e2e-retained: test-tools
+	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }
 	CBSE_KEEP_NAMESPACE=1 CBSE_RETAIN_RESOURCES=1 CBSE_SELECTOR_ENABLED=1 \
 	  KUBECTL="$(KUBECTL)" CBSE_REGISTRY="$(CBSE_REGISTRY)" \
 	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" $(TEST_DIR)/harness/smoke.sh
