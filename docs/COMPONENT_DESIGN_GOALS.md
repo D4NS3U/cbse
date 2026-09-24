@@ -385,6 +385,26 @@ Test normal behavior as well as every required environment variable, mounted Sec
 
 When contributing component, Go, CRD, Dockerfile, or test-harness changes to this repository, follow the root [test contract](../AGENTS.md) and [testing guide](CBSE_TESTING_GUIDE.md).
 
+## Licensing your components
+
+Contributed component sources — custom EDS, Translator, and PostProcessing images and their source files — carry the same Apache-2.0 short-form license header as the repository's own sources. The copyright line uses the form `Copyright <years> <holder>` (plain ASCII hyphen). Add `SPDX-License-Identifier: Apache-2.0` alongside the header where the file format supports it. The header is written in the file's comment style (`//` for Go, `#` for shell and Python) and placed at the top of the file:
+
+```text
+// Copyright <years> <holder>
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+```
+
 ## Implementation checklist
 
 Before treating a custom component image as ready:
@@ -403,7 +423,7 @@ Before treating a custom component image as ready:
 
 ## Source-level references
 
-- [`alpha3` component fields](../experiment-operator/api/alpha3/simulationexperiment_types.go)
+- [`alpha3` component fields](../devlog/changes/README.md) (alpha2/alpha3 retired; alpha4 is the only served and stored version)
 - [Operator component provisioning](../experiment-operator/internal/controller/simulationexperiment_alpha4_controller.go)
 - [EDS wire types and acknowledgement behavior](../scenario-manager/internal/communication/communication.go)
 - [Translator wire types and acknowledgement behavior](../scenario-manager/internal/communication/communication.go)
