@@ -1,6 +1,11 @@
 # Understanding CBSE and its test pipeline
 
-This guide is the human-facing entry point for the current CBSE implementation and its Kubernetes test system. It is intentionally practical: it explains what works today, where the important code lives, and how to interpret a smoke-test run.
+This guide is the human-facing entry point for the current CBSE implementation and its test system. It is intentionally practical: it explains what works today, where the important code lives, how to run the two test tiers, and how to interpret a smoke-test run.
+
+## The two test tiers
+
+- **Module tier (fully public).** Pure Go toolchain, with no cluster and no registry involved. `make test-fast` — which includes `make verify-generated` — is the gate for every code change; the required-tier contract lives in [`AGENTS.md`](../AGENTS.md).
+- **Cluster tier (environment-gated).** The full-stack smoke suite is complete, but it runs only on infrastructure you provide: a conformant cluster ([`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md)), a registry you control (`CBSE_REGISTRY` — required, environment-provided, never defaulted in this repository), a dedicated Docker auth config (`CBSE_REGISTRY_AUTH_FILE`), and an explicit `KUBECONFIG`. The harness owns its ephemeral `cbse-e2e-<run-id>` namespace lifecycle and cleanup; it never deploys test resources to `default` or `kube-system`.
 
 > **Cluster requirements**: CBSE needs Kubernetes >= 1.30 with the `UserNamespacesSupport` feature gate enabled (for the reference Translator's rootless BuildKit sidecar) and experiment namespaces that permit the sidecar's unconfined seccomp/AppArmor profiles (Pod Security enforce `privileged`). See [`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md) for the exact enablement steps, prerequisites, and verification; it is the source a future Helm chart's prerequisites must reference.
 
@@ -9,33 +14,34 @@ This guide is the human-facing entry point for the current CBSE implementation a
 CBSE is a Kubernetes-native research prototype for preparing simulation experiments. The tested path is:
 
 ```text
-SimulationExperiment (alpha3 custom resource)
+SimulationExperiment (alpha4 custom resource)
                  |
                  v
 Experiment Operator -----> Kubernetes workloads for the experiment
                  |
                  v
-Scenario Manager <----> PostgreSQL project/scenario state
+Scenario Manager <----> PostgreSQL (Core, Result, Scenario Detail)
                  |
                  +----> NATS / JetStream <----> EDS mock
                  |
-                 +----> NATS / JetStream <----> translator mock
+                 +----> NATS / JetStream <----> reference Translator
+                 (builds and runs the scenario's generated runner image
+                  via runner-base and publishes the results)
 ```
 
-In the smoke profile, the Experiment Operator creates the experiment's supporting Deployments, Services, Secrets, ConfigMaps, and design Pod. The Scenario Manager records one project and consumes deterministic EDS batches into four `scenario_status` rows. The EDS and translator are deliberately lightweight mocks; PostgreSQL and NATS/JetStream are real services.
+In the smoke profile, the Experiment Operator provisions the experiment's owned Kubernetes resources, and the Scenario Manager drives the experiment lifecycle through NATS/JetStream messaging with the EDS mock and the reference Translator. PostgreSQL and NATS/JetStream are real services; the EDS is a deterministic mock; the reference Translator, runner base, and Scenario Detail Database are built from `component-templates/`.
 
 ### Implemented and validated
 
-- The active `SimulationExperiment` API is `experiment.cbse.terministic.de/alpha3`.
+- The active `SimulationExperiment` API is `experiment.cbse.terministic.de/alpha4` — the only served and stored version.
 - The operator provisions and removes experiment-owned Kubernetes resources.
-- Scenario Manager watches experiment lifecycle changes, persists projects and scenarios in PostgreSQL, and handles EDS and translator messaging through NATS/JetStream.
-- The smoke suite proves provisioning, persistence, idempotent reconciliation, and deletion cleanup together on K3s.
+- Scenario Manager watches experiment lifecycle changes, persists project, scenario, and result state in PostgreSQL, and handles EDS and Translator messaging through NATS/JetStream.
+- The smoke suite proves owned-resource reconciliation, deterministic EDS intake, the full reference Translator build/run/publish chain, idempotent re-reconciliation, and garbage collection of owned resources and persisted rows — together, on a conformant test cluster.
 
 ### Still deliberately incomplete
 
-- The detail database, result database, and post-processing component use keep-alive mocks in the smoke profile. The experiment-design component uses the active deterministic EDS mock.
-- The translator mock implements only the NATS/JetStream handshake and returns generated `trans.test:<number>` image names after a delay.
-- Full simulation execution, replication scheduling, and production hardening are not yet the scope of the validated path.
+- The EDS component is a deterministic mock: it supplies fixed batches and keep-alives the components that are not implemented yet.
+- Replication scheduling and production hardening are not part of the validated smoke path.
 - Scenario Manager is temporarily run as UID 0 in the smoke manifest because its image uses a symbolic user. Converting that image to a numeric non-root user is a follow-up hardening task.
 
 ## 2. Where to start reading
@@ -46,10 +52,10 @@ In the smoke profile, the Experiment Operator creates the experiment's supportin
 | What is deployed in a smoke run? | [`test/e2e/manifests/base/stack.yaml`](../test/e2e/manifests/base/stack.yaml) | [`test/e2e/manifests/experiment.yaml`](../test/e2e/manifests/experiment.yaml) |
 | What does the smoke suite prove? | [`test/e2e/smoke_test.go`](../test/e2e/smoke_test.go) | [`test/e2e/README.md`](../test/e2e/README.md) |
 | How is cluster safety enforced? | [`test/harness/preflight.sh`](../test/harness/preflight.sh) | [`test/harness/smoke.sh`](../test/harness/smoke.sh) |
-| How does the operator reconcile an experiment? | [`experiment-operator/internal/controller/simulationexperiment_controller.go`](../experiment-operator/internal/controller/simulationexperiment_controller.go) | [`experiment-operator/cmd/main.go`](../experiment-operator/cmd/main.go) |
-| How does Scenario Manager start? | [`scenario-manager/internal/core/scenario_manager.go`](../scenario-manager/internal/core/scenario_manager.go) | [`scenario-manager/cmd/main.go`](../scenario-manager/cmd/main.go) |
-| How does EDS ingestion work? | [`scenario-manager/internal/nats/eds_com.go`](../scenario-manager/internal/nats/eds_com.go) | [`test/mocks/eds/eds_mock.py`](../test/mocks/eds/eds_mock.py) |
-| How does translation messaging work? | [`scenario-manager/internal/nats/trans_com.go`](../scenario-manager/internal/nats/trans_com.go) | [`test/mocks/translator/translator_mock.py`](../test/mocks/translator/translator_mock.py) |
+| How does the operator reconcile an experiment? | [`experiment-operator/internal/controller/simulationexperiment_alpha4_controller.go`](../experiment-operator/internal/controller/simulationexperiment_alpha4_controller.go) | [`experiment-operator/cmd/main.go`](../experiment-operator/cmd/main.go) |
+| How does Scenario Manager start? | [`scenario-manager/cmd/main.go`](../scenario-manager/cmd/main.go) | [`scenario-manager/internal/core/app.go`](../scenario-manager/internal/core/app.go) |
+| How does EDS intake work? | [`scenario-manager/internal/nats/consumers.go`](../scenario-manager/internal/nats/consumers.go) | [`test/mocks/eds/eds_mock.py`](../test/mocks/eds/eds_mock.py) |
+| How does the reference Translator work? | [`scenario-manager/internal/communication/communication.go`](../scenario-manager/internal/communication/communication.go) | [`component-templates/translator/README.md`](../component-templates/translator/README.md) |
 
 ## 3. Test directory map
 
@@ -58,9 +64,9 @@ All shared test infrastructure is contained below [`test/`](../test/):
 ```text
 test/
 ├── harness/       Shell orchestration: preflight, lock, build, diagnose, cleanup
-├── e2e/           Kustomize manifests and Go/Ginkgo smoke assertions, images.lock.env
-├── mocks/          EDS mock source plus Dockerfile (alpha3 translator mock retained for the smoke profile)
-└── compat/eds-sm/ Deprecated fixtures retained only for compatibility
+├── e2e/           Kustomize manifests, Go/Ginkgo smoke suite, source-image lock
+├── mocks/         EDS mock source plus Dockerfile (and the retained translator mock)
+└── README.md
 ```
 
 The alpha4 reference components live under `component-templates/`:
@@ -78,42 +84,42 @@ Component-local Go tests remain under `experiment-operator/test/` because that i
 
 | Command | Use it when | What it does not do |
 | --- | --- | --- |
-| `make test-fast` | Any Go, CRD, Dockerfile, manifest, or test-harness change | Does not contact K3s or build/push images |
-| `make publish-test-images` | You need new University Harbor test images | Does not deploy to K3s |
+| `make test-fast` | Any Go, CRD, Dockerfile, manifest, or test-harness change | Does not contact a cluster or build/push images |
+| `make publish-test-images` | You need new component test images in your `CBSE_REGISTRY` | Does not deploy to a cluster |
 | `make test-smoke` | Operator, Scenario Manager, mock, image, or Kubernetes integration change | Does not retain a namespace unless asked |
+| `make test-e2e-retained` | You need a smoke run retained unconditionally for active debugging | Retains its namespace by design — clean it with `make test-clean RUN_ID=<id>` |
 | `make test-diagnose RUN_ID=<id>` | A retained failure needs fresh diagnostics | Does not change workloads |
-| `make test-clean RUN_ID=<id>` | `CBSE_KEEP_ON_FAILURE=1` retained a failed namespace | Does not delete the shared CRD or `cbse-test-system` |
+| `make test-clean RUN_ID=<id>` | `CBSE_KEEP_ON_FAILURE=1` retained a failed namespace | Does not delete the shared CRD or the harness's helper namespaces |
 
-Set `CBSE_KEEP_NAMESPACE=1` on `make test-smoke` to retain a successful run's namespace for manual inspection. Clean it with the ownership-checked `make test-clean RUN_ID=<id>` command when finished.
+`CBSE_REGISTRY` is required and environment-provided for `publish-test-images`, `test-smoke`, and `test-e2e-retained`; those targets fail fast when it is unset. Set `CBSE_KEEP_NAMESPACE=1` on `make test-smoke` to retain a successful run's namespace for manual inspection. To reuse already-published images instead of building, set `SKIP_BUILD=1` and supply every `*_IMAGE` reference as an immutable digest; a mutable (floating-tag) reference is rejected by preflight. Clean a retained namespace with the ownership-checked `make test-clean RUN_ID=<id>` command when finished.
 
 The fast suite checks generated code, formatting, harness self-tests, vetting
 (operator, Scenario Manager, and the isolated Translator module), Scenario
 Manager and Translator race tests, and the operator's `envtest` suite. The
-Translator module is vetted and tested with `GOWORK=off` so its buildkit/docker
-dependencies do not affect the operator or Scenario Manager workspace.
+Translator is an independent Go module inside the root `go.work` workspace;
+the workspace pins the `k8s.io` dependencies so the Translator's buildkit
+transitive dependencies do not affect the operator or Scenario Manager
+module versions.
 
-The smoke suite uses a pinned Kubernetes 1.32 `kubectl`, verifies the expected
-K3s API server and permissions, requires Kubernetes 1.30 or newer with a
-`linux/amd64` `Ready` schedulable Node, acquires a Kubernetes Lease, creates a
-unique `cbse-e2e-<run-id>` namespace, and deploys images by digest. Test images
-are published by `test/harness/build-images.sh` from the locked source images in
-`test/e2e/images.lock.env`. The five shared components (`exop`, `sm`, `eds-mock`,
-`translator`, `runner-base`) use the flat layout
-(`${CBSE_REGISTRY}:<component>.test.<version>`, digest
-`${CBSE_REGISTRY}@sha256:<hex>`); the reference Scenario Detail Database uses the
-nested layout (`${CBSE_REGISTRY}/scenario-detail-database:<version>`, digest
-`${CBSE_REGISTRY}/scenario-detail-database@sha256:<hex>`). Generated runner
-images are published to `${CBSE_REGISTRY}/cbse-test-runner`. It never deploys
-test resources to `default` or `kube-system`.
+The smoke suite uses a pinned Kubernetes `kubectl` (version pinned in the root
+[`Makefile`](../Makefile)), verifies the API server and context the run
+expects and refuses a different cluster, requires Kubernetes 1.30 or newer
+with a `linux/amd64` `Ready` schedulable Node and the `UserNamespacesSupport`
+gate (see [`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md)), acquires a
+`cbse-smoke-lock` Lease, creates the unique `cbse-e2e-<run-id>` namespace, and
+deploys images by digest. Test images are published by
+`test/harness/build-images.sh` from the locked source images in
+`test/e2e/images.lock.env`.
 
 ### Component build and image contract
 
 All six component images use the **nested** repository layout
 `${CBSE_REGISTRY}/<component>:<version>` (for example
-`${CBSE_REGISTRY}/sm:26.9.16`); there is no flat `${CBSE_REGISTRY}:<component>.test.<version>`
-form. The version tag is the build date in `YY.M.D` form (no leading zeros;
-overridable via `TEST_IMAGE_VERSION`). The reference Scenario Detail Database uses
-the same nested layout under `${CBSE_REGISTRY}/scenario-detail-database:<version>`.
+`${CBSE_REGISTRY}/sm:26.9.16`); there is no flat
+`${CBSE_REGISTRY}:<component>.test.<version>` form. The version tag is the
+build date in `YY.M.D` form (no leading zeros; overridable via
+`TEST_IMAGE_VERSION`). The reference Scenario Detail Database uses the same
+nested layout under `${CBSE_REGISTRY}/scenario-detail-database:<version>`.
 Generated runner images are published to `${CBSE_REGISTRY}/cbse-test-runner`.
 It never deploys test resources to `default` or `kube-system`.
 
@@ -150,9 +156,9 @@ Read artifacts in this order:
 
 1. `summary.json` — run ID, namespace, project name, result, and timing.
 2. `junit.xml` — exact test/spec outcome for CI or an IDE.
-3. `preflight.txt` — selected context, API server, K3s version, and safety checks.
+3. `preflight.txt` — selected context, API server, server version, and safety checks.
 4. `images.env` — the exact digest-pinned images used by that run.
-5. `database.txt` — captured scenario rows before the final deletion assertion. A successful smoke run should show four `Created` rows with deterministic seeds.
+5. `database.txt` — captured scenario rows before the final deletion assertion. A successful smoke run should show four deterministic `Created` scenario rows.
 6. `simulationexperiments.yaml`, `stack.yaml`, and `experiment.yaml` — sanitized resources used in the run; Secrets are intentionally excluded.
 7. `events.txt`, `cluster-state.txt`, and `pod-descriptions.txt` — the fastest way to locate scheduling, readiness, or image-pull failures.
 8. `logs/` — component logs, including Scenario Manager, operator, NATS, PostgreSQL, and experiment-owned workload logs.
@@ -164,14 +170,19 @@ On a successful run, the final assertion deletes the experiment and verifies tha
 Run the smoke suite with retention only while diagnosing a real failure:
 
 ```bash
-CBSE_KEEP_ON_FAILURE=1 make test-smoke KUBECONFIG=/path/to/config
+CBSE_KEEP_ON_FAILURE=1 \
+make test-smoke \
+  KUBECONFIG=/path/to/kubeconfig \
+  TEST_IMAGE_VERSION=26.7.16 \
+  CBSE_REGISTRY=<your-registry> \
+  CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
 ```
 
-The command prints the run ID. Then inspect and clean it explicitly:
+The run ID is the `artifacts/test/<run-id>/` directory name and is recorded in that run's `summary.json`. Then inspect and clean a retained run explicitly:
 
 ```bash
-make test-diagnose RUN_ID=<run-id> KUBECONFIG=/path/to/config
-make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/config
+make test-diagnose RUN_ID=<run-id> KUBECONFIG=/path/to/kubeconfig
+make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/kubeconfig
 ```
 
 Common starting points:
@@ -179,7 +190,7 @@ Common starting points:
 | Symptom | First files to inspect | Likely layer |
 | --- | --- | --- |
 | Preflight failure | `preflight.txt` | kubeconfig, API server, permissions, registry authentication |
-| `ImagePullBackOff` | `events.txt`, `pod-descriptions.txt` | digest/reference or the `cbse-registry-auth` pull Secret |
+| `ImagePullBackOff` | `events.txt`, `pod-descriptions.txt` | digest/reference or the registry pull Secret |
 | `CrashLoopBackOff` | `pod-descriptions.txt`, affected `logs/*.log` | application startup, permissions, database, or NATS configuration |
 | CR phase is `Error` | `simulationexperiments.yaml`, operator log | reconciliation or experiment specification |
 | Database assertion fails | `database.txt`, Scenario Manager and EDS logs | NATS subject, JetStream processing, or persistence |
@@ -194,6 +205,6 @@ Common starting points:
 5. Study Scenario Manager's EDS and translator adapters to understand the message flow and persistence boundary.
 6. When adding a real service to replace a mock, first update the smoke manifest and assertions, then retain the mock only where it still provides useful deterministic coverage.
 
-## 8. Current operational baseline
+## 8. Local run history and artifact hygiene
 
-The latest successful smoke run can be found by listing `artifacts/test/` by modification time. It passed all four full-stack assertions: resource provisioning, project/scenario persistence, idempotent reconciliation, and cleanup. The run artifacts are local diagnostics, are ignored by Git, and should never contain Secret payloads.
+`artifacts/test/` is git-ignored local diagnostics, not repository content. To find the latest run, list `artifacts/test/` by modification time and start from that run's `summary.json`. Artifacts must never contain Secret payloads and must never be committed.
