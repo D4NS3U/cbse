@@ -41,6 +41,9 @@ this file without rework.
 
 ### Changed
 
+- The Translator module's race suite now runs with a 30-minute per-binary test
+  timeout because cold-cache hosts could exhaust Go's 10-minute default under
+  race instrumentation, killing healthy test binaries (M0 review finding).
 - `docs/COMPONENT_DESIGN_GOALS.md` is refreshed to the live `alpha4` contract: the only
   served/stored API version, `experiment.cbse.terministic.de/alpha4` CR examples, the
   namespace-aware subject grammar, and the nested-only image layout.
