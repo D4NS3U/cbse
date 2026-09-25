@@ -1,6 +1,12 @@
 # Contributing to CBSE
 
-Thank you for your interest in the **Container-Based Simulation Environment (CBSE)**! This document describes how to participate: prerequisites, the test contract, development setup, where the extension points live, and the pull-request flow.
+Thank you for your interest in the **Container-Based Simulation Environment (CBSE)**! This document is the working reference for building, testing, and extending the code: prerequisites, the test contract, development setup, and the extension points.
+
+> **Current stage: PhD research in active development — contributions are welcome after the first stable release.**
+>
+> CBSE is a **PhD research project** and a development-stage repository: the framework, its public interfaces, and its internal structure are still evolving as the research progresses, so pull requests cannot be reviewed or merged right now. Contributing is genuinely encouraged from the moment the **first stable release** lands — with issue triage, review expectations, and the full contribution process in place. This document is the marker for that change: when the repository reaches that inviting stage, this notice is replaced by that process, and the release is named in [CHANGELOG.md](CHANGELOG.md).
+>
+> Until then, you are welcome to clone, build, and experiment with CBSE for your own research under [LICENSE](LICENSE). If you spot a bug or a documentation error, opening a GitHub issue is appreciated — issues are read and answered even while pull requests are closed.
 
 > CBSE is a research prototype in early development (see [README.md](README.md)). Interfaces and behavior may change without notice. This guidance is written to stay truthful for the next run — if the repository has moved past this document, the repository itself is the source of truth.
 
@@ -58,11 +64,13 @@ The framework's pluggable boundaries are the Experimental Design Service (EDS), 
 
 To implement your own component, start with [Designing Custom CBSE Components](docs/COMPONENT_DESIGN_GOALS.md); the cluster your components run on must meet the [Cluster requirements](docs/CLUSTER_REQUIREMENTS.md) (Kubernetes >= 1.30, `UserNamespacesSupport` feature gate enabled).
 
-## Pull request process
+## Pull requests at this stage
 
-- Use the standard GitHub flow: fork (if needed), branch, and propose a pull request against `main`.
+Pull requests are **not yet accepted** — see the stage notice at the top of this document. The intended process for the inviting stage is kept here so the transition is transparent; until then, plain GitHub issues are the channel.
+
+- The standard GitHub flow will apply: fork (if needed), branch, and propose a pull request against `main`.
 - Keep changes small and focused; one concern per pull request.
-- Pull requests are expected to come with a passing `make test-fast` — and with the cluster tier run when the table above says it applies.
+- Pull requests will be expected to come with a passing `make test-fast` — and with the cluster tier run when the table above says it applies.
 - Include a short description of what changed, why, and how it was verified.
 
 > **Disclosure / collaboration contact:** the maintainers are still finalizing the project's public disclosure and collaboration contact. Until it is published, see [SECURITY.md](SECURITY.md) for the disclosure channel and its status. Do not assume an email address or social handle exists.

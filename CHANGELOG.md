@@ -39,6 +39,10 @@ this file without rework.
 
 ### Changed
 
+- `CONTRIBUTING.md` now states the research-stage contribution policy: CBSE is an
+  active PhD project, pull requests are not yet accepted, and contributing opens
+  with the first stable release — `CONTRIBUTING.md` itself is the marker of that
+  change.
 - Test harness rework: isolated namespace per run, Kubernetes Lease
   serialization, run-scoped diagnostics under `artifacts/test/<run-id>/`, and
   self-cleanup; harness self-tests are part of the hermetic tier.
