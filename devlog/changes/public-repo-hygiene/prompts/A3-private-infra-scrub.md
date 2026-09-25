@@ -1,0 +1,19 @@
+# Dispatch prompt — A3: Private-infrastructure scrub (Task-spec-contract output)
+
+**Task title:** A3 — Private-infra scrub (Makefile registry default, AGENTS.md public-tone rewrite, CBSE_TESTING_GUIDE re-anchor; workflow deletion blocked)
+
+**Read order (mandatory, all normative and read-only for you):** 1) `devlog/changes/public-repo-hygiene/FEATURE.md` (umbrella; esp. §5 P-principles verbatim, §6 partition, §7 recipes); 2) `devlog/changes/public-repo-hygiene/slices/A3-private-infra-scrub.md` (your slice — fully self-contained; it owns every concrete requirement, the R2 atomicity rule, the R3 link list, and the R4 harness-protection rule); 3) repository-root `AGENTS.md` (the current text is normative for you while you produce its replacement). On any contradiction: stop and ask via your ask channel.
+
+**Target (five-part contract, summarized — the slice file is normative):** you own exactly `Makefile`, `AGENTS.md`, `docs/CBSE_TESTING_GUIDE.md`. The Makefile loses its private registry default (`CBSE_REGISTRY ?= registry.unibw.de/i31bdase/cbse-test`) and gains a documented, environment-provided required variable with a fast guard inside only the consuming targets (`publish-test-images`, `test-smoke`, `test-e2e-retained`) — `make test-fast` and `make help` stay runnable and truthful with the variable unset. `AGENTS.md` gets the public-tone rewrite that preserves the tier contract and genericized cluster-safety semantics (the slice enumerates them item-by-item), placeholder command examples, and an embedded P3 line. `CBSE_TESTING_GUIDE.md` re-anchors to the environment-gated cluster tier. **Blocked sub-step:** `.github/workflows/cluster-smoke.yml` is NOT deleted (D3 = relocate, but the user's preservation confirmation comes first); prove it byte-identical.
+
+**Change/Constraints (binding summary; umbrella §5 carries P1–P8 verbatim):** R2 atomicity — your rewrite lands in one wave and must be simultaneously true for the very next runs and workers; R4 — `test/harness/**` is absolutely out of bounds (scripts, flags, lease logic all stay; only config/docs/defaults change); R3 — leave the known cross-references intact (the slice lists them). P3/P5 — no private values in anything you write; placeholders only; never echo `CBSE_REGISTRY_AUTH_FILE` contents. No cluster operations. `make test-fast` rc=0 after your changes is mandatory evidence. `MANAGER.md` is out of bounds. Scope discipline: nothing beyond your three paths; discovered gaps → report lines.
+
+**Ownership:** sole owner of the three named paths in this wave; your parallel wave-mate owns only new files under `devlog/changes/repo-professionalization/labs/` — co-resident untracked entries there are expected.
+
+**Observable acceptance:** the eight evidence blocks in the slice file, all echoed in your report — the manager re-runs each independently from a fresh shell before accepting settlement (including re-running `make test-fast`).
+
+**Mandatory protocol for this worker (no exceptions):**
+- **Runtime attestation, first checkpoint:** run `printf '%s/%s\n' "$PI_PROVIDER" "$PI_MODEL"`; repeat verbatim in your `worker_done` executive summary; if it is not `ai.forge/qwen3.8-27b-nvfp4`: stop immediately, report `--outcome failed` with the observed line.
+- **No commits (P6):** all changes stay in the working tree; the user commits.
+- **Read-only specs:** `FEATURE.md`, slice files, `MANAGER.md`, the charter, all `devlog/**` — you never edit them. The only `AGENTS.md` change is the rewrite itself, per your slice.
+- **Completion:** report `worker_done` with: three-sentence executive summary (stating the landed `AGENTS.md` contract in one sentence, per R2); both lifecycle IDs (task id and dispatch id); explicit `--outcome succeeded|failed`; the verbatim attestation line; all eight evidence-block outputs per the slice file.

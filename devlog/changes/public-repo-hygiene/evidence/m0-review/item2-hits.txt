@@ -1,0 +1,86 @@
+.pi/settings.json:2:  "defaultProvider": "ai.forge",
+docs/CLUSTER_REQUIREMENTS.md:86:- A reachable `registry.unibw.de` Docker configuration (`CBSE_REGISTRY_AUTH_FILE`) authorizing pull/push and artifact list/read/delete in the Harbor project `i31bdase`. Outside the smoke profile the deployment owner supplies the `cbse-registry-auth` `kubernetes.io/dockerconfigjson` Secret independently; CBSE fixes its name and validation, not a production account.
+experiment-operator/config/samples/experiment_alpha1_simulationexperiment_hostbased_db.yaml:13:    host: 192.168.101.248
+experiment-operator/config/samples/experiment_alpha1_simulationexperiment_hostbased_db.yaml:19:    host: 192.168.101.248
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:139:				Image:    "registry.unibw.de/i31bdase/cbse-test/detaildb@sha256:" + shaA,
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:153:				Image:                 "registry.unibw.de/i31bdase/cbse-test/translator@sha256:" + shaA,
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:154:				Repository:            "registry.unibw.de/i31bdase/cbse-test-runner",
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:155:				BaseImage:             "registry.unibw.de/i31bdase/cbse-test/base@sha256:" + shaA,
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:156:				BuilderImage:          "registry.unibw.de/i31bdase/cbse-test/buildkit@sha256:" + shaA,
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:165:// registry.unibw.de.
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:167:	return dockerConfigSecret(map[string]string{"registry.unibw.de": "robot:secret"}, nil, "")
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:570:	if cm.Data["REPOSITORY"] != "registry.unibw.de/i31bdase/cbse-test-runner" {
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:573:	if !strings.HasPrefix(cm.Data["BASEIMAGE"], "registry.unibw.de/") {
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:667:			raw, _ := json.Marshal(map[string]any{"auths": map[string]any{"registry.unibw.de": map[string]any{"identitytoken": "tok"}}})
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:674:		{"helper only", dockerConfigSecret(nil, map[string]string{"registry.unibw.de": "desktop"}, "")},
+experiment-operator/internal/controller/alpha4/alpha4_controller_test.go:834:	inst.Spec.Translator.Image = "registry.unibw.de/i31bdase/cbse-test/translator@sha256:" + strings.Repeat("b", 64)
+experiment-operator/internal/controller/helpers_test.go:30:	valid := "registry.unibw.de/i31bdase/cbse-test/translator@sha256:" + strings.Repeat("a", 64)
+experiment-operator/internal/controller/helpers_test.go:35:		"registry.unibw.de/i31bdase/cbse-test/translator:latest",
+experiment-operator/internal/controller/helpers_test.go:36:		"registry.unibw.de/i31bdase/cbse-test/translator@sha256:short",
+experiment-operator/internal/controller/helpers_test.go:37:		"registry.unibw.de/i31bdase/cbse-test/translator@sha256:" + strings.Repeat("A", 64), // uppercase hex
+experiment-operator/internal/controller/helpers_test.go:38:		"registry.unibw.de/i31bdase/cbse-test/translator",
+experiment-operator/internal/controller/helpers_test.go:49:	if err := ValidateRepository("registry.unibw.de/i31bdase/cbse-test-runner"); err != nil {
+experiment-operator/internal/controller/helpers_test.go:53:		"registry.unibw.de/i31bdase/cbse-test-runner:v1",
+experiment-operator/internal/controller/helpers_test.go:54:		"registry.unibw.de/i31bdase/cbse-test-runner@sha256:" + strings.Repeat("a", 64),
+experiment-operator/internal/controller/helpers_test.go:67:		"registry.unibw.de/i31bdase/cbse-test-runner":                                       "registry.unibw.de",
+experiment-operator/internal/controller/helpers_test.go:68:		"registry.unibw.de/i31bdase/cbse-test/translator@sha256:" + strings.Repeat("a", 64): "registry.unibw.de",
+experiment-operator/internal/controller/helpers_test.go:93:	cfg := `{"auths":{"https://registry.unibw.de":{"auth":"` + auth + `"},"https://index.docker.io/v1/":{"auth":"` + b64Auth("dock", "hub") + `"}}}`
+experiment-operator/internal/controller/helpers_test.go:101:		{"bare host alias", "registry.unibw.de", "robot", ""},
+experiment-operator/internal/controller/helpers_test.go:102:		{"https host alias", "registry.unibw.de", "robot", ""}, // same config, different candidate
+experiment-operator/internal/controller/helpers_test.go:126:	tokenOnly := `{"auths":{"https://registry.unibw.de":{"identitytoken":"tok"}}}`
+experiment-operator/internal/controller/helpers_test.go:127:	if _, _, err := ResolveDockerAuth([]byte(tokenOnly), "registry.unibw.de"); err == nil ||
+experiment-operator/internal/controller/helpers_test.go:132:	if _, _, err := ResolveDockerAuth([]byte(helperOnly), "registry.unibw.de"); err == nil ||
+experiment-operator/internal/controller/helpers_test.go:138:	if _, _, err := ResolveDockerAuth([]byte(missing), "registry.unibw.de"); err == nil ||
+experiment-operator/internal/controller/helpers_test.go:148:		Data:       map[string][]byte{dockerConfigSecretKey: []byte(`{"auths":{"https://registry.unibw.de":{"auth":"` + b64Auth("u", "p") + `"}}}`)},
+experiment-operator/internal/controller/helpers_test.go:255:			Image:  "registry.unibw.de/i31bdase/cbse-test/db:latest",
+experiment-operator/internal/controller/images.go:41:// registry.unibw.de/i31bdase/cbse-test-runner; a trailing :tag or @digest is a
+scenario-manager/internal/registry/registry_test.go:53:		"registry.unibw.de/i31bdase/cbse-test-runner",
+test/e2e/README.md:17:- A readable kubeconfig. Linux agents normally use `/home/d4ns3u/.kube/config`;
+test/e2e/README.md:19:- Access to the K3s API server at `https://192.168.101.245:6443`.
+test/e2e/README.md:21:  `registry.unibw.de/i31bdase/cbse-test` from both the agent and the K3s node.
+test/e2e/README.md:42:  KUBECONFIG=/home/d4ns3u/.kube/config \
+test/e2e/README.md:64:OPERATOR_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
+test/e2e/README.md:65:SM_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
+test/e2e/README.md:66:EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
+test/e2e/README.md:67:TRANS_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
+test/e2e/README.md:68:RUNNER_BASE_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
+test/e2e/README.md:69:DETAIL_DB_IMAGE=registry.unibw.de/i31bdase/cbse-test/scenario-detail-database@sha256:... \
+test/e2e/README.md:71:make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
+test/e2e/smoke_test.go:269:		Expect(runnerImage).To(HavePrefix("registry.unibw.de/i31bdase/cbse-test-runner@sha256:"),
+test/harness/build-images.sh:28:#   CBSE_REGISTRY (default registry.unibw.de/i31bdase/cbse-test) registry
+test/harness/build-images.sh:54:registry="${CBSE_REGISTRY:-registry.unibw.de/i31bdase/cbse-test}"
+test/harness/preflight.sh:33:#   CBSE_EXPECTED_APISERVER (default https://192.168.101.245:6443) required
+test/harness/preflight.sh:38:#   CBSE_REGISTRY          (default registry.unibw.de/i31bdase/cbse-test).
+test/harness/preflight.sh:61:expected_server="${CBSE_EXPECTED_APISERVER:-https://192.168.101.245:6443}"
+test/harness/preflight.sh:167:registry="${CBSE_REGISTRY:-registry.unibw.de/i31bdase/cbse-test}"
+test/harness/preflight.sh:222:# targets only the generated-runner repository (i31bdase/cbse-test-runner) and
+test/harness/preflight.sh:238:harbor_project="${CBSE_HARBOR_PROJECT:-i31bdase}"
+test/harness/registry-cleanup.sh:18:# Targets ONLY the generated-runner repository (i31bdase/cbse-test-runner). It
+test/harness/registry-cleanup.sh:42:api_base="${CBSE_HARBOR_API:-https://registry.unibw.de/api/v2.0}"
+test/harness/registry-cleanup.sh:43:project="${CBSE_HARBOR_PROJECT:-i31bdase}"
+test/harness/smoke.sh:32:#   CBSE_REGISTRY (default registry.unibw.de/i31bdase/cbse-test) image prefix.
+test/harness/smoke.sh:154:  CBSE_REGISTRY="${CBSE_REGISTRY:-registry.unibw.de/i31bdase/cbse-test}" \
+test/harness/smoke.sh:247:  -e "s|CBSE_RUNNER_REPOSITORY|${CBSE_RUNNER_REPOSITORY:-registry.unibw.de/i31bdase/cbse-test-runner}|g" \
+test/harness/test-harness.sh:74:  *"config view --minify"*) printf '%s' "${FAKE_SERVER:-https://192.168.101.245:6443}" ;;
+test/harness/test-harness.sh:151:grep -Fq 'registry.unibw.de/i31bdase/cbse-test' "${root}/test/e2e/README.md"
+test/harness/test-harness.sh:205:  CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test \
+test/harness/test-harness.sh:212:  grep -Fqx "registry.unibw.de/i31bdase/cbse-test/${image}:26.9.7" "${tmp}/docker-tags.txt"
+test/harness/test-harness.sh:213:  grep -Eq "^registry\.unibw\.de/i31bdase/cbse-test/${image}:26\.9\.7\.sha-" "${tmp}/docker-tags.txt"
+test/harness/test-harness.sh:218:grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+test/harness/test-harness.sh:219:grep -Eq '^SM_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/sm@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+test/harness/test-harness.sh:220:grep -Eq '^EDS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/eds-mock@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+test/harness/test-harness.sh:221:grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+test/harness/test-harness.sh:222:grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+test/harness/test-harness.sh:223:grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+test/harness/test-harness.sh:231:  CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test \
+test/harness/test-harness.sh:236:grep -Fqx "registry.unibw.de/i31bdase/cbse-test/translator:26.9.7" "${tmp}/docker-tags-default.txt"
+test/harness/test-harness.sh:237:grep -Fqx "registry.unibw.de/i31bdase/cbse-test/runner-base:26.9.7" "${tmp}/docker-tags-default.txt"
+test/harness/test-harness.sh:238:grep -Fqx "registry.unibw.de/i31bdase/cbse-test/scenario-detail-database:26.9.7" "${tmp}/docker-tags-default.txt"
+test/harness/test-harness.sh:239:grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+test/harness/test-harness.sh:240:grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+test/harness/test-harness.sh:241:grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+test/harness/test-harness.sh:242:grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+test/harness/test-harness.sh:250:  CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test TEST_IMAGE_VERSION=26.9.7 \
+test/harness/test-harness.sh:257:  CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test TEST_IMAGE_VERSION=26.9.7 \
+test/harness/test-harness.sh:264:  CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test TEST_IMAGE_VERSION=26.9.7 \
+test/harness/test-harness.sh:346:{"auths":{"registry.unibw.de":{"auth":"dGVzdDp0ZXN0"}}}

@@ -1,0 +1,89 @@
+/Library/Developer/CommandLineTools/usr/bin/make -C experiment-operator controller-gen
+CONTROLLER_GEN="/private/tmp/cbse-m0-review/cbse/experiment-operator/bin/controller-gen" /private/tmp/cbse-m0-review/cbse/test/harness/verify-generated.sh
+/private/tmp/cbse-m0-review/cbse/test/harness/test-harness.sh
+Harness self-tests passed.
+cd experiment-operator && go vet ./...
+cd scenario-manager && go vet ./...
+cd component-templates/translator && go vet ./...
+cd scenario-manager && go test -tags=integration -run '^$' ./...
+?   	github.com/D4NS3U/cbse/scenario-manager/cmd	[no test files]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/communication	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/config	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/core	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/effectivejob	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/eventlog	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/informer	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/jobadapter	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/kube	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/lifecycle	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/nats	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/observation	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/persistence	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/rbac	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/ready	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/registry	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/runnerstart	(cached) [no tests to run]
+?   	github.com/D4NS3U/cbse/scenario-manager/internal/scheduler	[no test files]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/selection	(cached) [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/subject	(cached) [no tests to run]
+?   	github.com/D4NS3U/cbse/scenario-manager/internal/translatorconfig	[no test files]
+cd experiment-operator && go test -tags=e2e -run '^$' ./test/e2e
+ok  	github.com/D4NS3U/cbse/experiment-operator/test/e2e	(cached) [no tests to run]
+cd /private/tmp/cbse-m0-review/cbse/test/e2e && go vet -tags=e2e ./...
+cd /private/tmp/cbse-m0-review/cbse/test/e2e && go test -tags=e2e -run '^$' ./...
+ok  	github.com/D4NS3U/cbse/test/e2e	(cached) [no tests to run]
+cd scenario-manager && go test -race ./...
+?   	github.com/D4NS3U/cbse/scenario-manager/cmd	[no test files]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/communication	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/config	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/core	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/effectivejob	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/eventlog	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/informer	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/jobadapter	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/kube	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/lifecycle	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/nats	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/observation	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/persistence	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/rbac	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/ready	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/registry	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/runnerstart	(cached)
+?   	github.com/D4NS3U/cbse/scenario-manager/internal/scheduler	[no test files]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/selection	(cached)
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/subject	(cached)
+?   	github.com/D4NS3U/cbse/scenario-manager/internal/translatorconfig	[no test files]
+cd component-templates/translator && go test -race ./...
+?   	github.com/D4NS3U/cbse/component-templates/translator/cmd/translator	[no test files]
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/buildkit	(cached)
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/config	1.719s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/databaseendpoint	(cached)
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/databaseendpoint/dns	2.282s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/databaseendpoint/ipv4	(cached)
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/databaseendpoint/ipv6	2.848s
+?   	github.com/D4NS3U/cbse/component-templates/translator/internal/dbconfig	[no test files]
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/detaildb	(cached)
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/generator	3.982s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/imageref	5.252s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/messaging	4.065s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/registry	(cached)
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/registryauth	4.663s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/sqldoc	(cached)
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/subject	(cached)
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/translator	14.638s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/wire	4.349s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/workspace	5.836s
+/Library/Developer/CommandLineTools/usr/bin/make -C experiment-operator setup-envtest
+Downloading sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.21
+Setting up envtest binaries for Kubernetes version 1.33...
+/private/tmp/cbse-m0-review/cbse/experiment-operator/bin/k8s/1.33.0-darwin-amd64cd experiment-operator && \
+	KUBEBUILDER_ASSETS="$(./bin/setup-envtest use $(go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' k8s.io/api | awk -F'[v.]' '{printf "1.%d", $3}') --bin-dir "/private/tmp/cbse-m0-review/cbse/experiment-operator/bin" -p path)" \
+	go test ./...
+ok  	github.com/D4NS3U/cbse/experiment-operator/api/alpha4	14.613s
+?   	github.com/D4NS3U/cbse/experiment-operator/cmd	[no test files]
+ok  	github.com/D4NS3U/cbse/experiment-operator/internal/controller	1.706s
+ok  	github.com/D4NS3U/cbse/experiment-operator/internal/controller/alpha4	14.779s
+ok  	github.com/D4NS3U/cbse/experiment-operator/internal/dbendpoint	4.459s
+ok  	github.com/D4NS3U/cbse/experiment-operator/internal/jobtemplate	5.207s
+?   	github.com/D4NS3U/cbse/experiment-operator/test/utils	[no test files]

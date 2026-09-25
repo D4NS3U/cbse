@@ -1,0 +1,100 @@
+/Library/Developer/CommandLineTools/usr/bin/make -C experiment-operator controller-gen
+mkdir -p /private/tmp/cbse-m0-review/cbse/experiment-operator/bin
+Downloading sigs.k8s.io/controller-tools/cmd/controller-gen@v0.18.0
+CONTROLLER_GEN="/private/tmp/cbse-m0-review/cbse/experiment-operator/bin/controller-gen" /private/tmp/cbse-m0-review/cbse/test/harness/verify-generated.sh
+/private/tmp/cbse-m0-review/cbse/test/harness/test-harness.sh
+Harness self-tests passed.
+cd experiment-operator && go vet ./...
+cd scenario-manager && go vet ./...
+cd component-templates/translator && go vet ./...
+cd scenario-manager && go test -tags=integration -run '^$' ./...
+?   	github.com/D4NS3U/cbse/scenario-manager/cmd	[no test files]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/communication	3.051s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/config	8.749s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/core	4.062s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/effectivejob	5.012s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/eventlog	0.669s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/informer	5.994s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/jobadapter	7.822s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/kube	9.833s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/lifecycle	2.492s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/nats	6.951s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/observation	8.289s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/persistence	1.387s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/rbac	11.189s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/ready	12.496s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/registry	10.269s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/runnerstart	11.627s [no tests to run]
+?   	github.com/D4NS3U/cbse/scenario-manager/internal/scheduler	[no test files]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/selection	12.714s [no tests to run]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/subject	12.410s [no tests to run]
+?   	github.com/D4NS3U/cbse/scenario-manager/internal/translatorconfig	[no test files]
+cd experiment-operator && go test -tags=e2e -run '^$' ./test/e2e
+ok  	github.com/D4NS3U/cbse/experiment-operator/test/e2e	0.569s [no tests to run]
+cd /private/tmp/cbse-m0-review/cbse/test/e2e && go vet -tags=e2e ./...
+cd /private/tmp/cbse-m0-review/cbse/test/e2e && go test -tags=e2e -run '^$' ./...
+ok  	github.com/D4NS3U/cbse/test/e2e	1.225s [no tests to run]
+cd scenario-manager && go test -race ./...
+?   	github.com/D4NS3U/cbse/scenario-manager/cmd	[no test files]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/communication	2.021s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/config	2.677s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/core	2.586s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/effectivejob	5.928s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/eventlog	4.590s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/informer	7.385s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/jobadapter	11.308s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/kube	4.069s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/lifecycle	10.268s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/nats	9.081s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/observation	12.412s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/persistence	7.758s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/rbac	9.375s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/ready	11.100s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/registry	9.987s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/runnerstart	8.756s
+?   	github.com/D4NS3U/cbse/scenario-manager/internal/scheduler	[no test files]
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/selection	12.562s
+ok  	github.com/D4NS3U/cbse/scenario-manager/internal/subject	11.508s
+?   	github.com/D4NS3U/cbse/scenario-manager/internal/translatorconfig	[no test files]
+cd component-templates/translator && go test -race ./...
+?   	github.com/D4NS3U/cbse/component-templates/translator/cmd/translator	[no test files]
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/buildkit	2.304s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/config	659.997s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/databaseendpoint	2.956s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/databaseendpoint/dns	659.998s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/databaseendpoint/ipv4	5.184s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/databaseendpoint/ipv6	659.998s
+?   	github.com/D4NS3U/cbse/component-templates/translator/internal/dbconfig	[no test files]
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/detaildb	6.655s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/generator	659.999s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/imageref	659.999s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/messaging	659.999s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/registry	5.972s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/registryauth	659.999s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/sqldoc	3.722s
+ok  	github.com/D4NS3U/cbse/component-templates/translator/internal/subject	4.563s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/translator	660.000s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/wire	660.000s
+*** Test killed with quit: ran too long (11m0s).
+signal: quit
+FAIL	github.com/D4NS3U/cbse/component-templates/translator/internal/workspace	660.001s
+FAIL
+make: *** [test-fast] Error 1
