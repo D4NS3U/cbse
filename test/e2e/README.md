@@ -19,10 +19,10 @@ Detail Database are built from `component-templates/`.
 - Access to the K3s API server at `https://192.168.101.245:6443`.
 - Access to the University Harbor repository prefix
   `registry.unibw.de/i31bdase/cbse-test` from both the agent and the K3s node.
-  Shared components (`exop`, `sm`, `eds-mock`, `translator`, `runner-base`) use
-  the **flat** layout (one tag per component on the prefix,
-  `${CBSE_REGISTRY}:<component>.test.<version>`); the reference Scenario Detail
-  Database uses the **nested** layout
+  All six component images use the **nested** layout, one dedicated repository
+  per component below the prefix
+  (`${CBSE_REGISTRY}/<component>:<version>`), including the reference
+  Scenario Detail Database
   (`${CBSE_REGISTRY}/scenario-detail-database:<version>`). Generated runner
   images are published to a separate `${CBSE_REGISTRY}/cbse-test-runner`
   repository.
@@ -47,10 +47,9 @@ make test-smoke \
 A smoke build builds the exact mandatory component set
 (`exop,sm,eds-mock,translator,runner-base,scenario-detail-database`); a subset
 or superset is rejected before any build or registry mutation. `build-images.sh`
-publishes each flat component with a canonical tag
-(`${CBSE_REGISTRY}:<component>.test.<version>`) and an immutable provenance tag,
-and publishes the nested Detail Database with
-`${CBSE_REGISTRY}/scenario-detail-database:<version>`. The pushed digests are
+publishes each component in the nested layout with a canonical tag
+(`${CBSE_REGISTRY}/<component>:<version>`) and an immutable provenance tag.
+The pushed digests are
 recorded in `images.env` (`OPERATOR_IMAGE`, `SM_IMAGE`, `EDS_IMAGE`,
 `TRANS_IMAGE`, `RUNNER_BASE_IMAGE`, `DETAIL_DB_IMAGE`); the digest is the
 immutable reference.
@@ -61,20 +60,20 @@ To reuse already published images, every reference must include a digest:
 
 ```bash
 SKIP_BUILD=1 \
-OPERATOR_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
-SM_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
-EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
-TRANS_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
-RUNNER_BASE_IMAGE=registry.unibw.de/i31bdase/cbse-test@sha256:... \
+OPERATOR_IMAGE=registry.unibw.de/i31bdase/cbse-test/exop@sha256:... \
+SM_IMAGE=registry.unibw.de/i31bdase/cbse-test/sm@sha256:... \
+EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test/eds-mock@sha256:... \
+TRANS_IMAGE=registry.unibw.de/i31bdase/cbse-test/translator@sha256:... \
+RUNNER_BASE_IMAGE=registry.unibw.de/i31bdase/cbse-test/runner-base@sha256:... \
 DETAIL_DB_IMAGE=registry.unibw.de/i31bdase/cbse-test/scenario-detail-database@sha256:... \
 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config> \
 make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
 ```
 
 The six `*_IMAGE` variables are all required when `SKIP_BUILD=1`; a mutable
-(floating-tag) reference is rejected. The shared components use the flat digest
-form (`${CBSE_REGISTRY}@sha256:<hex>`); the Detail Database uses the nested
-digest form (`${CBSE_REGISTRY}/scenario-detail-database@sha256:<hex>`).
+(floating-tag) reference is rejected. Every component image uses the nested
+digest form (`${CBSE_REGISTRY}/<component>@sha256:<hex>`), including the
+Detail Database (`${CBSE_REGISTRY}/scenario-detail-database@sha256:<hex>`).
 
 `CBSE_KEEP_ON_FAILURE=1` retains a failed namespace. Inspect it with `make test-diagnose RUN_ID=<id>` and remove it with `make test-clean RUN_ID=<id>`. Neither cleanup path removes the shared CRD.
 
@@ -112,7 +111,7 @@ CRDs before proceeding. Runs are serialized through
 
 Generated-runner cleanup targets only the `${CBSE_REGISTRY}/cbse-test-runner`
 repository; it never deletes or prunes the shared reference repositories
-(`${CBSE_REGISTRY}` flat components or
+(the per-component nested repositories under `${CBSE_REGISTRY}` or
 `${CBSE_REGISTRY}/scenario-detail-database`).
 
 Each run writes JUnit XML, a JSON summary, image digests, sanitized rendered manifests, events, pod descriptions, workload state, database assertions, and logs to `artifacts/test/<run-id>/`. Kubernetes Secret objects and their payloads are never collected.

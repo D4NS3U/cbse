@@ -15,6 +15,8 @@ this file without rework.
 
 ### Added
 
+- `scenario-manager/README.md`: the Scenario Manager module README with its
+  lifecycle responsibilities, the `internal/` package map, and development workflow.
 - `alpha4` as the only active `SimulationExperiment` API version: the CRD serves
   and stores only `alpha4`, targeting Kubernetes 1.30 or newer.
 - Reference Translator (`component-templates/translator/`): consumes translation
@@ -39,6 +41,13 @@ this file without rework.
 
 ### Changed
 
+- `docs/COMPONENT_DESIGN_GOALS.md` is refreshed to the live `alpha4` contract: the only
+  served/stored API version, `experiment.cbse.terministic.de/alpha4` CR examples, the
+  namespace-aware subject grammar, and the nested-only image layout.
+- `experiment-operator/README.md` replaced its kubebuilder scaffold with the real
+  module documentation (alpha4 reconciler, provisioning, envtest development flow),
+  and the image-layout descriptions in `component-templates/translator/README.md`
+  and `test/e2e/README.md` now state the nested-only truth everywhere.
 - `CONTRIBUTING.md` now states the research-stage contribution policy: CBSE is an
   active PhD project, pull requests are not yet accepted, and contributing opens
   with the first stable release — `CONTRIBUTING.md` itself is the marker of that

@@ -70,17 +70,18 @@ experiment's Result DB).
 
 ### Canonical publish tags and digest outputs
 
-`build-images.sh` publishes both flat images with two tags each and records the
+`build-images.sh` publishes both nested images with two tags each and records the
 pushed digest:
 
-- canonical tag: `${CBSE_REGISTRY}:translator.test.${VERSION}` and
-  `${CBSE_REGISTRY}:runner-base.test.${VERSION}`
+- canonical tag: `${CBSE_REGISTRY}/translator:${VERSION}` and
+  `${CBSE_REGISTRY}/runner-base:${VERSION}`
 - immutable provenance tag:
-  `${CBSE_REGISTRY}:translator.test.${VERSION}.sha-${commit}-${sourceHash}-${runId}`
+  `${CBSE_REGISTRY}/translator:${VERSION}.sha-${commit}-${sourceHash}-${runId}`
   (and the same for `runner-base`)
 - digest output in `images.env`:
-  `TRANS_IMAGE=${CBSE_REGISTRY}@sha256:<64hex>` and
-  `RUNNER_BASE_IMAGE=${CBSE_REGISTRY}@sha256:<64hex>` (flat, no repository path)
+  `TRANS_IMAGE=${CBSE_REGISTRY}/translator@sha256:<64hex>` and
+  `RUNNER_BASE_IMAGE=${CBSE_REGISTRY}/runner-base@sha256:<64hex>`
+  (nested, keeping the repository path)
 
 The digest is the immutable reference; `RUNNER_BASE_IMAGE` becomes
 `spec.translator.baseimage` and `TRANS_IMAGE` becomes `spec.translator.image`.

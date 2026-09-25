@@ -1,35 +1,37 @@
 # Designing Custom CBSE Components
 
-This is the starting point for developers who want to provide their own Experimental Design Service (EDS), Translator, or PostProcessingService image for CBSE. It explains what CBSE owns, what a component must own, and which integration contracts exist in the current `alpha3` prototype.
+This is the starting point for developers who want to provide their own Experimental Design Service (EDS), Translator, or PostProcessingService image for CBSE. It explains what CBSE owns, what a component must own, and which integration contracts exist in the current `alpha4` API.
 
-CBSE is still evolving. Treat the subjects and payloads below as the current alpha3 contract, not as a promise of long-term API stability. In particular, EDS and Translator messaging are implemented today, while PostProcessingService communication is not. The alpha4 runner-start feature will replace the alpha3-specific API, subject, registry, and execution sections when it is implemented; its durable pushed-image recovery rule is already stated here because it is a common Translator design invariant.
+CBSE is still evolving. Treat the subjects and payloads below as the current `alpha4` contract, not as a promise of long-term API stability. The only served and stored API version is `alpha4`; the `alpha2` and `alpha3` versions are retired — they are not served or stored, and no conversion webhook exists for them. In `alpha4`, EDS intake, the Translator handoff, runner-Job orchestration, and observation are implemented, while the PostProcessingService communication contract is not.
 
-The alpha4 reference component images are now built from the repository: the reference Translator (`component-templates/translator/`), its runner base (`component-templates/translator/runner-base/`), and the Scenario Detail Database (`component-templates/scenario-detail-database/`). They share a common set of component design goals: each is built from a locked, digest-pinned source image recorded in `test/e2e/images.lock.env` with no environment override; each runs as a numeric non-root user (`1000:1000`); each is published with a canonical tag plus an immutable provenance tag and referenced in production by its pushed digest; and none bakes credentials into the image. The shared components use the flat repository layout (`${CBSE_REGISTRY}:<component>.test.<version>`) while the Detail Database uses the nested layout (`${CBSE_REGISTRY}/scenario-detail-database:<version>`). See the per-component README files for the exact build, communication, and cleanup contracts.
+The alpha4 reference component images are built from the repository: the reference Translator (`component-templates/translator/`), its runner base (`component-templates/translator/runner-base/`), and the Scenario Detail Database (`component-templates/scenario-detail-database/`). They share a common set of component design goals: each is built from a locked, digest-pinned source image recorded in `test/e2e/images.lock.env` with no environment override; each runs as a numeric non-root user (`1000:1000`); each is published in the nested repository layout (`${CBSE_REGISTRY}/<component>:<version>`) with a canonical tag plus an immutable provenance tag and referenced in production by its pushed digest; and none bakes credentials into the image. See the per-component README files for the exact build, communication, and cleanup contracts.
 
 ## Start with the current boundary
 
 The `SimulationExperiment` custom resource describes one experiment. The Experiment Operator turns that description into Kubernetes resources, while the Scenario Manager owns scenario state in PostgreSQL and coordinates EDS and Translator messages through NATS and JetStream.
 
 ```text
-SimulationExperiment (alpha3)
+SimulationExperiment (alpha4)
         |
         v
-Experiment Operator -----> EDS Pod
-        |                  Translator Deployment + Service
-        |                  PostProcessingService Deployment + Service
-        |                  database workloads, Services, Secrets, ConfigMaps
+Experiment Operator -----> detail/result database connection Secrets (always)
+        |                  detail/result database Deployments + Services (image form)
+        |                  Translator Deployment (translator container +
+        |                  rootless BuildKit sidecar) + Service + ConfigMap
+        |                  runner ServiceAccount (simrunner-<UID-prefix>)
         |
         +-----------------------------------------------+
 
-EDS -- availability request --> Scenario Manager
+EDS (installed by the installation) -- availability request --> Scenario Manager
 EDS == scenario batch ========> Scenario Manager --> Core PostgreSQL DB
                                       |
                                       +== translation request ==> Translator
                                       <== ready message =========+
                                       |
-                                      +--> durable scenario-state change
+                                      +--> runner Job (simrun-<UID-prefix>-s<id>-a<attempt>)
+                                      +--> observation --> PostProcessing or Failed
 
-PostProcessingService is deployed, but is not called by Scenario Manager yet.
+PostProcessingService: spec field present, no provisioned workload, no call contract yet.
 ```
 
 The arrows marked `==>` are persistent JetStream messages. The EDS availability handshake uses ordinary NATS request/reply. PostgreSQL is the authority for workflow ownership and progress; messages and Kubernetes workloads are effects of that state.
@@ -38,65 +40,91 @@ The arrows marked `==>` are persistent JetStream messages. The EDS availability 
 
 | Component | Provisioned by Operator | Usable integration today | Current limitation |
 | --- | --- | --- | --- |
-| EDS | One Pod, one Service, and an optional design ConfigMap | Availability request/reply and transactional scenario-batch ingestion | The design ConfigMap is created but not mounted; broker settings are not injected by the `alpha3` API |
-| Translator | One Deployment, one Service, and one configuration ConfigMap | JetStream translation requests and ready messages | CBSE accepts a returned image reference but does not start that image |
-| PostProcessingService | One Deployment and one Service | No service-call or message contract | Scenario Manager currently uses a local placeholder instead of calling the workload |
+| EDS | None (the `experimentalDesignService` spec field is configuration only) | Availability request/reply and JetStream scenario-batch ingestion | The installation must run the EDS container itself; the Operator creates no EDS workload |
+| Translator | One two-container Deployment (translator + rootless BuildKit sidecar), one Service, and one configuration ConfigMap | JetStream translation requests and ready messages, digest and repository verification, and runner-Job start | The generated runner image is executed as a runner Job by the Scenario Manager, not by the Operator |
+| PostProcessingService | None (the `postProcessingService` spec field is configuration only) | No service-call or message contract | `PostProcessing` is a scenario state entered after runner completion; no component consumes it yet |
 
-The Operator waits for these workloads to be ready before moving the experiment to `InProgress`. An EDS image must therefore remain running after it publishes its initial batches; a one-shot process causes its Pod to stop being ready.
+The Operator waits for its provisioned workloads to be ready before moving the experiment to `InProgress`: both database endpoints must answer an availability probe and the Translator Deployment must have a ready replica.
 
 ## What every custom image receives
 
-The current API is `experiment.cbse.terministic.de/alpha3`. Each component image is selected in the corresponding part of `spec`:
+The current API is `experiment.cbse.terministic.de/alpha4`. Each component is selected in the corresponding part of `spec`:
 
 ```yaml
-apiVersion: experiment.cbse.terministic.de/alpha3
+apiVersion: experiment.cbse.terministic.de/alpha4
 kind: SimulationExperiment
 metadata:
   name: example-experiment
   namespace: simulations
 spec:
-  # Database fields are omitted here; they are still required by alpha3.
+  defaultServiceType: ClusterIP
+  # Exactly one of image or host must be set per database.
+  detailDatabase:
+    image: registry.example/scenario-detail-database@sha256:<digest>
+    dbname: simulation_db
+    user: dbuser
+    password: dbpassword
+    port: 5432
+  resultDatabase:
+    host: postgres.example
+    dbname: result_db
+    user: dbuser
+    password: dbpassword
+    port: 5432
   translator:
     image: registry.example/translator@sha256:<digest>
     repository: registry.example/generated-runners
     baseimage: registry.example/runner-base@sha256:<digest>
+    builderImage: registry.example/buildkit@sha256:<digest>
+    registryAuthSecretRef:
+      name: cbse-registry-auth
     port: 8080
-    serviceType: ClusterIP
   postProcessingService:
     image: registry.example/post-processing@sha256:<digest>
     port: 8080
-    serviceType: ClusterIP
   experimentalDesignService:
-    image: registry.example/eds@sha256:<digest>
     design: '{"method":"full-factorial"}'
+    image: registry.example/eds@sha256:<digest>
     port: 8080
-    serviceType: ClusterIP
+  # Optional: a full batch/v1 JobTemplateSpec for the runner Job.
+  # The Operator validates it; the Scenario Manager builds the effective Job.
+  # runner:
+  #   jobTemplate: { ... }
 ```
 
-The Operator injects `SIMULATIONPROJECTNAME` into all three containers. Its value is `metadata.name` from the `SimulationExperiment`.
+`spec.translator.registryAuthSecretRef.name` must equal `cbse-registry-auth`, the namespace-local Docker configuration Secret the Builder uses to pull and push. Most `spec` fields are immutable after creation (enforced by CEL validations); the intended update path is to delete and recreate the `SimulationExperiment`.
 
-The Translator additionally receives:
+The Operator injects the following into the Translator container it provisions:
 
 | Variable | Source |
 | --- | --- |
-| `REPOSITORY` | `spec.translator.repository` |
-| `BASEIMAGE` | `spec.translator.baseimage` |
+| `SIMULATIONPROJECTNAMESPACE` | Pod namespace (downward API) |
+| `SIMULATIONPROJECTNAME` | `metadata.name` from the `SimulationExperiment` (downward API) |
+| `SIMULATIONEXPERIMENTUID` | `metadata.uid` from the `SimulationExperiment` (downward API) |
+| `REPOSITORY` | `spec.translator.repository` (via the Translator ConfigMap) |
+| `BASEIMAGE` | `spec.translator.baseimage` (via the Translator ConfigMap) |
+| `NATS_URL`, `TRANSLATOR_STREAM`, `TRANSLATOR_REQUEST_SUBJECT`, `TRANSLATOR_READY_SUBJECT_TEMPLATE`, `TRANSLATOR_CONSUMER` | fixed `alpha4` values derived from the experiment's namespace, name, and UID |
 
-`command` and `args` can override an image's normal entrypoint for each component. Prefer an image-defined entrypoint for production use; overrides are most useful for controlled tests and migration.
+Image-based database containers additionally receive `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `SIMULATIONPROJECTNAME`. The `experimentalDesignService` and `postProcessingService` workloads are not provisioned by the Operator, so nothing is injected for them; an EDS must bring its own configuration (NATS URL, subjects) from wherever the installation deploys it.
 
-The current `alpha3` API does **not** provide arbitrary environment variables, Secret mounts, resource settings, health probes, or Pod-template customization for these three components. It also does not inject NATS connection details into EDS or Translator. A custom image must either work with installation-known settings or wait for a future explicit configuration boundary. Do not put credentials into an image, `command`, `args`, the `design` string, or other non-Secret fields.
-
-Setting `spec.experimentalDesignService.design` creates a ConfigMap containing an `experimentalDesign` key, but the current EDS Pod does not mount that ConfigMap. An EDS therefore cannot read this field today. Non-sensitive prototype settings can be expressed through component `args`; a generally configurable EDS needs an Operator/API enhancement that mounts or injects the design explicitly.
-
-The component Services expose the configured `port`, but the implemented EDS and Translator workflows communicate through NATS rather than those Services. PostProcessingService has a Service, but no HTTP or messaging API is defined yet.
+`command` and `args` can override an image's entrypoint for the Translator and the image-based databases; `port`, `serviceType`, and `nodePort` configure the provisioned Services; `spec.translator.builderResources` configures the BuildKit sidecar; and `spec.runner.jobTemplate` customizes the runner Job template. The API does not provide arbitrary environment variables or Secret mounts beyond the fixed set above. Do not put credentials into an image, `command`, `args`, the `design` string, or other non-Secret fields.
 
 ## How CBSE identifies an experiment
 
-The raw experiment name is stored in PostgreSQL and injected as `SIMULATIONPROJECTNAME`. For current NATS subjects, Scenario Manager converts the name to lowercase, keeps ASCII letters, digits, `-`, and `_`, and replaces every other character with `-`.
+The raw experiment name is stored in PostgreSQL, labeled onto owned workloads, and injected as `SIMULATIONPROJECTNAME`. The CRD requires `metadata.name` to be a lowercase DNS label of at most 63 characters, and the `alpha4` subject grammar never normalizes identifiers: the namespace and the project name appear in subjects exactly as written.
 
-For example, `example.v1` becomes `example-v1` in a subject. Because `alpha3` subjects do not contain the Kubernetes namespace, use an experiment name that is unique across the whole CBSE installation and already consists of lowercase letters, digits, and hyphens. This avoids both cross-namespace routing collisions and lossy normalization collisions.
+Every NATS subject has the fixed form `cbse.<namespace>.<project>.<domain>.<event>`, where `<namespace>` and `<project>` are each a single lowercase DNS label (no dots, 1–63 characters) and the remaining tokens are reserved names:
 
-Payload fields named `project` use the raw `SimulationExperiment` name. Subjects use the normalized token.
+| Subject | Transport | Purpose |
+| --- | --- | --- |
+| `cbse.<namespace>.<project>.eds.scenarios.available` | Core NATS request/reply | EDS availability handshake |
+| `cbse.<namespace>.<project>.eds.scenarios` | JetStream (stream `cbse_eds_scenarios`) | EDS scenario batches |
+| `cbse.<namespace>.<project>.trans.request` | JetStream (stream `cbse_translator`) | Scenario Manager translation requests to the Translator |
+| `cbse.<namespace>.<project>.trans.<scenario-id>.ready` | JetStream (stream `cbse_translator`) | Translator ready messages per scenario |
+
+For example, the experiment `example-experiment` in namespace `simulations` uses `cbse.simulations.example-experiment.trans.request`. Because the namespace is part of every subject, the same experiment name can exist in two namespaces without a routing collision.
+
+Payload fields named `project` carry the raw `SimulationExperiment` name. The wire payload retains that field for fixture compatibility, and a batch whose `project` does not exactly match the subject's project token is permanent poison. Use the subject's identity tokens, never a re-normalized version of the payload field.
 
 ## Designing an Experimental Design Service
 
@@ -110,14 +138,14 @@ The EDS should:
 4. Publish the complete batch to the subject returned by Scenario Manager and wait for a JetStream publish acknowledgement.
 5. Make retries safe and remain alive until Kubernetes terminates the Pod.
 
-The repository's [EDS mock](../test/mocks/eds/eds_mock.py) is executable protocol documentation. It is a test fixture, not a production template.
+The repository's [EDS mock](../test/mocks/eds/eds_mock.py) is executable protocol documentation. It is a test fixture, not a production template; its subject and stream settings are environment-configurable, and the smoke harness configures it for the `alpha4` subjects.
 
 ### 1. Announce availability
 
-Send a NATS request to the installation's availability subject. The Scenario Manager default is:
+Send a NATS request to the experiment's availability subject:
 
 ```text
-cbse.eds.scenarios.available
+cbse.<namespace>.<project>.eds.scenarios.available
 ```
 
 Request body:
@@ -130,22 +158,22 @@ Request body:
 }
 ```
 
-`batch_id` and `scenario_count` are informational in the current implementation. `project` is required when the default project-specific batch routing is used.
+`batch_id` and `scenario_count` are informational in the current implementation. `project` must equal the subject's project token.
 
-A successful response is:
+For an admitted (live, non-deleting, `InProgress`) experiment the response is:
 
 ```json
 {
   "status": "ready",
-  "batch_subject": "cbse.example-experiment.eds.scenarios"
+  "batch_subject": "cbse.<namespace>.<project>.eds.scenarios"
 }
 ```
 
-On failure, `status` is `error` and `reason` describes the rejection. Do not construct the batch subject independently; use the returned value so the EDS follows Scenario Manager configuration.
+On failure, `status` is `error` and `reason` describes the rejection; no `batch_subject` is returned. Do not construct the batch subject independently; use the returned value so the EDS follows Scenario Manager configuration.
 
 ### 2. Publish a scenario batch
 
-Publish the batch through JetStream to `batch_subject`:
+Publish the batch through JetStream to `batch_subject` (stream `cbse_eds_scenarios`):
 
 ```json
 {
@@ -178,56 +206,42 @@ Publish the batch through JetStream to `batch_subject`:
 
 | Field | Meaning |
 | --- | --- |
-| `batch_id` | EDS-defined trace identifier; currently not a database idempotency key |
-| `project` | Exact, raw `SimulationExperiment` name used to find the project row |
-| `scenarios` | Zero or more scenario definitions; the default maximum is 1,000 per message |
-| `priority` | Stored with the scenario; the current selector does not schedule by priority |
-| `number_of_reps` | Requested repetitions; stored now, not executed by the current runner placeholder |
+| `batch_id` | EDS-defined trace identifier; not a database idempotency key |
+| `project` | Exact, raw `SimulationExperiment` name; must match the subject's project token |
+| `scenarios` | Zero or more scenario definitions |
+| `priority` | Stored with the scenario; the selector does not schedule by priority |
+| `number_of_reps` | Requested repetitions; must be in `1..100000` or the whole batch is permanent poison, and is executed as the runner Job's completion count |
 | `recipe_info` | Arbitrary JSON consumed later by the user-defined Translator |
 | `confidence_metric` | Optional numeric target for future post-processing |
 
-Scenario Manager assigns each inserted row its database ID, initializes it in `Created`, and inserts the whole batch in one transaction. A database failure rolls back the whole batch and causes a negative acknowledgement so JetStream can redeliver it. Malformed or permanently invalid messages are acknowledged to prevent a poison-message loop.
+Scenario Manager assigns each inserted row its database ID, initializes it in `Created`, and inserts the whole batch in one transaction. A database failure rolls back the whole batch and negatively acknowledges the delivery so JetStream can redeliver it. Malformed JSON, an invalid subject or identity, a subject/payload mismatch, or an out-of-range `number_of_reps` is permanent poison: the delivery is acknowledged and no rows are inserted. A terminal experiment is acknowledged and discarded; an unavailable experiment or transient dependency failure is negatively acknowledged for redelivery.
 
-JetStream delivery is at least once. The current database schema does not deduplicate `batch_id`, so an EDS must not assume that a retry can never create duplicate scenarios. Use deterministic recipes and retain a stable batch ID for observability; if duplicates are unacceptable, wait for or contribute an explicit idempotency contract rather than querying or modifying the Core DB directly.
-
-If the batch message includes a NATS reply subject, Scenario Manager can return this processing summary:
-
-```json
-{
-  "status": "accepted",
-  "batch_id": "design-001",
-  "received": 2,
-  "inserted": 2,
-  "failed": 0
-}
-```
-
-The durable JetStream publish acknowledgement remains the transport-level confirmation that the broker accepted the message. A request/reply processing summary is optional and must be treated separately.
+JetStream delivery is at least once. The database schema does not deduplicate `batch_id`, so an EDS must not assume that a retry can never create duplicate scenarios. Use deterministic recipes and retain a stable batch ID for observability; if duplicates are unacceptable, wait for or contribute an explicit idempotency contract rather than querying or modifying the Core DB directly.
 
 ## Designing a Translator
 
 A Translator owns the domain-specific conversion from `recipe_info` into an executable simulation-runner image. Scenario Manager owns scenario selection, the durable translation claim, attempt numbers, retries, and state transitions.
 
-In the current prototype a Translator should be a long-running, per-experiment consumer. It should:
+An `alpha4` Translator should be a long-running, per-experiment consumer. It should:
 
-1. Read and validate `SIMULATIONPROJECTNAME`, `REPOSITORY`, `BASEIMAGE`, broker settings, and credentials at startup.
-2. Subscribe to the exact experiment request subject with a durable consumer name unique to the experiment.
+1. Read and validate `SIMULATIONPROJECTNAME`, `SIMULATIONPROJECTNAMESPACE`, `SIMULATIONEXPERIMENTUID`, `REPOSITORY`, `BASEIMAGE`, broker settings, and credentials at startup.
+2. Subscribe to the exact experiment request subject with the UID-specific durable consumer name the Operator injects.
 3. Strictly validate each request and treat `id` plus `translation_attempt` as the work identity.
 4. Generate or locate the runner image idempotently.
 5. Publish the ready message through JetStream and wait for its publish acknowledgement.
 6. Acknowledge the request only after the ready message is durably accepted.
 
-The repository's [Translator mock](../test/mocks/translator/translator_mock.py) demonstrates the current handshake. It returns synthetic image names and is not a secure image-building implementation.
+The repository's [reference Translator](../component-templates/translator/README.md) implements this framework for `alpha4`, including the BuildKit sidecar build+push seam. The repository's [Translator mock](../test/mocks/translator/translator_mock.py) is a test fixture that demonstrates the request/ready handshake with synthetic image names; it is not a secure image-building implementation.
 
 ### Request subject and payload
 
-Subscribe to:
+Subscribe to the exact request subject the Operator injects (`TRANSLATOR_REQUEST_SUBJECT`):
 
 ```text
-cbse.<normalized-project>.trans.request
+cbse.<namespace>.<project>.trans.request
 ```
 
-Scenario Manager publishes:
+Scenario Manager publishes on stream `cbse_translator`:
 
 ```json
 {
@@ -244,14 +258,14 @@ Scenario Manager publishes:
 
 `id` is the Scenario Manager's positive scenario ID. `translation_attempt` is a positive, monotonically increasing attempt for that scenario. `recipe_info` and `confidence_metric` are the values supplied by EDS.
 
-The Scenario Manager defaults to the `cbse_translator` stream. Consumer names are not supplied by `alpha3`; choose a deterministic name containing the normalized project token so two Translator deployments do not share work accidentally.
+The durable consumer is fixed by the Operator: `translator-<12-char-UID-prefix>` (injected as `TRANSLATOR_CONSUMER`), on stream `cbse_translator`, with explicit ACK policy, a two-minute `AckWait`, and a single in-flight delivery per Translator. Do not rename or reconfigure it; an existing durable with a mismatched configuration is an identity collision that the reference framework rejects without adopting it.
 
 ### Ready subject and payload
 
-After successful translation, publish to:
+After successful translation, publish to the subject for the scenario (the Operator injects the template `cbse.{namespace}.{project}.trans.{scenario_id}.ready`):
 
 ```text
-cbse.<normalized-project>.trans.<scenario-id>.ready
+cbse.<namespace>.<project>.trans.<scenario-id>.ready
 ```
 
 with exactly this JSON shape:
@@ -263,9 +277,9 @@ with exactly this JSON shape:
 }
 ```
 
-The ready decoder rejects unknown fields, trailing JSON, non-positive attempts, malformed subjects, and non-positive scenario IDs. `container_image` must be non-empty. The current `alpha3` code does not yet verify the image format or repository, but custom Translators should return an immutable OCI digest from `REPOSITORY`; tags make retries and audit trails ambiguous.
+The ready decoder rejects unknown fields, trailing JSON, non-positive attempts, malformed subjects, and non-positive scenario IDs. `container_image` must be non-empty. Scenario Manager verifies that the image is an immutable digest reference and that its repository exactly matches the live experiment's `spec.translator.repository`; a digest from another repository is permanent poison (acknowledged, not persisted, no Job).
 
-Scenario Manager applies a ready message only to the matching current attempt. An older attempt, a duplicate with the same image, a conflict after an image was already stored, or a message for a missing scenario is terminally acknowledged without overwriting newer state. A transient database error is negatively acknowledged for redelivery. An empty image fails the current attempt and may return the scenario to `Created` until the attempt limit is exhausted.
+Scenario Manager applies a ready message only to the matching current attempt: the guarded `Scheduled -> StartingRunners` transition stores the accepted digest and starts the runner-Job path. An older attempt, a duplicate, or a message for a missing scenario is terminally acknowledged without overwriting newer state. A transient database error is negatively acknowledged for redelivery. An empty image consumes the attempt through the recovery path: the scenario returns to `Created` until the shared attempt limit is exhausted, then to `Failed`.
 
 ### Make translation retry-safe
 
@@ -289,11 +303,11 @@ For malformed requests that cannot become valid through redelivery, log a creden
 
 ## Designing a PostProcessingService
 
-You can provide a PostProcessingService image in `alpha3`, and the Operator will run it as a Deployment, inject `SIMULATIONPROJECTNAME`, and expose its configured port through `<experiment-name>-postproc-svc`.
+You can provide a `postProcessingService` image in the `alpha4` spec, but the Operator does not provision a PostProcessingService workload and Scenario Manager does not call one. `PostProcessing` is a scenario state entered after the runner Job completes successfully; it is a boundary, not a service integration.
 
-There is no interoperable PostProcessingService API yet. Scenario Manager does not call this Service, does not send it a NATS message, and does not supply result-database connection details. The current selector contains a local, side-effect-free placeholder that always reports confidence reached; the normal workflow cannot reach it because no real runner completion path exists.
+There is no interoperable PostProcessingService API yet. Scenario Manager does not call a PostProcessingService, does not send it a NATS message, and does not supply result-database connection details for it.
 
-Consequently, a custom PostProcessingService can be made deployment-compatible now, but not CBSE-workflow-compatible. Do not invent an HTTP route or NATS subject and describe it as a CBSE contract. Until an explicit contract is added, design the domain calculation behind a narrow internal function so that its future transport adapter can be replaced without rewriting the calculation.
+Consequently, a custom PostProcessingService can be made deployment-compatible now (by the installation), but not CBSE-workflow-compatible. Do not invent an HTTP route or NATS subject and describe it as a CBSE contract. Until an explicit contract is added, design the domain calculation behind a narrow internal function so that its future transport adapter can be replaced without rewriting the calculation.
 
 A future contract needs to define at least:
 
@@ -309,7 +323,7 @@ Until those decisions are implemented, make the container self-contained, able t
 
 ## Understanding the current scenario lifecycle
 
-The implemented happy path currently ends before simulation execution:
+The implemented `alpha4` happy path runs a scenario from batch intake through executed repetitions:
 
 ```text
 EDS batch
@@ -317,17 +331,24 @@ EDS batch
    v
 Created --claim and publish--> Scheduled --matching Translator ready--> StartingRunners
                                                                            |
+                                                    runnerstart creates/confirms
+                                                    the deterministic runner Job
                                                                            v
-                                                                  InProcessing
-                                                                  (placeholder only;
-                                                                   no Job is created)
+                                                                  InProcessing --Job Complete--> PostProcessing
+                                                                  InProcessing --Job Failed/Collision/Forbidden--> Failed
 ```
 
-The Basic Scenario Selection Logic (BSSL) is one serial worker per Scenario Manager process. By default it checks immediately and then waits five seconds between iterations. It selects the globally lowest positive scenario ID in an actionable state; the stored `priority` does not currently affect selection.
+The Basic Scenario Selection Logic (BSSL) is one serial worker per Scenario Manager process. It checks immediately and then waits five seconds between iterations. It selects the globally lowest positive scenario ID in `Created`; the stored `priority` does not currently affect selection. Each iteration is recovery-first: it reclaims stale unpublished translation claims before discovering the next `Created` scenario.
 
-The full state vocabulary also contains `PostProcessing`, `Finished`, and `Failed`, but the current product has no runner completion path into `PostProcessing`. Its local post-processing placeholder would move a manually present `PostProcessing` row to `Finished`; it is scaffolding, not a service integration.
+The runner-start scheduler discovers `StartingRunners` scenarios in ascending ID order on a bounded, ordered worker pool and creates the deterministic runner Job `simrun-<UID-prefix>-s<scenario-id>-a<attempt>` (or confirms an existing one) from the Operator-validated runner template, the accepted runner digest, and the deterministic `simrunner-<UID-prefix>` runner ServiceAccount.
+
+The observation scheduler discovers `InProcessing` scenarios on a fixed five-second interval and observes the deterministic runner Job. On completion it records the computed repetition count in the scenario row and applies the guarded `InProcessing -> PostProcessing` transition; on Job failure, collision, or forbidden access it applies `InProcessing -> Failed`.
+
+The full state vocabulary also contains `Finished`, but the current product has no implemented transition into it. `PostProcessing` is a boundary: no component consumes it yet, and the selection loop treats it as a no-op.
 
 The durable state transitions are guarded so repeated workers, stale messages, and restarts do not blindly overwrite newer work. Component implementations should preserve that model: claim state before an external effect, use deterministic external identity, and verify ownership before adopting an existing object.
+
+When the experiment is deleted, the Scenario Manager's deletion cleanup deletes ownership-verified runner Jobs, deletes the per-experiment Translator consumer after ownership verification, and purges the experiment's Translator ready subjects; when an experiment enters a terminal failure, the terminal action moves its unfinished scenarios to `Failed`.
 
 ## Common design goals
 
@@ -349,7 +370,7 @@ Do not require Kubernetes API access unless it is the component's declared respo
 
 Document every setting's owner, source, format, default, and validation point. Validate the entire startup configuration before connecting to external systems. Fail with a descriptive error when a required setting is absent or malformed.
 
-Pass Secrets only to the component that needs them. Never place Secret values in logs, Kubernetes status, NATS messages, image metadata, or test artifacts. A missing configuration boundary in `alpha3` is a product limitation, not permission to bake credentials into an image.
+Pass Secrets only to the component that needs them. Never place Secret values in logs, Kubernetes status, NATS messages, image metadata, or test artifacts. A missing configuration boundary in `alpha4` is a product limitation, not permission to bake credentials into an image.
 
 ### Stable extension points
 
@@ -411,7 +432,7 @@ Before treating a custom component image as ready:
 
 - It has one clear responsibility and a self-contained entrypoint.
 - It validates its complete configuration before external work.
-- It uses `SIMULATIONPROJECTNAME` consistently and avoids subject collisions.
+- It uses `SIMULATIONPROJECTNAMESPACE` and `SIMULATIONPROJECTNAME` consistently and avoids subject collisions.
 - Its image is pinned by digest and supports restricted, non-root execution.
 - It never logs credentials and embeds them only when an active feature specification explicitly requires and documents a trusted-prototype exception.
 - Its external effects are safe under retry and process restart.
@@ -427,5 +448,6 @@ Before treating a custom component image as ready:
 - [Operator component provisioning](../experiment-operator/internal/controller/simulationexperiment_alpha4_controller.go)
 - [EDS wire types and acknowledgement behavior](../scenario-manager/internal/communication/communication.go)
 - [Translator wire types and acknowledgement behavior](../scenario-manager/internal/communication/communication.go)
+- [Namespace-aware subject grammar](../scenario-manager/internal/subject/subject.go)
 - [Translator durable state transitions](../scenario-manager/internal/ready/ready.go)
-- [Current lifecycle selector and placeholders](../scenario-manager/internal/selection/selection.go)
+- [Current lifecycle selector](../scenario-manager/internal/selection/selection.go)
