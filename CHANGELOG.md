@@ -50,6 +50,9 @@ this file without rework.
 
 ### Removed
 
+- Retired `experiment-operator/config/samples/` alpha1/alpha2-era sample manifests
+  (one describing a private database host address). The active API is `alpha4`-only;
+  curated samples can return with the first stable release if useful.
 - The retired `alpha2` and `alpha3` `SimulationExperiment` API versions are no
   longer active; `alpha4` is the only version served and stored. (Deletion of
   the retired source trees is tracked as a separate repository-hygiene step.)
