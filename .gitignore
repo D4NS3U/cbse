@@ -7,3 +7,4 @@ scenario-manager/.gocache/
 /.cache/
 __pycache__/
 .DS_Store
+/.pi/
