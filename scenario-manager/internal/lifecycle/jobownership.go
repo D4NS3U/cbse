@@ -29,8 +29,9 @@ import (
 // runnerJobListOptions returns the list options for runner Jobs belonging to
 // the experiment: the experiment namespace plus the reserved project and
 // experiment-UID labels. Label-based pre-filtering narrows the candidate set;
-// full ownership verification (deterministic name, all four labels, and the
-// controller owner reference) is applied to each candidate.
+// full ownership verification (deterministic name, all five labels, and the
+// controller owner reference) is applied to each candidate. The round rides
+// the new runner-round label, so the two-label pre-filter is unchanged.
 func runnerJobListOptions(exp *experimentalpha4.SimulationExperiment) []client.ListOption {
 	return []client.ListOption{
 		client.InNamespace(exp.Namespace),
@@ -51,9 +52,10 @@ func ListRunnerJobs(ctx context.Context, k8s client.Client, exp *experimentalpha
 
 // VerifyRunnerJob returns nil only when job is owned by the experiment per the
 // full ownership contract: experiment namespace, exact project and full-UID
-// labels, canonical positive-decimal scenario-id and translation-attempt labels
-// that reproduce the deterministic Job name, and the exact alpha4 controller
-// owner reference. A mismatch is an identity collision.
+// labels, canonical positive-decimal scenario-id, translation-attempt, and
+// runner-round labels that reproduce the deterministic Job name for the round,
+// and the exact alpha4 controller owner reference. A mismatch is an identity
+// collision.
 func VerifyRunnerJob(job *batchv1.Job, exp *experimentalpha4.SimulationExperiment) error {
 	return verifyJobOwnership(job, exp)
 }

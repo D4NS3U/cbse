@@ -117,7 +117,8 @@ func (s *Scheduler) reconcile(ctx context.Context, d dispatch) workerResult {
 		ExperimentName:     proj.ProjectName,
 		ScenarioID:         proj.ID,
 		TranslationAttempt: proj.TranslationAttempt,
-		NumberOfReps:       proj.NumberOfReps,
+		Round:              proj.Round,
+		NumberOfReps:       proj.RoundReps,
 		ContainerImage:     proj.ContainerImage,
 	})
 
@@ -141,7 +142,7 @@ func (s *Scheduler) reconcile(ctx context.Context, d dispatch) workerResult {
 				ScenarioID:    proj.ID,
 				Attempt:       proj.TranslationAttempt,
 				JobName:       res.JobName,
-				RequestedReps: proj.NumberOfReps,
+				RequestedReps: proj.RoundReps,
 				Outcome:       res.Outcome.String(),
 			})
 			return workerResult{scenarioID: d.scenarioID, action: actRemove}
@@ -175,7 +176,7 @@ func (s *Scheduler) reconcile(ctx context.Context, d dispatch) workerResult {
 				ScenarioID:    proj.ID,
 				Attempt:       proj.TranslationAttempt,
 				JobName:       res.JobName,
-				RequestedReps: proj.NumberOfReps,
+				RequestedReps: proj.RoundReps,
 				Outcome:       res.Outcome.String(),
 			})
 		}
@@ -205,7 +206,7 @@ func (s *Scheduler) reconcile(ctx context.Context, d dispatch) workerResult {
 				ScenarioID:    proj.ID,
 				Attempt:       proj.TranslationAttempt,
 				JobName:       res.JobName,
-				RequestedReps: proj.NumberOfReps,
+				RequestedReps: proj.RoundReps,
 				Outcome:       res.Outcome.String(),
 				Reason:        terminalReason(res.Err),
 			})

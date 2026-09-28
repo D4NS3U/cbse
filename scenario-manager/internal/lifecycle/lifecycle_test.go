@@ -75,19 +75,20 @@ func newExperiment(namespace, name string, uid string, phase string, withFinaliz
 }
 
 // verifiedJob returns a runner Job that passes the full ownership check for
-// exp with the given scenario id and attempt.
-func verifiedJob(exp *experimentalpha4.SimulationExperiment, scenarioID, attempt int) *batchv1.Job {
+// exp with the given scenario id, attempt, and round.
+func verifiedJob(exp *experimentalpha4.SimulationExperiment, scenarioID, attempt, round int) *batchv1.Job {
 	controller := true
 	block := false
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      RunnerJobName(exp.UID, scenarioID, attempt),
+			Name:      RunnerJobName(exp.UID, scenarioID, attempt, round),
 			Namespace: exp.Namespace,
 			Labels: map[string]string{
 				LabelProject:            exp.Name,
 				LabelExperimentUID:      string(exp.UID),
 				LabelScenarioID:         fmt.Sprintf("%d", scenarioID),
 				LabelTranslationAttempt: fmt.Sprintf("%d", attempt),
+				LabelRunnerRound:        fmt.Sprintf("%d", round),
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{

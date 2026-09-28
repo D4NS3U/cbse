@@ -87,9 +87,11 @@ func MarkScenarioInProcessing(ctx context.Context, db DB, scenarioID int) (bool,
 
 // MarkScenarioPostProcessing transitions a scenario from InProcessing to
 // PostProcessing. It is applied after a Complete Job recorded all requested
-// repetitions. A false result means the row was no longer InProcessing (stale
-// success or terminal action). This branch does not execute post-processing;
-// PostProcessing is a normal-execution boundary state.
+// repetitions of the current round. A false result means the row was no
+// longer InProcessing (stale success or terminal action). This branch does
+// not execute post-processing; PostProcessing is the evaluation-boundary
+// state from which the scenario either finishes (guarded Finished) or claims
+// a new runner round (guarded StartingRunners round-claim).
 func MarkScenarioPostProcessing(ctx context.Context, db DB, scenarioID int) (bool, error) {
 	if scenarioID <= 0 {
 		return false, errPositiveID
@@ -140,48 +142,79 @@ func MarkScenarioFailedFrom(ctx context.Context, db DB, scenarioID int, fromStat
 	return rows > 0, nil
 }
 
-// UpdateScenarioComputedRepsMonotonic atomically sets number_of_computed_reps
-// to LEAST(number_of_reps, GREATEST(number_of_computed_reps, count)) while
-// guarding scenario ID and state InProcessing. The LEAST clamp guarantees the
-// value never exceeds number_of_reps even if a caller supplies a count at the
-// boundary; the adapter validates completedIndexes against 0..number_of_reps-1
-// before calling. It returns the resulting computed-reps value and whether a
-// row matched. A false match means the row was no longer InProcessing (stale
-// success or terminal action); the caller does not apply a further transition.
-func UpdateScenarioComputedRepsMonotonic(ctx context.Context, db DB, scenarioID, count int) (int, bool, error) {
+// UpdateScenarioComputedRepsForRound is the round-scoped computed-reps update.
+// It maintains two bookkeeping columns in one guarded single-row update:
+//
+//   - round_computed_reps (the current round's completed reps) becomes
+//     LEAST(round_reps, GREATEST(round_computed_reps, count)): monotone within
+//     the round, clamped to the round's requested count.
+//   - number_of_computed_reps (the total across all rounds) accumulates as
+//     GREATEST(total, total - priorRound + newRound), where priorRound is the
+//     pre-update round_computed_reps and newRound is the post-update value:
+//     each update adds exactly the round's newly completed reps to the running
+//     total, and the GREATEST keeps the total monotone under redelivered or
+//     out-of-order counts. The single-round equality pin holds by
+//     construction: when round 1 completes, round_computed_reps == round_reps
+//     == number_of_reps, so the total equals number_of_reps.
+//
+// The update is guarded by scenario ID, state InProcessing, and the requested
+// runner round (only the current round's row may be updated). The adapter
+// validates completedIndexes against 0..round_reps-1 before calling. It
+// returns the resulting cross-round total and whether a row matched. A false
+// match means the row was no longer InProcessing in that round (stale success
+// or terminal action); the caller does not apply a further transition.
+//
+// SQL note: the total expression is listed before the round-column update so
+// it evaluates against the original row values (the old round_computed_reps);
+// the round-column expression repeats the same pure function of the old row,
+// so the statement is correct regardless of whether the database re-evaluates
+// later SET expressions against already-updated columns.
+func UpdateScenarioComputedRepsForRound(ctx context.Context, db DB, scenarioID, round, roundCount int) (int, bool, error) {
 	if scenarioID <= 0 {
 		return 0, false, errPositiveID
 	}
-	if count < 0 {
+	if round < 1 {
+		return 0, false, fmt.Errorf("runner round must be positive")
+	}
+	if roundCount < 0 {
 		return 0, false, fmt.Errorf("computed reps count must not be negative")
 	}
 	query := fmt.Sprintf(`
 		UPDATE %s
-		SET number_of_computed_reps = LEAST(number_of_reps, GREATEST(number_of_computed_reps, $2))
-		WHERE id = $1 AND state = $3
+		SET number_of_computed_reps = GREATEST(
+				number_of_computed_reps,
+				number_of_computed_reps
+					+ LEAST(round_reps, GREATEST(round_computed_reps, $2))
+					- round_computed_reps),
+			round_computed_reps = LEAST(round_reps, GREATEST(round_computed_reps, $2))
+		WHERE id = $1 AND state = $3 AND runner_round = $4
 		RETURNING number_of_computed_reps`,
 		ScenarioStatusTable())
-	var updated int
-	err := db.QueryRowContext(ctx, query, scenarioID, count, ScenarioStateInProcessing).Scan(&updated)
+	var total int
+	err := db.QueryRowContext(ctx, query, scenarioID, roundCount, ScenarioStateInProcessing, round).Scan(&total)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, false, nil
 		}
-		return 0, false, fmt.Errorf("update computed reps for scenario %d: %w", scenarioID, err)
+		return 0, false, fmt.Errorf("update computed reps for scenario %d round %d: %w", scenarioID, round, err)
 	}
-	return updated, true, nil
+	return total, true, nil
 }
 
 // RunnerStartProjection is the DB projection the runner-start reconciler loads
 // for one StartingRunners scenario. It carries the persisted runner digest
 // (container_image), the requested and computed repetition counts, the
-// translation attempt, and the static project identity needed to read the live
+// current runner round and the round's requested count (round_reps is the
+// Job's completion count; round 1 equals number_of_reps), the translation
+// attempt, and the static project identity needed to read the live
 // experiment from Kubernetes.
 type RunnerStartProjection struct {
 	ID                   int
 	TranslationAttempt   int
 	NumberOfReps         int
 	NumberOfComputedReps int
+	Round                int
+	RoundReps            int
 	ContainerImage       string
 	ProjectNamespace     string
 	ProjectName          string
@@ -197,6 +230,7 @@ func LoadRunnerStartProjection(ctx context.Context, db DB, scenarioID int) (*Run
 	}
 	query := fmt.Sprintf(`
 		SELECT s.id, s.translation_attempts, s.number_of_reps, s.number_of_computed_reps,
+			s.runner_round, s.round_reps,
 			COALESCE(s.container_image, ''), p.project_namespace, p.project_name
 		FROM %s s
 		JOIN %s p ON p.id = s.project_id
@@ -206,6 +240,7 @@ func LoadRunnerStartProjection(ctx context.Context, db DB, scenarioID int) (*Run
 	var containerImage sql.NullString
 	err := db.QueryRowContext(ctx, query, scenarioID, ScenarioStateStartingRunners).Scan(
 		&pr.ID, &pr.TranslationAttempt, &pr.NumberOfReps, &pr.NumberOfComputedReps,
+		&pr.Round, &pr.RoundReps,
 		&containerImage, &pr.ProjectNamespace, &pr.ProjectName,
 	)
 	if err != nil {
@@ -219,14 +254,18 @@ func LoadRunnerStartProjection(ctx context.Context, db DB, scenarioID int) (*Run
 }
 
 // ObservationProjection is the DB projection the observation worker loads for
-// one InProcessing scenario. It carries the requested and computed repetition
-// counts, the translation attempt, and the static project identity needed to
-// read the live experiment and the deterministic Job from Kubernetes.
+// one InProcessing scenario. It carries the original and current round's
+// requested repetition counts, the computed repetition total, the translation
+// attempt, the current runner round (the Job name is derived from it), and the
+// static project identity needed to read the live experiment and the
+// deterministic Job from Kubernetes.
 type ObservationProjection struct {
 	ID                   int
 	TranslationAttempt   int
 	NumberOfReps         int
 	NumberOfComputedReps int
+	Round                int
+	RoundReps            int
 	ProjectNamespace     string
 	ProjectName          string
 }
@@ -241,6 +280,7 @@ func LoadObservationProjection(ctx context.Context, db DB, scenarioID int) (*Obs
 	}
 	query := fmt.Sprintf(`
 		SELECT s.id, s.translation_attempts, s.number_of_reps, s.number_of_computed_reps,
+			s.runner_round, s.round_reps,
 			p.project_namespace, p.project_name
 		FROM %s s
 		JOIN %s p ON p.id = s.project_id
@@ -249,6 +289,7 @@ func LoadObservationProjection(ctx context.Context, db DB, scenarioID int) (*Obs
 	var pr ObservationProjection
 	err := db.QueryRowContext(ctx, query, scenarioID, ScenarioStateInProcessing).Scan(
 		&pr.ID, &pr.TranslationAttempt, &pr.NumberOfReps, &pr.NumberOfComputedReps,
+		&pr.Round, &pr.RoundReps,
 		&pr.ProjectNamespace, &pr.ProjectName,
 	)
 	if err != nil {

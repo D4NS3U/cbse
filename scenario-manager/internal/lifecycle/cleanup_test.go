@@ -111,8 +111,8 @@ func TestRunDeletionCleanupConsumerCollisionRetainsFinalizer(t *testing.T) {
 
 func TestRunDeletionCleanupJobStillPresentFailsEarly(t *testing.T) {
 	exp := newExperiment("ns", "proj", "uid-abc123", PhaseInProgress, true, true)
-	verified := verifiedJob(exp, 5, 1)
-	collision := verifiedJob(exp, 6, 2)
+	verified := verifiedJob(exp, 5, 1, 1)
+	collision := verifiedJob(exp, 6, 2, 1)
 	collision.OwnerReferences[0].UID = "someone-else"
 	k8s := fakeK8s(t, exp, verified, collision)
 	store := &fakeStore{}

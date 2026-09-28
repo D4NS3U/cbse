@@ -41,10 +41,14 @@ func newExperiment(uid string, tmpl *batchv1.JobTemplateSpec) *experimentalpha4.
 
 // requireDefaultTemplateShape asserts the SM-controlled fields that the default
 // (no custom template) Job must carry.
-func requireDefaultTemplateShape(t *testing.T, job *batchv1.Job, exp *experimentalpha4.SimulationExperiment, scenarioID, attempt, reps int) {
+func requireDefaultTemplateShape(t *testing.T, job *batchv1.Job, exp *experimentalpha4.SimulationExperiment, scenarioID, attempt, round, reps int) {
 	t.Helper()
 
+	// Round 1 keeps today's exact byte-identical name; rounds >= 2 append -r<round>.
 	wantName := "simrun-" + nats.UIDPrefix(string(exp.UID)) + "-s" + strconv.Itoa(scenarioID) + "-a" + strconv.Itoa(attempt)
+	if round > 1 {
+		wantName += "-r" + strconv.Itoa(round)
+	}
 	if job.Name != wantName {
 		t.Fatalf("Job name = %q, want %q", job.Name, wantName)
 	}
@@ -97,6 +101,7 @@ func requireDefaultTemplateShape(t *testing.T, job *batchv1.Job, exp *experiment
 		"experiment.cbse.terministic.de/experiment-uid":      string(exp.UID),
 		"experiment.cbse.terministic.de/scenario-id":         strconv.Itoa(scenarioID),
 		"experiment.cbse.terministic.de/translation-attempt": strconv.Itoa(attempt),
+		"experiment.cbse.terministic.de/runner-round":        strconv.Itoa(round),
 	}
 	for k, v := range wantLabels {
 		if got := job.Labels[k]; got != v {
@@ -159,16 +164,78 @@ func requireContainerSecurity(t *testing.T, c *corev1.Container) {
 
 func TestBuildDefaultTemplate(t *testing.T) {
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
-	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 42, TranslationAttempt: 1, NumberOfReps: 7, ContainerImage: validDigest})
+	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 42, TranslationAttempt: 1, Round: 1, NumberOfReps: 7, ContainerImage: validDigest})
 	if err != nil {
 		t.Fatalf("Build default template: %v", err)
 	}
-	requireDefaultTemplateShape(t, job, exp, 42, 1, 7)
+	requireDefaultTemplateShape(t, job, exp, 42, 1, 1, 7)
+}
+
+// TestBuildRoundOneNameByteIdentical is the round-1 regression pin: a round-1
+// Job name must equal today's exact single-round format
+// simrun-<uid12>-s<scenario-id>-a<attempt> byte for byte, with the runner-round
+// label present as "1".
+func TestBuildRoundOneNameByteIdentical(t *testing.T) {
+	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
+	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 42, TranslationAttempt: 3, Round: 1, NumberOfReps: 5, ContainerImage: validDigest})
+	if err != nil {
+		t.Fatalf("Build round 1: %v", err)
+	}
+	want := "simrun-1234abcd5678-s42-a3"
+	if job.Name != want {
+		t.Fatalf("round-1 Job name = %q; want %q (byte-identical single-round format)", job.Name, want)
+	}
+	if got := job.Labels["experiment.cbse.terministic.de/runner-round"]; got != "1" {
+		t.Fatalf("round-1 runner-round label = %q; want \"1\"", got)
+	}
+	if got := job.Spec.Template.Labels["experiment.cbse.terministic.de/runner-round"]; got != "1" {
+		t.Fatalf("round-1 Pod runner-round label = %q; want \"1\"", got)
+	}
+}
+
+// TestBuildRoundTwoNameAndLabel proves the round >= 2 naming: the -r<round>
+// suffix appears only from round 2 on, and the runner-round label carries the
+// round on both the Job and the Pod template.
+func TestBuildRoundTwoNameAndLabel(t *testing.T) {
+	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
+	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 42, TranslationAttempt: 3, Round: 2, NumberOfReps: 5, ContainerImage: validDigest})
+	if err != nil {
+		t.Fatalf("Build round 2: %v", err)
+	}
+	want := "simrun-1234abcd5678-s42-a3-r2"
+	if job.Name != want {
+		t.Fatalf("round-2 Job name = %q; want %q", job.Name, want)
+	}
+	const roundLabel = "experiment.cbse.terministic.de/runner-round"
+	if got := job.Labels[roundLabel]; got != "2" {
+		t.Fatalf("round-2 Job runner-round label = %q; want \"2\"", got)
+	}
+	if got := job.Spec.Template.Labels[roundLabel]; got != "2" {
+		t.Fatalf("round-2 Pod runner-round label = %q; want \"2\"", got)
+	}
+	// Round-1 and round-2 names for the same scenario/attempt never collide.
+	j1, err := Build(BuildRequest{Experiment: exp, ScenarioID: 42, TranslationAttempt: 3, Round: 1, NumberOfReps: 5, ContainerImage: validDigest})
+	if err != nil {
+		t.Fatalf("Build round 1: %v", err)
+	}
+	if j1.Name == job.Name {
+		t.Fatalf("round-1 and round-2 Job names collide: %q", job.Name)
+	}
+}
+
+// TestBuildRejectsRoundOutOfRange proves the round input validation.
+func TestBuildRejectsRoundOutOfRange(t *testing.T) {
+	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
+	for _, round := range []int{0, -1} {
+		if _, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, Round: round, NumberOfReps: 1, ContainerImage: validDigest}); err == nil {
+			t.Fatalf("round %d: expected error, got nil", round)
+		}
+	}
 }
 
 func TestBuildMaxValidReps(t *testing.T) {
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
-	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, NumberOfReps: 100000, ContainerImage: validDigest})
+	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, Round: 1, NumberOfReps: 100000, ContainerImage: validDigest})
 	if err != nil {
 		t.Fatalf("Build 100000 reps: %v", err)
 	}
@@ -181,7 +248,7 @@ func TestBuildRejectsRepsOutOfRange(t *testing.T) {
 	cases := []int{0, -1, 100001, 1_000_000}
 	for _, reps := range cases {
 		exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
-		_, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, NumberOfReps: reps, ContainerImage: validDigest})
+		_, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, Round: 1, NumberOfReps: reps, ContainerImage: validDigest})
 		if err == nil {
 			t.Fatalf("reps %d: expected error, got nil", reps)
 		}
@@ -190,14 +257,14 @@ func TestBuildRejectsRepsOutOfRange(t *testing.T) {
 
 func TestBuildRejectsNonDigestImage(t *testing.T) {
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
-	_, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: "registry.example.com/runner:latest"})
+	_, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: "registry.example.com/runner:latest"})
 	if err == nil {
 		t.Fatalf("non-digest image: expected error, got nil")
 	}
 }
 
 func TestBuildRejectsNilExperiment(t *testing.T) {
-	if _, err := Build(BuildRequest{ScenarioID: 1, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: validDigest}); err == nil {
+	if _, err := Build(BuildRequest{ScenarioID: 1, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: validDigest}); err == nil {
 		t.Fatal("nil experiment: expected error")
 	}
 }
@@ -205,8 +272,8 @@ func TestBuildRejectsNilExperiment(t *testing.T) {
 func TestBuildRejectsBadScenarioAndAttempt(t *testing.T) {
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
 	for _, req := range []BuildRequest{
-		{Experiment: exp, ScenarioID: 0, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: validDigest},
-		{Experiment: exp, ScenarioID: 1, TranslationAttempt: 0, NumberOfReps: 1, ContainerImage: validDigest},
+		{Experiment: exp, ScenarioID: 0, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: validDigest},
+		{Experiment: exp, ScenarioID: 1, TranslationAttempt: 0, Round: 1, NumberOfReps: 1, ContainerImage: validDigest},
 	} {
 		if _, err := Build(req); err == nil {
 			t.Fatalf("ScenarioID=%d TranslationAttempt=%d: expected error", req.ScenarioID, req.TranslationAttempt)
@@ -262,7 +329,7 @@ func TestBuildCustomTemplateMergesUserFields(t *testing.T) {
 	}
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", tmpl)
 
-	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 9, TranslationAttempt: 2, NumberOfReps: 3, ContainerImage: validDigest})
+	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 9, TranslationAttempt: 2, Round: 1, NumberOfReps: 3, ContainerImage: validDigest})
 	if err != nil {
 		t.Fatalf("Build custom template: %v", err)
 	}
@@ -279,6 +346,7 @@ func TestBuildCustomTemplateMergesUserFields(t *testing.T) {
 		"experiment.cbse.terministic.de/experiment-uid":      string(exp.UID),
 		"experiment.cbse.terministic.de/scenario-id":         "9",
 		"experiment.cbse.terministic.de/translation-attempt": "2",
+		"experiment.cbse.terministic.de/runner-round":        "1",
 	} {
 		if got := job.Labels[k]; got != v {
 			t.Fatalf("Job reserved label %s = %q, want %q", k, got, v)
@@ -364,7 +432,7 @@ func TestBuildCustomTemplateRejectsMissingRunner(t *testing.T) {
 		}},
 	}
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", tmpl)
-	if _, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: validDigest}); err == nil {
+	if _, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: validDigest}); err == nil {
 		t.Fatal("missing runner container: expected error")
 	}
 }
@@ -381,7 +449,7 @@ func TestBuildCustomTemplateRejectsDuplicateRunner(t *testing.T) {
 		}},
 	}
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", tmpl)
-	if _, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: validDigest}); err == nil {
+	if _, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: validDigest}); err == nil {
 		t.Fatal("duplicate runner container: expected error")
 	}
 }
@@ -396,7 +464,7 @@ func TestBuildDoesNotMutateExperiment(t *testing.T) {
 		}},
 	}
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", tmpl)
-	if _, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: validDigest}); err != nil {
+	if _, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: validDigest}); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	// The CR's template runner container must still have an empty image.
@@ -411,9 +479,9 @@ func TestBuildDoesNotMutateExperiment(t *testing.T) {
 
 func TestBuildDeterministicNameAndSA(t *testing.T) {
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
-	j1, _ := Build(BuildRequest{Experiment: exp, ScenarioID: 5, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: validDigest})
+	j1, _ := Build(BuildRequest{Experiment: exp, ScenarioID: 5, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: validDigest})
 	exp2 := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", nil)
-	j2, _ := Build(BuildRequest{Experiment: exp2, ScenarioID: 5, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: validDigest})
+	j2, _ := Build(BuildRequest{Experiment: exp2, ScenarioID: 5, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: validDigest})
 	if j1.Name != j2.Name || j1.Spec.Template.Spec.ServiceAccountName != j2.Spec.Template.Spec.ServiceAccountName {
 		t.Fatalf("name/SA not deterministic across equal UIDs: %q/%q vs %q/%q",
 			j1.Name, j1.Spec.Template.Spec.ServiceAccountName, j2.Name, j2.Spec.Template.Spec.ServiceAccountName)
@@ -433,7 +501,7 @@ func TestBuildImagePullSecretsSortsUnordered(t *testing.T) {
 		}},
 	}
 	exp := newExperiment("1234abcd-5678-4321-abcd-9999ccccdddd", tmpl)
-	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, NumberOfReps: 1, ContainerImage: validDigest})
+	job, err := Build(BuildRequest{Experiment: exp, ScenarioID: 1, TranslationAttempt: 1, Round: 1, NumberOfReps: 1, ContainerImage: validDigest})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}

@@ -24,9 +24,11 @@ import (
 // ScenarioIntakeRecord is the per-scenario subset the EDS batch handler maps
 // from a transport-neutral communication.ScenarioRecord before insertion. It
 // is restricted to the columns the EDS supplies; the remaining scenario_status
-// columns take their schema defaults (state=Created,
-// number_of_computed_reps=0, translation_attempts=0, container_image=NULL,
-// translation_*_at=NULL).
+// columns take their schema defaults (state=Created, runner_round=1,
+// number_of_computed_reps=0, round_computed_reps=0, translation_attempts=0,
+// evaluation_attempts=0, container_image=NULL, translation_*_at=NULL,
+// evaluation_*_at=NULL). round_reps is inserted explicitly as the round-1
+// value: number_of_reps, so every later round reads a single round_reps column.
 type ScenarioIntakeRecord struct {
 	Priority         int
 	NumberOfReps     int
@@ -63,18 +65,22 @@ func InsertScenarioBatch(ctx context.Context, db DB, namespace, project string, 
 
 	table := ScenarioStatusTable()
 	// A single multi-row INSERT keeps the batch atomic. The schema defaults
-	// supply state, number_of_computed_reps, translation_attempts, the two
-	// publication timestamps, and container_image.
+	// supply state, number_of_computed_reps, round_computed_reps,
+	// translation_attempts, evaluation_attempts, the two translation
+	// publication timestamps, the two evaluation publication timestamps,
+	// runner_round (round 1), and container_image. round_reps is the only
+	// round column the intake supplies: the round-1 requested count equals
+	// number_of_reps.
 	values := make([]string, 0, len(records))
-	args := make([]interface{}, 0, len(records)*6)
+	args := make([]interface{}, 0, len(records)*7)
 	placeholder := 1
 	for _, r := range records {
-		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)", placeholder, placeholder+1, placeholder+2, placeholder+3, placeholder+4, placeholder+5))
-		args = append(args, projectID, ScenarioStateCreated, r.Priority, r.NumberOfReps, r.RecipeInfo, r.ConfidenceMetric)
-		placeholder += 6
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)", placeholder, placeholder+1, placeholder+2, placeholder+3, placeholder+4, placeholder+5, placeholder+6))
+		args = append(args, projectID, ScenarioStateCreated, r.Priority, r.NumberOfReps, r.NumberOfReps, r.RecipeInfo, r.ConfidenceMetric)
+		placeholder += 7
 	}
 	query := fmt.Sprintf(`
-		INSERT INTO %s (project_id, state, priority, number_of_reps, recipe_info, confidence_metric)
+		INSERT INTO %s (project_id, state, priority, number_of_reps, round_reps, recipe_info, confidence_metric)
 		VALUES %s`,
 		table, strings.Join(values, ", "))
 

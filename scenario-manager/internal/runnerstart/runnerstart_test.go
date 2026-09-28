@@ -64,6 +64,7 @@ func newFakeStore(ids ...int) *fakeStore {
 		f.starting[id] = struct{}{}
 		f.projections[id] = &Projection{
 			ID: id, TranslationAttempt: 1, NumberOfReps: 4,
+			Round: 1, RoundReps: 4,
 			ContainerImage:   "reg.example.com/runner@sha256:" + repeat("a", 64),
 			ProjectNamespace: "ns-x", ProjectName: "exp-x",
 		}
@@ -105,6 +106,7 @@ func (f *fakeStore) LoadProjection(ctx context.Context, scenarioID int) (*Projec
 	p := f.projections[scenarioID]
 	if p == nil {
 		return &Projection{ID: scenarioID, TranslationAttempt: 1, NumberOfReps: 4,
+			Round: 1, RoundReps: 4,
 			ContainerImage:   "reg.example.com/runner@sha256:" + repeat("a", 64),
 			ProjectNamespace: "ns-x", ProjectName: "exp-x"}, nil
 	}
@@ -181,6 +183,7 @@ func (f *fakeStore) addStarting(id int) {
 	f.starting[id] = struct{}{}
 	if f.projections[id] == nil {
 		f.projections[id] = &Projection{ID: id, TranslationAttempt: 1, NumberOfReps: 4,
+			Round: 1, RoundReps: 4,
 			ContainerImage:   "reg.example.com/runner@sha256:" + repeat("a", 64),
 			ProjectNamespace: "ns-x", ProjectName: "exp-x"}
 	}
@@ -902,6 +905,7 @@ func TestRunnerStartLogsCreationRecord(t *testing.T) {
 	store := newFakeStore(11)
 	store.projections[11] = &Projection{
 		ID: 11, TranslationAttempt: 3, NumberOfReps: 8,
+		Round: 1, RoundReps: 8,
 		ContainerImage:   "reg.example.com/runner@sha256:" + repeat("a", 64),
 		ProjectNamespace: "team-a", ProjectName: "beam-exp",
 	}
@@ -1084,5 +1088,63 @@ func TestRunnerStartLogsExactlyOnceOnTransientRetry(t *testing.T) {
 	}
 	if got[0].JobName != "job-s7" {
 		t.Errorf("jobName = %q", got[0].JobName)
+	}
+}
+
+// TestRunnerStartRoundTwoStartCarriesRoundAndRoundReps proves the round-aware
+// StartingRunners workflow: the adapter request carries the scenario's
+// runner_round and the round's requested count (round_reps) as the Job
+// completion count, and the creation eventlog record carries the round's
+// requested count and the round Job name.
+func TestRunnerStartRoundTwoStartCarriesRoundAndRoundReps(t *testing.T) {
+	store := newFakeStore(21)
+	store.projections[21] = &Projection{
+		ID: 21, TranslationAttempt: 1, NumberOfReps: 4,
+		Round: 2, RoundReps: 5,
+		ContainerImage:   "reg.example.com/runner@sha256:" + repeat("a", 64),
+		ProjectNamespace: "team-b", ProjectName: "loop-exp",
+	}
+	adapter := newFakeAdapter()
+	adapter.setOutcome(21, scheduler.RunnerStartResult{
+		Outcome:       scheduler.RunnerStartCreated,
+		JobName:       "simrun-abcdef1234-s21-a1-r2",
+		CreatedJobUID: "uid-s21-r2",
+	})
+	rec := &eventlog.Recorder{}
+	s := startSchedulerWithLogger(t, store, adapter, 1, rec)
+	defer s.Shutdown(context.Background())
+
+	poll(t, func() bool { return !store.isStarting(21) }, "scenario 21 leaves StartingRunners")
+	poll(t, func() bool { return len(rec.Records()) == 1 }, "one creation record")
+
+	// The adapter request carried round 2 and the round's completion count.
+	adapter.mu.Lock()
+	var req *scheduler.RunnerStartRequest
+	for i := range adapter.startCalls {
+		if adapter.startCalls[i].req.ScenarioID == 21 {
+			req = &adapter.startCalls[i].req
+		}
+	}
+	adapter.mu.Unlock()
+	if req == nil {
+		t.Fatal("no Start request recorded for scenario 21")
+	}
+	if req.Round != 2 {
+		t.Fatalf("request.Round = %d; want 2 (scenario runner_round)", req.Round)
+	}
+	if req.NumberOfReps != 5 {
+		t.Fatalf("request.NumberOfReps = %d; want 5 (round_reps, the Job completion count)", req.NumberOfReps)
+	}
+
+	// The creation record carries the round's requested count and Job name.
+	got := rec.Records()
+	if got[0].Event != eventlog.EventCreate {
+		t.Fatalf("event = %s; want create", got[0].Event)
+	}
+	if got[0].RequestedReps != 5 {
+		t.Fatalf("record RequestedReps = %d; want 5 (round_reps)", got[0].RequestedReps)
+	}
+	if got[0].JobName != "simrun-abcdef1234-s21-a1-r2" {
+		t.Fatalf("record JobName = %q; want the round-2 Job name", got[0].JobName)
 	}
 }

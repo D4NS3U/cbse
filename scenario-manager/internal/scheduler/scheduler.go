@@ -30,16 +30,23 @@ import (
 
 // RunnerStartRequest is the resource-neutral input for starting one scenario
 // attempt's runner Job. Core orchestration loads and validates the runner-start
-// projection (reps in 1..100000 and zero computed reps) before constructing this
-// request. The adapter fetches the live experiment to obtain its current UID,
-// derives the deterministic Job name, and performs all Kubernetes work; the UID
-// is never loaded from Core DB.
+// projection (round reps in 1..100000) before constructing this request. The
+// adapter fetches the live experiment to obtain its current UID, derives the
+// deterministic Job name, and performs all Kubernetes work; the UID is never
+// loaded from Core DB.
 type RunnerStartRequest struct {
 	Namespace          string
 	ExperimentName     string
 	ScenarioID         int
 	TranslationAttempt int
-	NumberOfReps       int
+	// NumberOfReps is the current round's requested repetition count
+	// (round_reps); it is the Job's completion count.
+	NumberOfReps int
+	// Round is the scenario's current runner round (>= 1). Round 1 is the
+	// original single-round fleet and keeps the byte-identical Job name with
+	// no suffix; rounds >= 2 carry the -r<round> name suffix so each round's
+	// Job name is distinct from every earlier round's.
+	Round int
 	// ContainerImage is the persisted runner digest from the runner-start
 	// projection. The adapter revalidates it and requires its normalized
 	// repository to equal the live experiment's spec.translator.repository.
@@ -170,7 +177,14 @@ type ObservationRequest struct {
 	ExperimentName     string
 	ScenarioID         int
 	TranslationAttempt int
-	NumberOfReps       int
+	// NumberOfReps is the current round's requested repetition count
+	// (round_reps); it bounds the Job's completed-index range.
+	NumberOfReps int
+	// Round is the scenario's current runner round (>= 1). Round 1 is the
+	// original single-round fleet and keeps the byte-identical Job name with
+	// no suffix; rounds >= 2 carry the -r<round> name suffix so each round's
+	// Job name is distinct from every earlier round's.
+	Round int
 }
 
 // ObservationOutcome classifies the result of an observation poll.

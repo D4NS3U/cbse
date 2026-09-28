@@ -46,12 +46,15 @@ const FinalizerName = "scenario-manager.cbse.terministic.de/cleanup"
 
 // Reserved identity labels carried by every Operator- and SM-managed Pod
 // template. The runner Job ownership check requires the exact project,
-// experiment-UID, scenario-id, and translation-attempt label values.
+// experiment-UID, scenario-id, translation-attempt, and runner-round label
+// values. The runner-round label is always set ("1" for the original
+// single-round fleet) so every round's Job is individually verifiable.
 const (
 	LabelProject            = "experiment.cbse.terministic.de/project"
 	LabelExperimentUID      = "experiment.cbse.terministic.de/experiment-uid"
 	LabelScenarioID         = "experiment.cbse.terministic.de/scenario-id"
 	LabelTranslationAttempt = "experiment.cbse.terministic.de/translation-attempt"
+	LabelRunnerRound        = "experiment.cbse.terministic.de/runner-round"
 )
 
 // Alpha4 experiment phase values observed on SimulationExperiment.status.phase.
@@ -81,13 +84,19 @@ func uidPrefix(uid string) string {
 	return stripped
 }
 
-// RunnerJobName returns the deterministic runner Job name
-// simrun-<12-char-UID-prefix>-s<scenario-id>-a<attempt> for the given experiment
-// UID, scenario id, and translation attempt. The UID prefix follows the same
-// lowercase, hyphen-stripped, 12-character rule as the Translator durable
-// consumer name, so the Job name is stable across SM replicas and restarts.
-func RunnerJobName(uid types.UID, scenarioID, attempt int) string {
-	return fmt.Sprintf("simrun-%s-s%d-a%d", uidPrefix(string(uid)), scenarioID, attempt)
+// RunnerJobName returns the deterministic runner Job name for the given
+// experiment UID, scenario id, translation attempt, and runner round. Round 1
+// keeps the historical exact format simrun-<12-char-UID-prefix>-s<scenario-id>-a<attempt>
+// (byte-identical to the pre-round single-round name); rounds >= 2 append the
+// -r<round> suffix so every round's Job has a name that never collides with an
+// earlier round's completed Job. The UID prefix follows the same lowercase,
+// hyphen-stripped, 12-character rule as the Translator durable consumer name,
+// so the Job name is stable across SM replicas and restarts.
+func RunnerJobName(uid types.UID, scenarioID, attempt, round int) string {
+	if round <= 1 {
+		return fmt.Sprintf("simrun-%s-s%d-a%d", uidPrefix(string(uid)), scenarioID, attempt)
+	}
+	return fmt.Sprintf("simrun-%s-s%d-a%d-r%d", uidPrefix(string(uid)), scenarioID, attempt, round)
 }
 
 // RunnerServiceAccountName returns the deterministic runner ServiceAccount name
@@ -151,8 +160,8 @@ func boolPtr(b bool) *bool { return &b }
 
 // parsePositiveDecimal reports whether s is a canonical positive decimal integer
 // with no leading zeros (except "0" itself, which is not positive) and no sign.
-// The scenario-id and translation-attempt labels must be canonical positive
-// decimal values that reproduce the deterministic Job name.
+// The scenario-id, translation-attempt, and runner-round labels must be
+// canonical positive decimal values that reproduce the deterministic Job name.
 func parsePositiveDecimal(s string) (int, bool) {
 	if s == "" {
 		return 0, false
@@ -175,23 +184,27 @@ func parsePositiveDecimal(s string) (int, bool) {
 
 // labelsFromJob returns the reserved identity labels from a Job, or an error
 // naming the first missing or malformed value.
-func labelsFromJob(job *batchv1.Job, wantProject string, wantUID types.UID) (scenarioID, attempt int, err error) {
+func labelsFromJob(job *batchv1.Job, wantProject string, wantUID types.UID) (scenarioID, attempt, round int, err error) {
 	labels := job.Labels
 	if labels[LabelProject] != wantProject {
-		return 0, 0, fmt.Errorf("job %s/%s label %s = %q; want %q", job.Namespace, job.Name, LabelProject, labels[LabelProject], wantProject)
+		return 0, 0, 0, fmt.Errorf("job %s/%s label %s = %q; want %q", job.Namespace, job.Name, LabelProject, labels[LabelProject], wantProject)
 	}
 	if labels[LabelExperimentUID] != string(wantUID) {
-		return 0, 0, fmt.Errorf("job %s/%s label %s = %q; want %q", job.Namespace, job.Name, LabelExperimentUID, labels[LabelExperimentUID], wantUID)
+		return 0, 0, 0, fmt.Errorf("job %s/%s label %s = %q; want %q", job.Namespace, job.Name, LabelExperimentUID, labels[LabelExperimentUID], wantUID)
 	}
 	sid, ok := parsePositiveDecimal(labels[LabelScenarioID])
 	if !ok {
-		return 0, 0, fmt.Errorf("job %s/%s label %s = %q; want canonical positive decimal", job.Namespace, job.Name, LabelScenarioID, labels[LabelScenarioID])
+		return 0, 0, 0, fmt.Errorf("job %s/%s label %s = %q; want canonical positive decimal", job.Namespace, job.Name, LabelScenarioID, labels[LabelScenarioID])
 	}
 	att, ok := parsePositiveDecimal(labels[LabelTranslationAttempt])
 	if !ok {
-		return 0, 0, fmt.Errorf("job %s/%s label %s = %q; want canonical positive decimal", job.Namespace, job.Name, LabelTranslationAttempt, labels[LabelTranslationAttempt])
+		return 0, 0, 0, fmt.Errorf("job %s/%s label %s = %q; want canonical positive decimal", job.Namespace, job.Name, LabelTranslationAttempt, labels[LabelTranslationAttempt])
 	}
-	return sid, att, nil
+	rnd, ok := parsePositiveDecimal(labels[LabelRunnerRound])
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("job %s/%s label %s = %q; want canonical positive decimal", job.Namespace, job.Name, LabelRunnerRound, labels[LabelRunnerRound])
+	}
+	return sid, att, rnd, nil
 }
 
 // hasControllerOwnerReference reports whether job carries exactly the alpha4
@@ -212,28 +225,29 @@ func hasControllerOwnerReference(job *batchv1.Job, exp *experimentalpha4.Simulat
 }
 
 // jobNameMatchesIdentity rebuilds the deterministic Job name from the
-// experiment UID and the scenario-id/attempt labels and compares it to the
-// observed Job name.
-func jobNameMatchesIdentity(job *batchv1.Job, exp *experimentalpha4.SimulationExperiment, scenarioID, attempt int) bool {
-	return job.Name == RunnerJobName(exp.UID, scenarioID, attempt)
+// experiment UID and the scenario-id/attempt/round labels and compares it to
+// the observed Job name.
+func jobNameMatchesIdentity(job *batchv1.Job, exp *experimentalpha4.SimulationExperiment, scenarioID, attempt, round int) bool {
+	return job.Name == RunnerJobName(exp.UID, scenarioID, attempt, round)
 }
 
 // verifyJobOwnership returns nil only when job belongs to the experiment: it
 // runs in the experiment namespace, its project and full-UID labels match, its
-// scenario-id and translation-attempt labels are canonical positive decimals
-// that reproduce the deterministic Job name, and it carries the exact alpha4
-// controller owner reference. Any mismatch is an identity collision: the Job
-// must not be deleted and the caller must fail the attempt.
+// scenario-id, translation-attempt, and runner-round labels are canonical
+// positive decimals that reproduce the deterministic Job name for the round,
+// and it carries the exact alpha4 controller owner reference. Any mismatch is
+// an identity collision: the Job must not be deleted and the caller must fail
+// the attempt.
 func verifyJobOwnership(job *batchv1.Job, exp *experimentalpha4.SimulationExperiment) error {
 	if job.Namespace != exp.Namespace {
 		return fmt.Errorf("job %s/%s namespace mismatch; want %s", job.Namespace, job.Name, exp.Namespace)
 	}
-	scenarioID, attempt, err := labelsFromJob(job, exp.Name, exp.UID)
+	scenarioID, attempt, round, err := labelsFromJob(job, exp.Name, exp.UID)
 	if err != nil {
 		return err
 	}
-	if !jobNameMatchesIdentity(job, exp, scenarioID, attempt) {
-		return fmt.Errorf("job %s/%s name does not reproduce the deterministic name for s%d-a%d", job.Namespace, job.Name, scenarioID, attempt)
+	if !jobNameMatchesIdentity(job, exp, scenarioID, attempt, round) {
+		return fmt.Errorf("job %s/%s name does not reproduce the deterministic name for s%d-a%d-r%d", job.Namespace, job.Name, scenarioID, attempt, round)
 	}
 	if !hasControllerOwnerReference(job, exp) {
 		return fmt.Errorf("job %s/%s missing exact alpha4 controller owner reference", job.Namespace, job.Name)

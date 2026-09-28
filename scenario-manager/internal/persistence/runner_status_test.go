@@ -56,13 +56,16 @@ func TestMarkScenarioFailedFromValidation(t *testing.T) {
 	// exercised by the integration test, not by this nil-DB validation test.
 }
 
-func TestUpdateScenarioComputedRepsMonotonicValidation(t *testing.T) {
+func TestUpdateScenarioComputedRepsForRoundValidation(t *testing.T) {
 	var db DB
 	ctx := context.Background()
-	if _, _, err := UpdateScenarioComputedRepsMonotonic(ctx, db, 0, 1); err == nil {
+	if _, _, err := UpdateScenarioComputedRepsForRound(ctx, db, 0, 1, 1); err == nil {
 		t.Fatal("zero id: want error")
 	}
-	if _, _, err := UpdateScenarioComputedRepsMonotonic(ctx, db, 1, -1); err == nil {
+	if _, _, err := UpdateScenarioComputedRepsForRound(ctx, db, 1, 0, 1); err == nil {
+		t.Fatal("zero round: want error")
+	}
+	if _, _, err := UpdateScenarioComputedRepsForRound(ctx, db, 1, 1, -1); err == nil {
 		t.Fatal("negative count: want error")
 	}
 }

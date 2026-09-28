@@ -30,6 +30,8 @@ type Projection struct {
 	TranslationAttempt   int
 	NumberOfReps         int
 	NumberOfComputedReps int
+	Round                int
+	RoundReps            int
 	ProjectNamespace     string
 	ProjectName          string
 }
@@ -44,11 +46,13 @@ type Store interface {
 	// LoadProjection returns the observation projection for one InProcessing
 	// scenario, or nil if the row is absent or no longer InProcessing (stale).
 	LoadProjection(ctx context.Context, scenarioID int) (*Projection, error)
-	// UpdateComputedRepsMonotonic sets number_of_computed_reps to
-	// LEAST(number_of_reps, GREATEST(current, count)) while guarding state
-	// InProcessing. It returns the resulting value and whether a row matched
-	// (false = stale: the row is no longer InProcessing).
-	UpdateComputedRepsMonotonic(ctx context.Context, scenarioID, count int) (int, bool, error)
+	// UpdateComputedRepsForRound applies the round-scoped computed-reps update
+	// while guarding state InProcessing and the requested runner round: the
+	// current round's count is monotone and clamped to round_reps, and the
+	// cross-round total accumulates monotonically. It returns the resulting
+	// total and whether a row matched (false = stale: the row is no longer
+	// InProcessing in that round).
+	UpdateComputedRepsForRound(ctx context.Context, scenarioID, round, count int) (int, bool, error)
 	// MarkPostProcessing applies the guarded InProcessing -> PostProcessing
 	// transition. A false result is stale success or a terminal-action move.
 	MarkPostProcessing(ctx context.Context, scenarioID int) (bool, error)
@@ -79,13 +83,15 @@ func (s *PersistenceStore) LoadProjection(ctx context.Context, scenarioID int) (
 		TranslationAttempt:   p.TranslationAttempt,
 		NumberOfReps:         p.NumberOfReps,
 		NumberOfComputedReps: p.NumberOfComputedReps,
+		Round:                p.Round,
+		RoundReps:            p.RoundReps,
 		ProjectNamespace:     p.ProjectNamespace,
 		ProjectName:          p.ProjectName,
 	}, nil
 }
 
-func (s *PersistenceStore) UpdateComputedRepsMonotonic(ctx context.Context, scenarioID, count int) (int, bool, error) {
-	return persistence.UpdateScenarioComputedRepsMonotonic(ctx, s.DB, scenarioID, count)
+func (s *PersistenceStore) UpdateComputedRepsForRound(ctx context.Context, scenarioID, round, count int) (int, bool, error) {
+	return persistence.UpdateScenarioComputedRepsForRound(ctx, s.DB, scenarioID, round, count)
 }
 
 func (s *PersistenceStore) MarkPostProcessing(ctx context.Context, scenarioID int) (bool, error) {

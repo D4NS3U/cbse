@@ -51,12 +51,16 @@ const runnerContainerName = "runner"
 // BuildRequest carries the inputs to build one effective runner Job. The
 // experiment must be a live, non-deleting InProgress object whose template SM
 // treats as already validated. NumberOfReps is the validated 1..100000
-// repetition count; ContainerImage is the accepted Translator digest that
-// replaces the runner container image.
+// per-round completion count (the round's round_reps; for round 1 the caller
+// passes what arrives as number_of_reps, so round-1 Jobs stay byte-identical);
+// Round is the scenario's runner round (>= 1, round 1 = no name suffix);
+// ContainerImage is the accepted Translator digest that replaces the runner
+// container image.
 type BuildRequest struct {
 	Experiment         *experimentalpha4.SimulationExperiment
 	ScenarioID         int
 	TranslationAttempt int
+	Round              int
 	NumberOfReps       int
 	ContainerImage     string
 }
@@ -78,6 +82,9 @@ func Build(req BuildRequest) (*batchv1.Job, error) {
 	if req.TranslationAttempt <= 0 {
 		return nil, fmt.Errorf("translation attempt must be positive")
 	}
+	if req.Round < 1 {
+		return nil, fmt.Errorf("runner round must be positive")
+	}
 	if req.NumberOfReps < 1 || req.NumberOfReps > maxIndexedCompletions {
 		return nil, fmt.Errorf("number of reps %d is outside 1..%d", req.NumberOfReps, maxIndexedCompletions)
 	}
@@ -87,7 +94,7 @@ func Build(req BuildRequest) (*batchv1.Job, error) {
 
 	exp := req.Experiment
 	uid := exp.UID
-	labels := reservedLabels(exp.Name, uid, req.ScenarioID, req.TranslationAttempt)
+	labels := reservedLabels(exp.Name, uid, req.ScenarioID, req.TranslationAttempt, req.Round)
 
 	podTemplate, jobLabels, jobAnnotations, activeDeadline, err := basePodTemplate(exp, req, labels)
 	if err != nil {
@@ -96,7 +103,7 @@ func Build(req BuildRequest) (*batchv1.Job, error) {
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            lifecycle.RunnerJobName(uid, req.ScenarioID, req.TranslationAttempt),
+			Name:            lifecycle.RunnerJobName(uid, req.ScenarioID, req.TranslationAttempt, req.Round),
 			Namespace:       exp.Namespace,
 			Labels:          mergeLabels(jobLabels, labels),
 			Annotations:     jobAnnotations,
@@ -257,14 +264,16 @@ func setRunnerImage(pod *corev1.PodTemplateSpec, image string) error {
 	return nil
 }
 
-// reservedLabels returns the four reserved identity labels for the Job and Pod
-// template metadata.
-func reservedLabels(project string, uid types.UID, scenarioID, attempt int) map[string]string {
+// reservedLabels returns the five reserved identity labels for the Job and Pod
+// template metadata. The runner-round label is always set ("1" for round 1)
+// following the other label conventions.
+func reservedLabels(project string, uid types.UID, scenarioID, attempt, round int) map[string]string {
 	return map[string]string{
 		lifecycle.LabelProject:            project,
 		lifecycle.LabelExperimentUID:      string(uid),
 		lifecycle.LabelScenarioID:         fmt.Sprintf("%d", scenarioID),
 		lifecycle.LabelTranslationAttempt: fmt.Sprintf("%d", attempt),
+		lifecycle.LabelRunnerRound:        fmt.Sprintf("%d", round),
 	}
 }
 

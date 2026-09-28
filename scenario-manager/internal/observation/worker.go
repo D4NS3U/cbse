@@ -77,14 +77,15 @@ func (s *Scheduler) reconcile(ctx context.Context, scenarioID int) workerResult 
 		ExperimentName:     proj.ProjectName,
 		ScenarioID:         proj.ID,
 		TranslationAttempt: proj.TranslationAttempt,
-		NumberOfReps:       proj.NumberOfReps,
+		Round:              proj.Round,
+		NumberOfReps:       proj.RoundReps,
 	})
 
 	switch res.Outcome {
 	case scheduler.ObservationCompleted:
 		// First record the full repetition count, then the guarded
 		// InProcessing -> PostProcessing transition.
-		_, ok, err := s.store.UpdateComputedRepsMonotonic(ctx, scenarioID, res.CompletedReps)
+		_, ok, err := s.store.UpdateComputedRepsForRound(ctx, scenarioID, proj.Round, res.CompletedReps)
 		if err != nil {
 			return workerResult{scenarioID: scenarioID, action: actRequeue}
 		} else if !ok {
@@ -107,7 +108,7 @@ func (s *Scheduler) reconcile(ctx context.Context, scenarioID int) workerResult 
 				ScenarioID:    proj.ID,
 				Attempt:       proj.TranslationAttempt,
 				JobName:       res.JobName,
-				RequestedReps: proj.NumberOfReps,
+				RequestedReps: proj.RoundReps,
 				ComputedReps:  res.CompletedReps,
 				Outcome:       res.Outcome.String(),
 			})
@@ -121,7 +122,7 @@ func (s *Scheduler) reconcile(ctx context.Context, scenarioID int) workerResult 
 		// no count update is applied and the current count is preserved.
 		var computedReps int
 		if res.CompletedReps > 0 {
-			got, ok, err := s.store.UpdateComputedRepsMonotonic(ctx, scenarioID, res.CompletedReps)
+			got, ok, err := s.store.UpdateComputedRepsForRound(ctx, scenarioID, proj.Round, res.CompletedReps)
 			if err != nil {
 				return workerResult{scenarioID: scenarioID, action: actRequeue}
 			} else if !ok {
@@ -141,7 +142,7 @@ func (s *Scheduler) reconcile(ctx context.Context, scenarioID int) workerResult 
 				ScenarioID:    proj.ID,
 				Attempt:       proj.TranslationAttempt,
 				JobName:       res.JobName,
-				RequestedReps: proj.NumberOfReps,
+				RequestedReps: proj.RoundReps,
 				ComputedReps:  computedReps,
 				Outcome:       res.Outcome.String(),
 				Reason:        terminalReason(res.Err),
@@ -165,7 +166,7 @@ func (s *Scheduler) reconcile(ctx context.Context, scenarioID int) workerResult 
 				ScenarioID:    proj.ID,
 				Attempt:       proj.TranslationAttempt,
 				JobName:       res.JobName,
-				RequestedReps: proj.NumberOfReps,
+				RequestedReps: proj.RoundReps,
 				ComputedReps:  0,
 				Outcome:       res.Outcome.String(),
 				Reason:        terminalReason(res.Err),
@@ -181,7 +182,7 @@ func (s *Scheduler) reconcile(ctx context.Context, scenarioID int) workerResult 
 		// change and no observability record; the key rejoins the queue at the
 		// next strictly subsequent tick.
 		if res.CompletedReps > 0 {
-			if _, ok, err := s.store.UpdateComputedRepsMonotonic(ctx, scenarioID, res.CompletedReps); err != nil {
+			if _, ok, err := s.store.UpdateComputedRepsForRound(ctx, scenarioID, proj.Round, res.CompletedReps); err != nil {
 				return workerResult{scenarioID: scenarioID, action: actRequeue}
 			} else if !ok {
 				// The row left InProcessing: stale. Remove; the next discovery

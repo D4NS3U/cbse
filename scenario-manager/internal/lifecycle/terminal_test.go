@@ -26,7 +26,7 @@ import (
 
 func TestRunTerminalActionDeletesJobsAndBulkUpdates(t *testing.T) {
 	exp := newExperiment("ns", "proj", "uid-abc123", PhaseFailed, true, false)
-	job := verifiedJob(exp, 5, 1)
+	job := verifiedJob(exp, 5, 1, 1)
 	k8s := fakeK8s(t, exp, job)
 	store := &fakeStore{projectID: 7, failRows: 3}
 
@@ -67,8 +67,8 @@ func TestRunTerminalActionAbsentProjectIsSuccess(t *testing.T) {
 
 func TestRunTerminalActionCollisionFails(t *testing.T) {
 	exp := newExperiment("ns", "proj", "uid-abc123", PhaseFailed, true, false)
-	verified := verifiedJob(exp, 5, 1)
-	collision := verifiedJob(exp, 6, 2)
+	verified := verifiedJob(exp, 5, 1, 1)
+	collision := verifiedJob(exp, 6, 2, 1)
 	collision.OwnerReferences[0].UID = "someone-else"
 	k8s := fakeK8s(t, exp, verified, collision)
 	store := &fakeStore{projectID: 7, failRows: 1}

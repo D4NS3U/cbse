@@ -68,12 +68,13 @@ func validSecret() *corev1.Secret {
 }
 
 // jobLabels returns the four reserved labels for a scenario/attempt.
-func jobLabels(scenarioID, attempt int) map[string]string {
+func jobLabels(scenarioID, attempt, round int) map[string]string {
 	return map[string]string{
 		"experiment.cbse.terministic.de/project":             expName,
 		"experiment.cbse.terministic.de/experiment-uid":      expUID,
 		"experiment.cbse.terministic.de/scenario-id":         intToStr(scenarioID),
 		"experiment.cbse.terministic.de/translation-attempt": intToStr(attempt),
+		"experiment.cbse.terministic.de/runner-round":        intToStr(round),
 	}
 }
 
@@ -106,20 +107,24 @@ func ownerRef() metav1.OwnerReference {
 
 // ownedJob returns a Job with the deterministic name, namespace, reserved
 // labels, and exact controller owner reference.
-func ownedJob(scenarioID, attempt int) *batchv1.Job {
+func ownedJob(scenarioID, attempt, round int) *batchv1.Job {
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:            jobName(scenarioID, attempt),
+			Name:            jobName(scenarioID, attempt, round),
 			Namespace:       ns,
-			Labels:          jobLabels(scenarioID, attempt),
+			Labels:          jobLabels(scenarioID, attempt, round),
 			OwnerReferences: []metav1.OwnerReference{ownerRef()},
 			UID:             types.UID("job-uid-existing"),
 		},
 	}
 }
 
-func jobName(scenarioID, attempt int) string {
-	return "simrun-" + uidPrefix + "-s" + intToStr(scenarioID) + "-a" + intToStr(attempt)
+func jobName(scenarioID, attempt, round int) string {
+	name := "simrun-" + uidPrefix + "-s" + intToStr(scenarioID) + "-a" + intToStr(attempt)
+	if round > 1 {
+		name += "-r" + intToStr(round)
+	}
+	return name
 }
 
 // fakeK8s is a configurable fake of the jobadapter k8sClient. Tests set the
@@ -225,21 +230,23 @@ func (f *fakeK8s) DeleteJob(ctx context.Context, namespace, name string, uid typ
 	return nil
 }
 
-func startReq(scenarioID, attempt, reps int, image string) scheduler.RunnerStartRequest {
+func startReq(scenarioID, attempt, round, reps int, image string) scheduler.RunnerStartRequest {
 	if image == "" {
 		image = validDigest
 	}
 	return scheduler.RunnerStartRequest{
 		Namespace: ns, ExperimentName: expName,
 		ScenarioID: scenarioID, TranslationAttempt: attempt,
+		Round:        round,
 		NumberOfReps: reps, ContainerImage: image,
 	}
 }
 
-func observeReq(scenarioID, attempt, reps int) scheduler.ObservationRequest {
+func observeReq(scenarioID, attempt, round, reps int) scheduler.ObservationRequest {
 	return scheduler.ObservationRequest{
 		Namespace: ns, ExperimentName: expName,
-		ScenarioID: scenarioID, TranslationAttempt: attempt, NumberOfReps: reps,
+		ScenarioID: scenarioID, TranslationAttempt: attempt,
+		Round: round, NumberOfReps: reps,
 	}
 }
 
@@ -270,12 +277,12 @@ func TestStartSuccessfulCreateIsAuthoritative(t *testing.T) {
 	}
 	a := NewAdapter(f)
 
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartCreated {
 		t.Fatalf("outcome = %s, want created", res.Outcome)
 	}
-	if res.JobName != jobName(7, 1) {
-		t.Fatalf("JobName = %q, want %q", res.JobName, jobName(7, 1))
+	if res.JobName != jobName(7, 1, 1) {
+		t.Fatalf("JobName = %q, want %q", res.JobName, jobName(7, 1, 1))
 	}
 	if res.CreatedJobUID != "admission-returned-uid-xyz" {
 		t.Fatalf("CreatedJobUID = %q, want admission-returned-uid-xyz (the only retained field)", res.CreatedJobUID)
@@ -284,28 +291,28 @@ func TestStartSuccessfulCreateIsAuthoritative(t *testing.T) {
 
 func TestStartAlreadyExistsConfirmed(t *testing.T) {
 	f := happyFake()
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): ownedJob(7, 1)}
-	f.createErr = apierrors.NewAlreadyExists(batchv1.Resource("jobs"), jobName(7, 1))
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): ownedJob(7, 1, 1)}
+	f.createErr = apierrors.NewAlreadyExists(batchv1.Resource("jobs"), jobName(7, 1, 1))
 	a := NewAdapter(f)
 
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartConfirmed {
 		t.Fatalf("outcome = %s, want confirmed", res.Outcome)
 	}
-	if res.JobName != jobName(7, 1) {
-		t.Fatalf("JobName = %q, want %q", res.JobName, jobName(7, 1))
+	if res.JobName != jobName(7, 1, 1) {
+		t.Fatalf("JobName = %q, want %q", res.JobName, jobName(7, 1, 1))
 	}
 }
 
 func TestStartAlreadyExistsCollisionWrongOwner(t *testing.T) {
 	f := happyFake()
-	colliding := ownedJob(7, 1)
+	colliding := ownedJob(7, 1, 1)
 	colliding.OwnerReferences[0].UID = "different-uid"
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): colliding}
-	f.createErr = apierrors.NewAlreadyExists(batchv1.Resource("jobs"), jobName(7, 1))
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): colliding}
+	f.createErr = apierrors.NewAlreadyExists(batchv1.Resource("jobs"), jobName(7, 1, 1))
 	a := NewAdapter(f)
 
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartCollision {
 		t.Fatalf("outcome = %s, want collision", res.Outcome)
 	}
@@ -313,18 +320,18 @@ func TestStartAlreadyExistsCollisionWrongOwner(t *testing.T) {
 
 func TestStartAlreadyExistsCollisionWrongLabel(t *testing.T) {
 	f := happyFake()
-	colliding := ownedJob(7, 1)
+	colliding := ownedJob(7, 1, 1)
 	colliding.Labels["experiment.cbse.terministic.de/scenario-id"] = "999"
 	// Adjust the name to match the mutated scenario-id label so the job name
 	// still reproduces (s9-a1) — but the requested scenario is 7, so the label
 	// mismatch vs the deterministic name is the collision. Use a name that does
 	// NOT reproduce the label scenario-id to trigger the name-reproduce check.
-	colliding.Name = jobName(7, 1) // keep deterministic get target
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): colliding}
-	f.createErr = apierrors.NewAlreadyExists(batchv1.Resource("jobs"), jobName(7, 1))
+	colliding.Name = jobName(7, 1, 1) // keep deterministic get target
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): colliding}
+	f.createErr = apierrors.NewAlreadyExists(batchv1.Resource("jobs"), jobName(7, 1, 1))
 	a := NewAdapter(f)
 
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartCollision {
 		t.Fatalf("outcome = %s, want collision (wrong scenario-id label)", res.Outcome)
 	}
@@ -332,9 +339,9 @@ func TestStartAlreadyExistsCollisionWrongLabel(t *testing.T) {
 
 func TestStartForbiddenOnCreate(t *testing.T) {
 	f := happyFake()
-	f.createErr = apierrors.NewForbidden(batchv1.Resource("jobs"), jobName(7, 1), errors.New("rbac"))
+	f.createErr = apierrors.NewForbidden(batchv1.Resource("jobs"), jobName(7, 1, 1), errors.New("rbac"))
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartForbidden {
 		t.Fatalf("outcome = %s, want forbidden", res.Outcome)
 	}
@@ -344,7 +351,7 @@ func TestStartForbiddenOnGetExperiment(t *testing.T) {
 	f := happyFake()
 	f.expErr = apierrors.NewForbidden(alpha4GR("simulationexperiments"), expName, errors.New("rbac"))
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartForbidden {
 		t.Fatalf("outcome = %s, want forbidden", res.Outcome)
 	}
@@ -354,7 +361,7 @@ func TestStartNotFoundExperimentIsPermanent(t *testing.T) {
 	f := happyFake()
 	f.exp = nil // NotFound
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartProjectionInvalid {
 		t.Fatalf("outcome = %s, want projection-invalid (missing experiment outside finalizer lifecycle)", res.Outcome)
 	}
@@ -365,7 +372,7 @@ func TestStartTerminalExperimentIsNoOp(t *testing.T) {
 		f := happyFake()
 		f.exp = newExperiment(phase)
 		a := NewAdapter(f)
-		res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+		res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 		if res.Outcome != scheduler.RunnerStartExperimentTerminal {
 			t.Fatalf("phase %s: outcome = %s, want experiment-terminal", phase, res.Outcome)
 		}
@@ -378,7 +385,7 @@ func TestStartDeletingExperimentIsNoOp(t *testing.T) {
 	ts := metav1.Now()
 	f.exp.DeletionTimestamp = &ts
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartExperimentTerminal {
 		t.Fatalf("outcome = %s, want experiment-terminal (deleting)", res.Outcome)
 	}
@@ -389,7 +396,7 @@ func TestStartUnavailableExperimentIsTransient(t *testing.T) {
 		f := happyFake()
 		f.exp = newExperiment(phase)
 		a := NewAdapter(f)
-		res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+		res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 		if res.Outcome != scheduler.RunnerStartTransient {
 			t.Fatalf("phase %q: outcome = %s, want transient", phase, res.Outcome)
 		}
@@ -399,7 +406,7 @@ func TestStartUnavailableExperimentIsTransient(t *testing.T) {
 func TestStartInvalidDigestIsPermanent(t *testing.T) {
 	f := happyFake()
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, "registry.example.com/runner:latest"))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, "registry.example.com/runner:latest"))
 	if res.Outcome != scheduler.RunnerStartProjectionInvalid {
 		t.Fatalf("outcome = %s, want projection-invalid (non-digest image)", res.Outcome)
 	}
@@ -410,7 +417,7 @@ func TestStartRepositoryMismatchIsPermanent(t *testing.T) {
 	f.exp = newExperiment("InProgress")
 	f.exp.Spec.Translator.Repository = "other.example.com/runner"
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartProjectionInvalid {
 		t.Fatalf("outcome = %s, want projection-invalid (repository mismatch)", res.Outcome)
 	}
@@ -420,7 +427,7 @@ func TestStartMissingSecretIsPermanent(t *testing.T) {
 	f := happyFake()
 	f.secret = nil // NotFound
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartProjectionInvalid {
 		t.Fatalf("outcome = %s, want projection-invalid (missing pull secret)", res.Outcome)
 	}
@@ -434,7 +441,7 @@ func TestStartWrongTypeSecretIsPermanent(t *testing.T) {
 		Data:       map[string][]byte{".dockerconfigjson": validDockerConfig()},
 	}
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartProjectionInvalid {
 		t.Fatalf("outcome = %s, want projection-invalid (wrong-type secret)", res.Outcome)
 	}
@@ -458,7 +465,7 @@ func TestStartReplacedSecretCredentialsAreRevalidated(t *testing.T) {
 		Data:       map[string][]byte{".dockerconfigjson": replaced},
 	}
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartProjectionInvalid {
 		t.Fatalf("outcome = %s, want projection-invalid (replaced secret credentials)", res.Outcome)
 	}
@@ -481,7 +488,7 @@ func TestStartMissingServiceAccountIsPermanent(t *testing.T) {
 	f := happyFake()
 	f.saErr = apierrors.NewNotFound(corev1.Resource("serviceaccounts"), saName)
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartProjectionInvalid {
 		t.Fatalf("outcome = %s, want projection-invalid (missing SA)", res.Outcome)
 	}
@@ -490,7 +497,7 @@ func TestStartMissingServiceAccountIsPermanent(t *testing.T) {
 func TestStartRepsOutOfRangeIsPermanent(t *testing.T) {
 	f := happyFake()
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 100001, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 100001, ""))
 	if res.Outcome != scheduler.RunnerStartProjectionInvalid {
 		t.Fatalf("outcome = %s, want projection-invalid (reps out of range)", res.Outcome)
 	}
@@ -500,7 +507,7 @@ func TestStartTransportOnCreateIsTransient(t *testing.T) {
 	f := happyFake()
 	f.createErr = errors.New("connection refused")
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartTransient {
 		t.Fatalf("outcome = %s, want transient (transport)", res.Outcome)
 	}
@@ -510,7 +517,7 @@ func TestStartForbiddenOnGetSecretIsPermanent(t *testing.T) {
 	f := happyFake()
 	f.secretErr = apierrors.NewForbidden(corev1.Resource("secrets"), "cbse-registry-auth", errors.New("rbac"))
 	a := NewAdapter(f)
-	res := a.Start(context.Background(), startReq(7, 1, 4, ""))
+	res := a.Start(context.Background(), startReq(7, 1, 1, 4, ""))
 	if res.Outcome != scheduler.RunnerStartForbidden {
 		t.Fatalf("outcome = %s, want forbidden", res.Outcome)
 	}
@@ -520,42 +527,42 @@ func TestStartForbiddenOnGetSecretIsPermanent(t *testing.T) {
 
 func TestDeleteCreatedSuccess(t *testing.T) {
 	f := happyFake()
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): ownedJob(7, 1)}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): ownedJob(7, 1, 1)}
 	a := NewAdapter(f)
-	if err := a.DeleteCreated(context.Background(), ns, jobName(7, 1), "job-uid-existing"); err != nil {
+	if err := a.DeleteCreated(context.Background(), ns, jobName(7, 1, 1), "job-uid-existing"); err != nil {
 		t.Fatalf("DeleteCreated: %v", err)
 	}
-	if len(f.deleted) != 1 || f.deleted[0] != jobName(7, 1) {
-		t.Fatalf("deleted = %v, want [%s]", f.deleted, jobName(7, 1))
+	if len(f.deleted) != 1 || f.deleted[0] != jobName(7, 1, 1) {
+		t.Fatalf("deleted = %v, want [%s]", f.deleted, jobName(7, 1, 1))
 	}
 }
 
 func TestDeleteCreatedNotFoundIsNoOp(t *testing.T) {
 	f := happyFake()
 	a := NewAdapter(f)
-	if err := a.DeleteCreated(context.Background(), ns, jobName(7, 1), "any"); err != nil {
+	if err := a.DeleteCreated(context.Background(), ns, jobName(7, 1, 1), "any"); err != nil {
 		t.Fatalf("DeleteCreated NotFound: %v", err)
 	}
 }
 
 func TestDeleteCreatedUIDMismatchIsNoOp(t *testing.T) {
 	f := happyFake()
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): ownedJob(7, 1)}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): ownedJob(7, 1, 1)}
 	a := NewAdapter(f)
-	if err := a.DeleteCreated(context.Background(), ns, jobName(7, 1), "stale-uid"); err != nil {
+	if err := a.DeleteCreated(context.Background(), ns, jobName(7, 1, 1), "stale-uid"); err != nil {
 		t.Fatalf("DeleteCreated UID mismatch: %v", err)
 	}
 	// Job must remain (not deleted) because the UID precondition did not match.
-	if _, ok := f.jobs["ns-x/"+jobName(7, 1)]; !ok {
+	if _, ok := f.jobs["ns-x/"+jobName(7, 1, 1)]; !ok {
 		t.Fatal("UID-mismatch delete removed the Job; it should remain")
 	}
 }
 
 func TestDeleteCreatedForbiddenReturnsError(t *testing.T) {
 	f := happyFake()
-	f.deleteErr = apierrors.NewForbidden(batchv1.Resource("jobs"), jobName(7, 1), errors.New("rbac"))
+	f.deleteErr = apierrors.NewForbidden(batchv1.Resource("jobs"), jobName(7, 1, 1), errors.New("rbac"))
 	a := NewAdapter(f)
-	if err := a.DeleteCreated(context.Background(), ns, jobName(7, 1), "any"); err == nil {
+	if err := a.DeleteCreated(context.Background(), ns, jobName(7, 1, 1), "any"); err == nil {
 		t.Fatal("DeleteCreated Forbidden: expected error for cleanup retry cadence")
 	}
 }
@@ -572,12 +579,12 @@ func trueCond(ct batchv1.JobConditionType) batchv1.JobCondition {
 
 func TestObserveCompleted(t *testing.T) {
 	f := happyFake()
-	j := ownedJob(7, 1)
+	j := ownedJob(7, 1, 1)
 	setConditions(j, trueCond(batchv1.JobComplete))
 	j.Status.CompletedIndexes = "0-3"
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): j}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): j}
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationCompleted {
 		t.Fatalf("outcome = %s, want completed", res.Outcome)
 	}
@@ -588,12 +595,12 @@ func TestObserveCompleted(t *testing.T) {
 
 func TestObserveFailedPreservesPartialCount(t *testing.T) {
 	f := happyFake()
-	j := ownedJob(7, 1)
+	j := ownedJob(7, 1, 1)
 	setConditions(j, trueCond(batchv1.JobFailed))
 	j.Status.CompletedIndexes = "0-2" // 3 succeeded before failure
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): j}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): j}
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationFailed {
 		t.Fatalf("outcome = %s, want failed", res.Outcome)
 	}
@@ -604,12 +611,12 @@ func TestObserveFailedPreservesPartialCount(t *testing.T) {
 
 func TestObserveBothTerminalPrefersFailed(t *testing.T) {
 	f := happyFake()
-	j := ownedJob(7, 1)
+	j := ownedJob(7, 1, 1)
 	setConditions(j, trueCond(batchv1.JobComplete), trueCond(batchv1.JobFailed))
 	j.Status.CompletedIndexes = "0-3"
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): j}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): j}
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationFailed {
 		t.Fatalf("outcome = %s, want failed (Failed wins over Complete)", res.Outcome)
 	}
@@ -617,11 +624,11 @@ func TestObserveBothTerminalPrefersFailed(t *testing.T) {
 
 func TestObserveRunningRecordsPartialCount(t *testing.T) {
 	f := happyFake()
-	j := ownedJob(7, 1)
+	j := ownedJob(7, 1, 1)
 	j.Status.CompletedIndexes = "0-1" // 2 of 4 done, still running
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): j}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): j}
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationRetry {
 		t.Fatalf("outcome = %s, want retry (running)", res.Outcome)
 	}
@@ -633,7 +640,7 @@ func TestObserveRunningRecordsPartialCount(t *testing.T) {
 func TestObserveMissingJobIsRetry(t *testing.T) {
 	f := happyFake()
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationRetry {
 		t.Fatalf("outcome = %s, want retry (missing job)", res.Outcome)
 	}
@@ -644,11 +651,11 @@ func TestObserveMissingJobIsRetry(t *testing.T) {
 
 func TestObserveCollision(t *testing.T) {
 	f := happyFake()
-	colliding := ownedJob(7, 1)
+	colliding := ownedJob(7, 1, 1)
 	colliding.OwnerReferences[0].UID = "different"
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): colliding}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): colliding}
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationCollision {
 		t.Fatalf("outcome = %s, want collision", res.Outcome)
 	}
@@ -656,9 +663,9 @@ func TestObserveCollision(t *testing.T) {
 
 func TestObserveForbiddenOnGetJob(t *testing.T) {
 	f := happyFake()
-	f.getJobErr = apierrors.NewForbidden(batchv1.Resource("jobs"), jobName(7, 1), errors.New("rbac"))
+	f.getJobErr = apierrors.NewForbidden(batchv1.Resource("jobs"), jobName(7, 1, 1), errors.New("rbac"))
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationForbidden {
 		t.Fatalf("outcome = %s, want forbidden", res.Outcome)
 	}
@@ -668,7 +675,7 @@ func TestObserveForbiddenOnGetExperiment(t *testing.T) {
 	f := happyFake()
 	f.expErr = apierrors.NewForbidden(alpha4GR("simulationexperiments"), expName, errors.New("rbac"))
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationForbidden {
 		t.Fatalf("outcome = %s, want forbidden", res.Outcome)
 	}
@@ -679,7 +686,7 @@ func TestObserveTerminalExperimentIsRetry(t *testing.T) {
 		f := happyFake()
 		f.exp = newExperiment(phase)
 		a := NewAdapter(f)
-		res := a.Observe(context.Background(), observeReq(7, 1, 4))
+		res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 		if res.Outcome != scheduler.ObservationRetry {
 			t.Fatalf("phase %s: outcome = %s, want retry (no-op)", phase, res.Outcome)
 		}
@@ -692,7 +699,7 @@ func TestObserveDeletingExperimentIsRetry(t *testing.T) {
 	ts := metav1.Now()
 	f.exp.DeletionTimestamp = &ts
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationRetry {
 		t.Fatalf("outcome = %s, want retry (deleting no-op)", res.Outcome)
 	}
@@ -702,7 +709,7 @@ func TestObserveUnavailableExperimentIsRetry(t *testing.T) {
 	f := happyFake()
 	f.exp = newExperiment("Pending")
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationRetry {
 		t.Fatalf("outcome = %s, want retry (unavailable)", res.Outcome)
 	}
@@ -712,7 +719,7 @@ func TestObserveNotFoundExperimentIsRetry(t *testing.T) {
 	f := happyFake()
 	f.exp = nil
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationRetry {
 		t.Fatalf("outcome = %s, want retry (experiment gone)", res.Outcome)
 	}
@@ -720,12 +727,12 @@ func TestObserveNotFoundExperimentIsRetry(t *testing.T) {
 
 func TestObserveMalformedCompletedIndexesFails(t *testing.T) {
 	f := happyFake()
-	j := ownedJob(7, 1)
+	j := ownedJob(7, 1, 1)
 	setConditions(j, trueCond(batchv1.JobFailed))
 	j.Status.CompletedIndexes = "0-2,abc"
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): j}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): j}
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationFailed {
 		t.Fatalf("outcome = %s, want failed (malformed completedIndexes)", res.Outcome)
 	}
@@ -736,11 +743,11 @@ func TestObserveMalformedCompletedIndexesFails(t *testing.T) {
 
 func TestObserveOutOfRangeIndexFails(t *testing.T) {
 	f := happyFake()
-	j := ownedJob(7, 1)
+	j := ownedJob(7, 1, 1)
 	j.Status.CompletedIndexes = "0-4" // max index is 3 for 4 reps
-	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1): j}
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 1): j}
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationFailed {
 		t.Fatalf("outcome = %s, want failed (out-of-range index)", res.Outcome)
 	}
@@ -750,7 +757,7 @@ func TestObserveTransportOnGetJobIsRetry(t *testing.T) {
 	f := happyFake()
 	f.getJobErr = errors.New("timeout")
 	a := NewAdapter(f)
-	res := a.Observe(context.Background(), observeReq(7, 1, 4))
+	res := a.Observe(context.Background(), observeReq(7, 1, 1, 4))
 	if res.Outcome != scheduler.ObservationRetry {
 		t.Fatalf("outcome = %s, want retry (transport)", res.Outcome)
 	}
@@ -804,5 +811,157 @@ func TestParseCompletedIndexes(t *testing.T) {
 		if got != c.want {
 			t.Errorf("parseCompletedIndexes(%q, %d) = %d, want %d", c.in, c.max, got, c.want)
 		}
+	}
+}
+
+// --- round-scoped name parsing and round awareness ---
+
+func TestParseRunnerJobName(t *testing.T) {
+	// Round-1 form: no -r suffix parses as round 1.
+	sid, att, round, err := ParseRunnerJobName("simrun-1234abcd5678-s7-a2")
+	if err != nil || sid != 7 || att != 2 || round != 1 {
+		t.Fatalf("round-1 form: sid=%d att=%d round=%d err=%v; want 7/2/1 nil", sid, att, round, err)
+	}
+	// Round >= 2 form.
+	sid, att, round, err = ParseRunnerJobName("simrun-1234abcd5678-s7-a2-r3")
+	if err != nil || sid != 7 || att != 2 || round != 3 {
+		t.Fatalf("round-2 form: sid=%d att=%d round=%d err=%v; want 7/2/3 nil", sid, att, round, err)
+	}
+	// Multi-digit round.
+	sid, att, round, err = ParseRunnerJobName("simrun-1234abcd5678-s120-a1-r12")
+	if err != nil || sid != 120 || att != 1 || round != 12 {
+		t.Fatalf("multi-digit: sid=%d att=%d round=%d err=%v; want 120/1/12 nil", sid, att, round, err)
+	}
+	// Malformed names.
+	for _, name := range []string{
+		"",
+		"simrun-",
+		"simrun-1234abcd56-s7-a2",        // UID prefix too short
+		"simrun-1234abcd56789-s7-a2",     // UID prefix too long
+		"simrun-ABCDEF5678-s7-a2",        // uppercase UID prefix
+		"simrun-1234abcd5678-7-a2",       // missing -s
+		"simrun-1234abcd5678-s07-a2",     // leading zero scenario id
+		"simrun-1234abcd5678-s7-2",       // missing -a
+		"simrun-1234abcd5678-s7-a02",     // leading zero attempt
+		"simrun-1234abcd5678-s7-a2-r0",   // round must be positive
+		"simrun-1234abcd5678-s7-a2-r",    // empty round
+		"simrun-1234abcd5678-s7-a2-r2-x", // trailing garbage
+		"simrun-1234abcd5678-s7-a2-2",    // wrong separator before round
+		"jobs-1234abcd5678-s7-a2",        // wrong prefix
+	} {
+		if _, _, _, err := ParseRunnerJobName(name); err == nil {
+			t.Fatalf("ParseRunnerJobName(%q): expected error, got nil", name)
+		}
+	}
+}
+
+// TestStartRoundTwoAfterRoundOneComplete proves the round-scoped create
+// semantics: after the round-1 Job completed, a round-2 Start for the same
+// scenario/attempt succeeds (Created) under the distinct -r2 name and never
+// collides with the completed round-1 Job, which remains in place.
+func TestStartRoundTwoAfterRoundOneComplete(t *testing.T) {
+	f := happyFake()
+	// A completed round-1 Job already exists.
+	roundOne := ownedJob(7, 1, 1)
+	setConditions(roundOne, trueCond(batchv1.JobComplete))
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + roundOne.Name: roundOne}
+	a := NewAdapter(f)
+
+	res := a.Start(context.Background(), startReq(7, 1, 2, 5, ""))
+	if res.Outcome != scheduler.RunnerStartCreated {
+		t.Fatalf("outcome = %s (err=%v), want created (round-2 name must not collide with the completed round-1 Job)", res.Outcome, res.Err)
+	}
+	want := jobName(7, 1, 2)
+	if res.JobName != want {
+		t.Fatalf("JobName = %q, want %q", res.JobName, want)
+	}
+	// The round-2 Job is stored under the -r2 name; the round-1 Job survives.
+	if _, ok := f.jobs["ns-x/"+want]; !ok {
+		t.Fatalf("round-2 Job not created under %q", want)
+	}
+	got := f.jobs["ns-x/"+roundOne.Name]
+	if got == nil {
+		t.Fatal("round-1 Job disappeared")
+	}
+	if len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Type != batchv1.JobComplete {
+		t.Fatalf("round-1 Job status disturbed: %+v", got.Status.Conditions)
+	}
+	// The created round-2 Job carries the round-2 label.
+	created := f.jobs["ns-x/"+want]
+	if created.Labels["experiment.cbse.terministic.de/runner-round"] != "2" {
+		t.Fatalf("round-2 Job runner-round label = %q; want \"2\"", created.Labels["experiment.cbse.terministic.de/runner-round"])
+	}
+	if created.Spec.Completions == nil || *created.Spec.Completions != 5 {
+		t.Fatalf("round-2 Job completions = %v; want 5 (round_reps)", created.Spec.Completions)
+	}
+}
+
+// TestStartRoundTwoAlreadyExistsConfirmed proves the round-scoped confirm
+// semantics: an already-existing round-2 Job with the exact identity is
+// confirmed, not collided.
+func TestStartRoundTwoAlreadyExistsConfirmed(t *testing.T) {
+	f := happyFake()
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 2): ownedJob(7, 1, 2)}
+	f.createErr = apierrors.NewAlreadyExists(batchv1.Resource("jobs"), jobName(7, 1, 2))
+	a := NewAdapter(f)
+
+	res := a.Start(context.Background(), startReq(7, 1, 2, 5, ""))
+	if res.Outcome != scheduler.RunnerStartConfirmed {
+		t.Fatalf("outcome = %s, want confirmed", res.Outcome)
+	}
+	if res.JobName != jobName(7, 1, 2) {
+		t.Fatalf("JobName = %q, want %q", res.JobName, jobName(7, 1, 2))
+	}
+}
+
+// TestObserveRoundTwoJob proves the observation lookup uses the current
+// round's Job name: a round-2 InProcessing scenario observes the -r2 Job, and
+// a round-1 request would miss it entirely.
+func TestObserveRoundTwoJob(t *testing.T) {
+	f := happyFake()
+	j := ownedJob(7, 1, 2)
+	j.Status.CompletedIndexes = "0-2" // 3 of 5 done, still running
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 2): j}
+	a := NewAdapter(f)
+
+	res := a.Observe(context.Background(), observeReq(7, 1, 2, 5))
+	if res.Outcome != scheduler.ObservationRetry {
+		t.Fatalf("outcome = %s, want retry (running round-2 Job)", res.Outcome)
+	}
+	if res.JobName != jobName(7, 1, 2) {
+		t.Fatalf("JobName = %q, want %q", res.JobName, jobName(7, 1, 2))
+	}
+	if res.CompletedReps != 3 {
+		t.Fatalf("CompletedReps = %d, want 3 (partial round-2 count)", res.CompletedReps)
+	}
+
+	// A round-1 request for the same scenario sees no round-1 Job: missing
+	// Job is a retry with zero count, not a collision with the round-2 Job.
+	res1 := a.Observe(context.Background(), observeReq(7, 1, 1, 5))
+	if res1.Outcome != scheduler.ObservationRetry {
+		t.Fatalf("round-1 outcome = %s, want retry (no round-1 Job)", res1.Outcome)
+	}
+	if res1.CompletedReps != 0 {
+		t.Fatalf("round-1 CompletedReps = %d, want 0", res1.CompletedReps)
+	}
+}
+
+// TestObserveRoundTwoCompleted proves a complete round-2 Job records the
+// round's full repetition count (round_reps), which the observation worker
+// feeds to the round-scoped computed-reps update.
+func TestObserveRoundTwoCompleted(t *testing.T) {
+	f := happyFake()
+	j := ownedJob(7, 1, 2)
+	setConditions(j, trueCond(batchv1.JobComplete))
+	j.Status.CompletedIndexes = "0-4"
+	f.jobs = map[string]*batchv1.Job{"ns-x/" + jobName(7, 1, 2): j}
+	a := NewAdapter(f)
+
+	res := a.Observe(context.Background(), observeReq(7, 1, 2, 5))
+	if res.Outcome != scheduler.ObservationCompleted {
+		t.Fatalf("outcome = %s, want completed", res.Outcome)
+	}
+	if res.CompletedReps != 5 {
+		t.Fatalf("CompletedReps = %d, want 5 (round-2 full count)", res.CompletedReps)
 	}
 }

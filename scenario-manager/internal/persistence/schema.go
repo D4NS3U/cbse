@@ -32,7 +32,11 @@ import (
 // no mutable status, component-count, or experiment-UID columns. The
 // scenario_status table requires the translation_publish_started_at TIMESTAMPTZ
 // NULL column alongside the core scenario columns and a single-column FK
-// project_id -> project.id ON DELETE CASCADE.
+// project_id -> project.id ON DELETE CASCADE. The round bookkeeping columns
+// (runner_round, round_reps, round_computed_reps) and the evaluation
+// publication guards (evaluation_attempts, evaluation_publish_started_at,
+// evaluation_request_published_at) are additive and required: a table missing
+// or mis-typing any of them is incompatible and fails startup.
 func EnsureSchema(ctx context.Context, db DB) error {
 	if ctx == nil {
 		return fmt.Errorf("context must not be nil")
@@ -67,6 +71,12 @@ func EnsureSchema(ctx context.Context, db DB) error {
 	}
 
 	if !scenarioExists {
+		// The round bookkeeping and evaluation-publication-guard columns are
+		// additive extensions of the alpha4 scenario_status contract. Per-
+		// experiment Core DBs are created fresh by the Operator, so this DDL is
+		// the only path a table is born with: there is deliberately no ALTER
+		// migration for pre-existing tables missing these columns (such a table
+		// fails the validation below with ErrSchemaIncompatible).
 		createScenario := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
 			id SERIAL PRIMARY KEY,
 			project_id INTEGER NOT NULL REFERENCES %s(id) ON DELETE CASCADE,
@@ -81,7 +91,13 @@ func EnsureSchema(ctx context.Context, db DB) error {
 			translation_request_published_at TIMESTAMPTZ,
 			recipe_info JSONB,
 			container_image TEXT,
-			confidence_metric DOUBLE PRECISION
+			confidence_metric DOUBLE PRECISION,
+			runner_round INTEGER NOT NULL DEFAULT 1,
+			round_reps INTEGER NOT NULL,
+			round_computed_reps INTEGER NOT NULL DEFAULT 0,
+			evaluation_attempts INTEGER NOT NULL DEFAULT 0,
+			evaluation_publish_started_at TIMESTAMPTZ,
+			evaluation_request_published_at TIMESTAMPTZ
 		)`, scenarioTable, projectTable)
 		if _, err := db.ExecContext(ctx, createScenario); err != nil {
 			return fmt.Errorf("create %s: %w", scenarioTable, err)
@@ -149,7 +165,12 @@ func validateProjectTable(ctx context.Context, db DB, table string) error {
 
 // validateScenarioStatusTable enforces the alpha4 scenario_status contract. It
 // requires the alpha4 translation_publish_started_at TIMESTAMPTZ NULL column
-// and a single-column FK project_id -> project.id ON DELETE CASCADE.
+// and a single-column FK project_id -> project.id ON DELETE CASCADE, plus the
+// additive round bookkeeping columns (runner_round, round_reps,
+// round_computed_reps) and the evaluation publication guards
+// (evaluation_attempts, evaluation_publish_started_at,
+// evaluation_request_published_at). A table missing or mis-typing any of them
+// is incompatible (fresh per-experiment Core DBs make migration a non-goal).
 func validateScenarioStatusTable(ctx context.Context, db DB, table, projectTable string) error {
 	columns, err := loadTableColumns(ctx, db, table)
 	if err != nil {
@@ -174,6 +195,12 @@ func validateScenarioStatusTable(ctx context.Context, db DB, table, projectTable
 		{"recipe_info", "jsonb", false},
 		{"container_image", "text", false},
 		{"confidence_metric", "float8", false},
+		{"runner_round", "int4", true},
+		{"round_reps", "int4", true},
+		{"round_computed_reps", "int4", true},
+		{"evaluation_attempts", "int4", true},
+		{"evaluation_publish_started_at", "timestamptz", false},
+		{"evaluation_request_published_at", "timestamptz", false},
 	}
 	for _, c := range required {
 		if err := requireColumn(table, columns, c.name, c.typ, c.notNull); err != nil {

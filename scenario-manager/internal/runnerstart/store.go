@@ -41,6 +41,8 @@ type Projection struct {
 	TranslationAttempt   int
 	NumberOfReps         int
 	NumberOfComputedReps int
+	Round                int
+	RoundReps            int
 	ContainerImage       string
 	ProjectNamespace     string
 	ProjectName          string
@@ -87,6 +89,8 @@ func (s *PersistenceStore) LoadProjection(ctx context.Context, scenarioID int) (
 		TranslationAttempt:   p.TranslationAttempt,
 		NumberOfReps:         p.NumberOfReps,
 		NumberOfComputedReps: p.NumberOfComputedReps,
+		Round:                p.Round,
+		RoundReps:            p.RoundReps,
 		ContainerImage:       p.ContainerImage,
 		ProjectNamespace:     p.ProjectNamespace,
 		ProjectName:          p.ProjectName,

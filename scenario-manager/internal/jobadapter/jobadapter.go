@@ -26,6 +26,8 @@ package jobadapter
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
@@ -123,6 +125,7 @@ func (a *Adapter) Start(ctx context.Context, req scheduler.RunnerStartRequest) s
 		Experiment:         exp,
 		ScenarioID:         req.ScenarioID,
 		TranslationAttempt: req.TranslationAttempt,
+		Round:              req.Round,
 		NumberOfReps:       req.NumberOfReps,
 		ContainerImage:     req.ContainerImage,
 	})
@@ -187,7 +190,7 @@ func (a *Adapter) Observe(ctx context.Context, req scheduler.ObservationRequest)
 		return observationResult(outcome, 0, "", nil)
 	}
 
-	jobName := lifecycle.RunnerJobName(exp.UID, req.ScenarioID, req.TranslationAttempt)
+	jobName := lifecycle.RunnerJobName(exp.UID, req.ScenarioID, req.TranslationAttempt, req.Round)
 	job, err := a.getJob(ctx, exp.Namespace, jobName)
 	if err != nil {
 		if apierrors.IsForbidden(err) {
@@ -343,6 +346,87 @@ func jobHasCondition(job *batchv1.Job, ct batchv1.JobConditionType) bool {
 		}
 	}
 	return false
+}
+
+// ParseRunnerJobName parses a deterministic runner Job name and returns the
+// scenario id, translation attempt, and runner round it encodes. It accepts
+// both name forms: the round-1 form simrun-<12-char-UID-prefix>-s<scenario-id>-a<attempt>
+// (no -r suffix, parsed as round 1) and the round >= 2 form
+// simrun-<12-char-UID-prefix>-s<scenario-id>-a<attempt>-r<round>. The UID
+// prefix must be exactly 12 lowercase alphanumeric characters; the scenario
+// id, attempt, and round must be canonical positive decimals (no leading
+// zeros). An unparseable name is an error: the caller treats it as an
+// identity collision, not an owned Job.
+func ParseRunnerJobName(name string) (scenarioID, attempt, round int, err error) {
+	rest, ok := strings.CutPrefix(name, "simrun-")
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("job name %q: missing simrun- prefix", name)
+	}
+	uidPart, rest, ok := strings.Cut(rest, "-s")
+	if !ok || !isUIDPrefix(uidPart) {
+		return 0, 0, 0, fmt.Errorf("job name %q: invalid 12-char UID prefix", name)
+	}
+	sid, rest, ok := cutCanonicalPositive(rest, "-a")
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("job name %q: invalid scenario id", name)
+	}
+	attemptPart, roundSuffix, hasRound := strings.Cut(rest, "-r")
+	att, ok := canonicalPositive(attemptPart)
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("job name %q: invalid translation attempt", name)
+	}
+	if !hasRound {
+		// No -r suffix: round 1.
+		return sid, att, 1, nil
+	}
+	rnd, ok := canonicalPositive(roundSuffix)
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("job name %q: invalid runner round", name)
+	}
+	return sid, att, rnd, nil
+}
+
+// isUIDPrefix reports whether s is exactly 12 lowercase alphanumeric
+// characters (the canonical experiment-UID prefix shape).
+func isUIDPrefix(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+// cutCanonicalPositive splits rest into the segment before sep and the tail,
+// requiring the segment to be a canonical positive decimal.
+func cutCanonicalPositive(rest, sep string) (int, string, bool) {
+	s, tail, ok := strings.Cut(rest, sep)
+	if !ok {
+		return 0, "", false
+	}
+	n, ok := canonicalPositive(s)
+	return n, tail, ok
+}
+
+// canonicalPositive parses a canonical positive decimal (no sign, no leading
+// zeros) and rejects anything else.
+func canonicalPositive(s string) (int, bool) {
+	if s == "" || s[0] == '0' {
+		return 0, false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // runnerStartResult is a small constructor for clarity at return sites.

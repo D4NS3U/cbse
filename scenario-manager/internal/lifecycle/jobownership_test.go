@@ -50,74 +50,113 @@ func TestParsePositiveDecimal(t *testing.T) {
 func TestRunnerJobName(t *testing.T) {
 	// UID 12 chars after lowercasing and hyphen stripping.
 	uid := types.UID("ABCD-1234-EFGH")
-	got := RunnerJobName(uid, 7, 2)
+	// Round 1 keeps today's exact byte-identical format: no -r suffix.
+	got := RunnerJobName(uid, 7, 2, 1)
 	want := "simrun-abcd1234efgh-s7-a2"
 	if got != want {
-		t.Fatalf("RunnerJobName = %q; want %q", got, want)
+		t.Fatalf("RunnerJobName round 1 = %q; want %q (byte-identical single-round name)", got, want)
+	}
+	// Rounds >= 2 append the -r<round> suffix.
+	if got := RunnerJobName(uid, 7, 2, 2); got != "simrun-abcd1234efgh-s7-a2-r2" {
+		t.Fatalf("RunnerJobName round 2 = %q; want simrun-abcd1234efgh-s7-a2-r2", got)
+	}
+	if got := RunnerJobName(uid, 7, 2, 12); got != "simrun-abcd1234efgh-s7-a2-r12" {
+		t.Fatalf("RunnerJobName round 12 = %q; want simrun-abcd1234efgh-s7-a2-r12", got)
 	}
 }
 
 func TestVerifyRunnerJob(t *testing.T) {
 	exp := newExperiment("ns", "proj", "uid-abc123", PhaseInProgress, true, false)
 	// Verified job passes.
-	if err := VerifyRunnerJob(verifiedJob(exp, 5, 1), exp); err != nil {
+	if err := VerifyRunnerJob(verifiedJob(exp, 5, 1, 1), exp); err != nil {
 		t.Fatalf("verified job: %v", err)
 	}
 
 	// Wrong project label.
-	bad := verifiedJob(exp, 5, 1)
+	bad := verifiedJob(exp, 5, 1, 1)
 	bad.Labels[LabelProject] = "other"
 	if err := VerifyRunnerJob(bad, exp); err == nil || !strings.Contains(err.Error(), "project") {
 		t.Fatalf("wrong project: %v", err)
 	}
 
 	// Wrong UID label.
-	bad = verifiedJob(exp, 5, 1)
+	bad = verifiedJob(exp, 5, 1, 1)
 	bad.Labels[LabelExperimentUID] = "other-uid"
 	if err := VerifyRunnerJob(bad, exp); err == nil || !strings.Contains(err.Error(), "experiment-uid") {
 		t.Fatalf("wrong uid: %v", err)
 	}
 
 	// Non-canonical scenario-id label (leading zero).
-	bad = verifiedJob(exp, 5, 1)
+	bad = verifiedJob(exp, 5, 1, 1)
 	bad.Labels[LabelScenarioID] = "05"
 	if err := VerifyRunnerJob(bad, exp); err == nil || !strings.Contains(err.Error(), "scenario-id") {
 		t.Fatalf("bad scenario-id: %v", err)
 	}
 
 	// Deterministic name mismatch: scenario-id label does not reproduce the name.
-	bad = verifiedJob(exp, 5, 1)
+	bad = verifiedJob(exp, 5, 1, 1)
 	bad.Labels[LabelScenarioID] = "9"
 	if err := VerifyRunnerJob(bad, exp); err == nil || !strings.Contains(err.Error(), "does not reproduce") {
 		t.Fatalf("name mismatch: %v", err)
 	}
 
 	// Wrong namespace.
-	bad = verifiedJob(exp, 5, 1)
+	bad = verifiedJob(exp, 5, 1, 1)
 	bad.Namespace = "other"
 	if err := VerifyRunnerJob(bad, exp); err == nil || !strings.Contains(err.Error(), "namespace mismatch") {
 		t.Fatalf("wrong namespace: %v", err)
 	}
 
 	// Missing controller owner reference.
-	bad = verifiedJob(exp, 5, 1)
+	bad = verifiedJob(exp, 5, 1, 1)
 	bad.OwnerReferences = nil
 	if err := VerifyRunnerJob(bad, exp); err == nil || !strings.Contains(err.Error(), "owner reference") {
 		t.Fatalf("missing owner ref: %v", err)
 	}
 
 	// Wrong controller UID in owner reference.
-	bad = verifiedJob(exp, 5, 1)
+	bad = verifiedJob(exp, 5, 1, 1)
 	bad.OwnerReferences[0].UID = "other-uid"
 	if err := VerifyRunnerJob(bad, exp); err == nil || !strings.Contains(err.Error(), "owner reference") {
 		t.Fatalf("wrong owner uid: %v", err)
 	}
 }
 
+func TestVerifyRunnerJobRoundLabel(t *testing.T) {
+	exp := newExperiment("ns", "proj", "uid-abc123", PhaseInProgress, true, false)
+
+	// A round-2 Job verifies: the -r2 name and the runner-round label agree.
+	if err := VerifyRunnerJob(verifiedJob(exp, 5, 1, 2), exp); err != nil {
+		t.Fatalf("verified round-2 job: %v", err)
+	}
+
+	// Missing runner-round label is a malformed identity.
+	noRound := verifiedJob(exp, 5, 1, 1)
+	delete(noRound.Labels, LabelRunnerRound)
+	if err := VerifyRunnerJob(noRound, exp); err == nil || !strings.Contains(err.Error(), "runner-round") {
+		t.Fatalf("missing round label: %v", err)
+	}
+
+	// Non-canonical round label (leading zero) is a malformed identity.
+	badRound := verifiedJob(exp, 5, 1, 1)
+	badRound.Labels[LabelRunnerRound] = "01"
+	if err := VerifyRunnerJob(badRound, exp); err == nil || !strings.Contains(err.Error(), "runner-round") {
+		t.Fatalf("bad round label: %v", err)
+	}
+
+	// Round label and name disagree: label says round 2 but the name is the
+	// round-1 form, so the name does not reproduce.
+	nameMismatch := verifiedJob(exp, 5, 1, 1)
+	nameMismatch.Labels[LabelRunnerRound] = "2"
+	if err := VerifyRunnerJob(nameMismatch, exp); err == nil || !strings.Contains(err.Error(), "does not reproduce") {
+		t.Fatalf("round label/name mismatch: %v", err)
+	}
+}
+
 func TestDeleteVerifiedRunnerJobs(t *testing.T) {
 	exp := newExperiment("ns", "proj", "uid-abc123", PhaseInProgress, true, false)
-	verified := verifiedJob(exp, 5, 1)
-	collision := verifiedJob(exp, 6, 2)
+	verified := verifiedJob(exp, 5, 1, 1)
+	collision := verifiedJob(exp, 6, 2, 1)
 	// Collision: passes the project+UID label list filter, but its controller
 	// owner reference points at a different UID.
 	collision.OwnerReferences[0].UID = "someone-else"
@@ -158,7 +197,7 @@ func TestDeleteVerifiedRunnerJobsEmpty(t *testing.T) {
 
 func TestConfirmRunnerJobsAbsent(t *testing.T) {
 	exp := newExperiment("ns", "proj", "uid-abc123", PhaseInProgress, true, false)
-	present := verifiedJob(exp, 5, 1)
+	present := verifiedJob(exp, 5, 1, 1)
 	k8s := fakeK8s(t, present)
 	// A still-present job fails the absence check.
 	if err := ConfirmRunnerJobsAbsent(context.Background(), k8s, exp.Namespace, []string{present.Name}); err == nil {
@@ -178,7 +217,7 @@ func TestConfirmAllRunnerJobsAbsent(t *testing.T) {
 		t.Fatalf("empty: %v", err)
 	}
 	// A remaining job fails the final check.
-	k8s = fakeK8s(t, verifiedJob(exp, 5, 1))
+	k8s = fakeK8s(t, verifiedJob(exp, 5, 1, 1))
 	if err := ConfirmAllRunnerJobsAbsent(context.Background(), k8s, exp); err == nil {
 		t.Fatal("remaining job: want absence error")
 	}

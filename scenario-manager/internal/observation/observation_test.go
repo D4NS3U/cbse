@@ -35,16 +35,23 @@ type fakeStore struct {
 
 	// inproc is the set of scenario IDs currently in InProcessing.
 	inproc map[int]struct{}
-	// computed tracks number_of_computed_reps per scenario.
+	// computed tracks the cross-round total number_of_computed_reps.
 	computed map[int]int
-	reps     map[int]int // number_of_reps per scenario
+	// reps tracks the current round's requested count (round_reps) per
+	// scenario; for round 1 it equals number_of_reps.
+	reps map[int]int
+	// rounds tracks the current runner_round per scenario.
+	rounds map[int]int
+	// roundCounts tracks round_computed_reps (current round, clamped) per
+	// scenario.
+	roundCounts map[int]int
 
 	loadErr   error
 	listErr   error
 	updateErr error
 	postErr   error
 	failedErr error
-	// updateStale makes UpdateComputedRepsMonotonic return false (zero rows).
+	// updateStale makes UpdateComputedRepsForRound return false (zero rows).
 	updateStale map[int]bool
 	// postStale makes MarkPostProcessing return false (zero rows) without
 	// deleting, simulating a race where another path moved the row between
@@ -61,6 +68,7 @@ type fakeStore struct {
 
 type updateCall struct {
 	id    int
+	round int
 	count int
 }
 
@@ -69,6 +77,8 @@ func newFakeStore(ids ...int) *fakeStore {
 		inproc:      make(map[int]struct{}),
 		computed:    make(map[int]int),
 		reps:        make(map[int]int),
+		rounds:      make(map[int]int),
+		roundCounts: make(map[int]int),
 		updateStale: make(map[int]bool),
 		postStale:   make(map[int]bool),
 		failedStale: make(map[int]bool),
@@ -76,6 +86,7 @@ func newFakeStore(ids ...int) *fakeStore {
 	for _, id := range ids {
 		f.inproc[id] = struct{}{}
 		f.reps[id] = 4
+		f.rounds[id] = 1
 	}
 	return f
 }
@@ -108,19 +119,25 @@ func (f *fakeStore) LoadProjection(ctx context.Context, scenarioID int) (*Projec
 		TranslationAttempt:   1,
 		NumberOfReps:         f.reps[scenarioID],
 		NumberOfComputedReps: f.computed[scenarioID],
+		Round:                f.rounds[scenarioID],
+		RoundReps:            f.reps[scenarioID],
 		ProjectNamespace:     "ns-x",
 		ProjectName:          "exp-x",
 	}, nil
 }
 
-func (f *fakeStore) UpdateComputedRepsMonotonic(ctx context.Context, scenarioID, count int) (int, bool, error) {
+func (f *fakeStore) UpdateComputedRepsForRound(ctx context.Context, scenarioID, round, count int) (int, bool, error) {
 	f.mu.Lock()
-	f.updateCalls = append(f.updateCalls, updateCall{id: scenarioID, count: count})
+	f.updateCalls = append(f.updateCalls, updateCall{id: scenarioID, round: round, count: count})
 	if f.updateErr != nil {
 		f.mu.Unlock()
 		return 0, false, f.updateErr
 	}
 	if f.updateStale[scenarioID] {
+		// Simulate the race: another path moved the row out of
+		// InProcessing (or out of the round) between LoadProjection and
+		// the update.
+		delete(f.inproc, scenarioID)
 		f.mu.Unlock()
 		return 0, false, nil
 	}
@@ -128,16 +145,29 @@ func (f *fakeStore) UpdateComputedRepsMonotonic(ctx context.Context, scenarioID,
 		f.mu.Unlock()
 		return 0, false, nil
 	}
-	cur := f.computed[scenarioID]
-	if count > cur {
-		cur = count
+	if f.rounds[scenarioID] != round {
+		// Stale round: only the current round's row may be updated.
+		f.mu.Unlock()
+		return 0, false, nil
 	}
-	if cap := f.reps[scenarioID]; cur > cap {
-		cur = cap
+	// Mirror the guarded update: per-round monotone + clamp to round_reps,
+	// then cross-round total accumulation (total - priorRound + newRound).
+	prior := f.roundCounts[scenarioID]
+	rc := count
+	if rc < prior {
+		rc = prior
 	}
-	f.computed[scenarioID] = cur
+	if c := f.reps[scenarioID]; rc > c {
+		rc = c
+	}
+	f.roundCounts[scenarioID] = rc
+	total := f.computed[scenarioID]
+	if acc := total - prior + rc; acc > total {
+		total = acc
+	}
+	f.computed[scenarioID] = total
 	f.mu.Unlock()
-	return cur, true, nil
+	return total, true, nil
 }
 
 func (f *fakeStore) MarkPostProcessing(ctx context.Context, scenarioID int) (bool, error) {
@@ -199,6 +229,9 @@ func (f *fakeStore) addInProcessing(id int) {
 	f.inproc[id] = struct{}{}
 	if _, ok := f.reps[id]; !ok {
 		f.reps[id] = 4
+	}
+	if _, ok := f.rounds[id]; !ok {
+		f.rounds[id] = 1
 	}
 }
 
@@ -952,5 +985,121 @@ func TestObservationNoFailRecordOnStaleFailed(t *testing.T) {
 				t.Fatalf("stale %s should emit no record, got %d: %+v", tc.name, len(got), got)
 			}
 		})
+	}
+}
+
+// TestObservationRoundTwoCompletesWithRoundScopedCounts proves the current-
+// round observation semantics: the observation request carries the scenario
+// row's runner_round and round_reps, the round-scoped computed-reps update is
+// applied with the round and per-round count, the cross-round total
+// accumulates, and the terminal eventlog record carries the round's requested
+// count and round Job name.
+func TestObservationRoundTwoCompletesWithRoundScopedCounts(t *testing.T) {
+	store := newFakeStore(31)
+	store.rounds[31] = 2   // scenario is in runner round 2
+	store.reps[31] = 3     // round_reps for round 2
+	store.computed[31] = 2 // total from round 1 (its number_of_reps)
+	rec := &eventlog.Recorder{}
+	adapter := newFakeAdapter()
+	adapter.setOutcome(31, scheduler.ObservationResult{
+		Outcome:       scheduler.ObservationCompleted,
+		CompletedReps: 3,
+		JobName:       "simrun-abcdef1234-s31-a1-r2",
+	})
+	s := startSchedulerWithLogger(t, store, adapter, 1, rec)
+	defer s.Shutdown(context.Background())
+
+	poll(t, func() bool { return !store.isInProcessing(31) }, "round-2 scenario completed")
+
+	// The observation request carried the current round and round reps.
+	adapter.mu.Lock()
+	var req *scheduler.ObservationRequest
+	for i := range adapter.calls {
+		if adapter.calls[i].req.ScenarioID == 31 {
+			req = &adapter.calls[i].req
+		}
+	}
+	adapter.mu.Unlock()
+	if req == nil {
+		t.Fatal("no observation request recorded for scenario 31")
+	}
+	if req.Round != 2 {
+		t.Fatalf("request.Round = %d; want 2 (current runner_round)", req.Round)
+	}
+	if req.NumberOfReps != 3 {
+		t.Fatalf("request.NumberOfReps = %d; want 3 (round_reps)", req.NumberOfReps)
+	}
+
+	// The round-scoped computed-reps update ran with round 2 and the
+	// per-round count.
+	store.mu.Lock()
+	var up *updateCall
+	for i := range store.updateCalls {
+		if store.updateCalls[i].id == 31 {
+			up = &store.updateCalls[i]
+		}
+	}
+	store.mu.Unlock()
+	if up == nil {
+		t.Fatal("no computed-reps update recorded for scenario 31")
+	}
+	if up.round != 2 || up.count != 3 {
+		t.Fatalf("update = round %d count %d; want round 2 count 3", up.round, up.count)
+	}
+
+	// Cross-round total: 2 (round 1) + 3 (round 2) = 5.
+	if got := store.computedReps(31); got != 5 {
+		t.Fatalf("cross-round total = %d; want 5 (2+3)", got)
+	}
+
+	// The terminal eventlog record carries the round's requested count and
+	// the round Job name.
+	records := rec.Records()
+	if len(records) != 1 {
+		t.Fatalf("records = %d; want exactly 1 terminal record", len(records))
+	}
+	if records[0].Event != eventlog.EventComplete || records[0].ScenarioID != 31 {
+		t.Fatalf("record = %+v; want EventComplete for scenario 31", records[0])
+	}
+	if records[0].RequestedReps != 3 {
+		t.Fatalf("record RequestedReps = %d; want 3 (round_reps)", records[0].RequestedReps)
+	}
+	if records[0].JobName != "simrun-abcdef1234-s31-a1-r2" {
+		t.Fatalf("record JobName = %q; want the round-2 Job name", records[0].JobName)
+	}
+}
+
+// TestObservationStaleRoundUpdateIsNoOp proves the round guard: a stale
+// (previous round's) computed-reps update matches no row, so the scenario
+// leaves InProcessing without a count update or terminal record.
+func TestObservationStaleRoundUpdateIsNoOp(t *testing.T) {
+	store := newFakeStore(32)
+	store.rounds[32] = 2
+	store.reps[32] = 3
+	store.computed[32] = 2
+	adapter := newFakeAdapter()
+	adapter.setOutcome(32, scheduler.ObservationResult{
+		Outcome:       scheduler.ObservationCompleted,
+		CompletedReps: 3,
+		JobName:       "simrun-abcdef1234-s32-a1-r2",
+	})
+	// Force the round-scoped update to miss: simulate the row no longer being
+	// in the requested round.
+	store.updateStale[32] = true
+	s := startScheduler(t, store, adapter, 1)
+	defer s.Shutdown(context.Background())
+
+	poll(t, func() bool { return !store.isInProcessing(32) }, "stale scenario removed")
+	store.mu.Lock()
+	ups := len(store.updateCalls)
+	post := len(store.postCalls)
+	failed := len(store.failedCalls)
+	total := store.computed[32]
+	store.mu.Unlock()
+	if ups != 1 || post != 0 || failed != 0 {
+		t.Fatalf("update=%d post=%d failed=%d; want 1/0/0 (stale update, no transition)", ups, post, failed)
+	}
+	if total != 2 {
+		t.Fatalf("total = %d; want 2 (unchanged on stale round update)", total)
 	}
 }

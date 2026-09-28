@@ -96,6 +96,61 @@ func TestMarkScenarioTranslationPublishFailedValidation(t *testing.T) {
 	}
 }
 
+func TestMarkScenarioFinishedValidation(t *testing.T) {
+	var db DB
+	if _, err := MarkScenarioFinished(context.Background(), db, 0); err == nil {
+		t.Fatal("zero id: want error")
+	}
+	if _, err := MarkScenarioFinished(context.Background(), db, -1); err == nil {
+		t.Fatal("negative id: want error")
+	}
+}
+
+func TestClaimScenarioForEvaluationValidation(t *testing.T) {
+	var store Store
+	if _, _, err := ClaimScenarioForEvaluation(context.Background(), store, 0); !errors.Is(err, errPositiveID) {
+		t.Fatalf("err = %v; want errPositiveID", err)
+	}
+	if _, _, err := ClaimScenarioForEvaluation(context.Background(), store, -1); !errors.Is(err, errPositiveID) {
+		t.Fatalf("err = %v; want errPositiveID", err)
+	}
+}
+
+func TestMarkEvaluationPublishStartedValidation(t *testing.T) {
+	var db DB
+	if _, err := MarkEvaluationPublishStarted(context.Background(), db, 0, 1); !errors.Is(err, errPositiveID) {
+		t.Fatalf("id: %v", err)
+	}
+	if _, err := MarkEvaluationPublishStarted(context.Background(), db, 1, 0); !errors.Is(err, errPositiveAttempt) {
+		t.Fatalf("attempt: %v", err)
+	}
+}
+
+func TestMarkEvaluationRequestPublishedValidation(t *testing.T) {
+	var db DB
+	if _, err := MarkEvaluationRequestPublished(context.Background(), db, 0, 1); !errors.Is(err, errPositiveID) {
+		t.Fatalf("id: %v", err)
+	}
+	if _, err := MarkEvaluationRequestPublished(context.Background(), db, 1, 0); !errors.Is(err, errPositiveAttempt) {
+		t.Fatalf("attempt: %v", err)
+	}
+}
+
+func TestClaimScenarioForEvaluationRoundValidation(t *testing.T) {
+	var db DB
+	ctx := context.Background()
+	if _, _, err := ClaimScenarioForEvaluationRound(ctx, db, 0, 2); !errors.Is(err, errPositiveID) {
+		t.Fatalf("id: %v", err)
+	}
+	// additionalRunners < 1 is rejected with the typed error, no SQL round-trip.
+	if _, _, err := ClaimScenarioForEvaluationRound(ctx, db, 1, 0); !errors.Is(err, ErrInvalidAdditionalRunners) {
+		t.Fatalf("zero additional runners: err = %v; want ErrInvalidAdditionalRunners", err)
+	}
+	if _, _, err := ClaimScenarioForEvaluationRound(ctx, db, 1, -3); !errors.Is(err, ErrInvalidAdditionalRunners) {
+		t.Fatalf("negative additional runners: err = %v; want ErrInvalidAdditionalRunners", err)
+	}
+}
+
 func TestMarkScenariosFailedForProjectValidation(t *testing.T) {
 	var store Store
 	if _, err := MarkScenariosFailedForProject(context.Background(), store, 0); err == nil {
