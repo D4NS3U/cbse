@@ -337,7 +337,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 
 	// Verifies a metadata-only update (an annotation timestamp) is reconciled
 	// idempotently: the operator does not create duplicate owned Deployments,
-	// so the project-labeled Deployment count stays at three.
+	// so the project-labeled Deployment count stays at four.
 	It("reconciles an idempotent metadata update without duplicating children", func() {
 		key := types.NamespacedName{Namespace: namespace, Name: project}
 		experiment := &experimentalpha4.SimulationExperiment{}
@@ -353,7 +353,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			g.Expect(k8sClient.List(ctx, deployments, client.InNamespace(namespace), client.MatchingLabels{
 				"experiment.cbse.terministic.de/project": project,
 			})).To(Succeed())
-			g.Expect(deployments.Items).To(HaveLen(3))
+			g.Expect(deployments.Items).To(HaveLen(4))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 

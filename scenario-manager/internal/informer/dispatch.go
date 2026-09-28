@@ -76,6 +76,14 @@ type Dispatcher struct {
 	// unit tests that do not assert purge stream values leave them zero.
 	edsStreamName        string
 	translatorStreamName string
+	// ppsStreamName is the canonical JetStream stream name passed to
+	// lifecycle.RunDeletionCleanup for the PPS subject-filtered purges, and
+	// ppsCleaner performs the ownership-verified per-experiment PPS consumer
+	// deletion. Both are populated by the production wiring
+	// (NewProductionDispatcher); unit tests that do not exercise deletion
+	// cleanup leave them zero.
+	ppsStreamName string
+	ppsCleaner    lifecycle.PPSCleaner
 
 	mu      sync.Mutex
 	gates   map[string]*gate
@@ -257,7 +265,7 @@ func (d *Dispatcher) runOnce(ctx context.Context, exp *experimentalpha4.Simulati
 	case lifecycle.ActionTerminal:
 		return lifecycle.RunTerminalAction(ctx, d.k8s, d.store, exp)
 	case lifecycle.ActionDeletionCleanup:
-		return lifecycle.RunDeletionCleanup(ctx, d.k8s, d.store, d.msg, d.edsStreamName, d.translatorStreamName, exp)
+		return lifecycle.RunDeletionCleanup(ctx, d.k8s, d.store, d.msg, d.ppsCleaner, d.edsStreamName, d.translatorStreamName, d.ppsStreamName, exp)
 	default:
 		return fmt.Errorf("unexpected action kind %s", kind)
 	}

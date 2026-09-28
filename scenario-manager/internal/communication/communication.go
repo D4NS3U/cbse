@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/D4NS3U/cbse/scenario-manager/internal/subject"
 )
@@ -182,6 +183,82 @@ type TranslatorReadyConsumer interface {
 	StartTranslatorReadyConsumer(ctx context.Context, handler TranslatorReadyHandler) error
 }
 
+// ScenarioForEvaluation is the transport-neutral projection claimed for the
+// evaluation-request publication workflow. It carries the explicit
+// (ProjectNamespace, ProjectName) identity and the experiment UID so the
+// publisher can construct the exact request subject and wire payload without
+// reconstructing either from process configuration.
+type ScenarioForEvaluation struct {
+	ExperimentUID     string
+	ProjectNamespace  string
+	ProjectName       string
+	ScenarioID        int
+	EvaluationAttempt int
+	RunnerRound       int
+	NumberOfReps      int
+	ConfidenceMetric  float64
+}
+
+// PPSEvaluationMessage is the transport-neutral representation of an
+// evaluation verdict after the adapter has validated subject shape, JSON
+// payload shape, and subject/payload identity. It carries the explicit
+// (ProjectNamespace, ProjectName) identity parsed from the verdict subject.
+type PPSEvaluationMessage struct {
+	ProjectNamespace  string
+	ProjectName       string
+	ExperimentUID     string
+	ScenarioID        int
+	RunnerRound       int
+	Metric            string
+	Verdict           string
+	SampleMean        float64
+	HalfWidth         float64
+	Replications      int
+	ConfidenceMetric  float64
+	AdditionalRunners int
+	MaxReplications   int
+}
+
+// PPSEvaluationHandlingStatus expresses the semantic outcome of verdict
+// handling without leaking broker-specific acknowledgement concepts.
+type PPSEvaluationHandlingStatus string
+
+const (
+	// PPSEvaluationHandled indicates a terminal semantic outcome. Adapters ACK
+	// such messages, whether the outcome was a transition, a duplicate, a
+	// stale no-op, or a poison case.
+	PPSEvaluationHandled PPSEvaluationHandlingStatus = "Handled"
+	// PPSEvaluationRetry indicates a transient dependency failure. Adapters
+	// request redelivery (e.g. a JetStream NAK).
+	PPSEvaluationRetry PPSEvaluationHandlingStatus = "Retry"
+)
+
+// PPSEvaluationHandlingResult carries the semantic handling decision plus a
+// short reason string that adapters can include in logs.
+type PPSEvaluationHandlingResult struct {
+	Status PPSEvaluationHandlingStatus
+	Reason string
+}
+
+// EvaluationRequestPublisher is the transport-neutral publishing surface used
+// by the evaluation handoff workflow. Implementations return nil only after
+// the underlying transport has accepted the message durably (e.g. a JetStream
+// PubAck). The publisher constructs the exact request subject from the
+// scenario's ProjectNamespace and ProjectName.
+type EvaluationRequestPublisher interface {
+	PublishEvaluationRequest(ctx context.Context, scenario ScenarioForEvaluation) error
+}
+
+// PPSEvaluationHandler is the semantic callback invoked by transport adapters
+// after transport-level validation has succeeded.
+type PPSEvaluationHandler func(ctx context.Context, verdict PPSEvaluationMessage) PPSEvaluationHandlingResult
+
+// PPSEvaluationConsumer is the process-scoped consumer surface used to start
+// delivery of PPS evaluation verdicts into a core-owned handler.
+type PPSEvaluationConsumer interface {
+	StartPPSEvaluationConsumer(ctx context.Context, handler PPSEvaluationHandler) error
+}
+
 // EDSAvailabilityResponder answers an EDS availability request, applying the
 // lifecycle gate and returning the exact batch subject for an active
 // experiment or status=error with no batch_subject otherwise.
@@ -193,6 +270,13 @@ type EDSAvailabilityResponder interface {
 // (subject/payload mismatch or an out-of-range repetition count). Such a
 // batch is poison: the caller ACKs the delivery and inserts no rows.
 var ErrBatchValidation = errors.New("eds batch validation failed")
+
+// ErrEvaluationWire is returned when a PPS evaluation request or verdict wire
+// payload fails strict validation: a missing or unknown JSON field, an out-of-
+// domain value, or a subject/payload identity mismatch. Such a payload is
+// permanent poison: the caller ACKs the delivery (or refuses to publish) and
+// performs no persistence mutation.
+var ErrEvaluationWire = errors.New("pps evaluation wire validation failed")
 
 // ValidateBatchIdentity confirms that a decoded batch's wire `project` field
 // is non-empty and matches the project token of the subject identity parsed
@@ -216,4 +300,274 @@ func ValidateBatchReps(scenarios []ScenarioRecord) error {
 		}
 	}
 	return nil
+}
+
+// PPS evaluation verdict values. The PostProcessingService answers exactly one
+// of these per evaluation round; the SM applies the matching guarded scenario
+// transition. Any other value is permanent poison.
+const (
+	// VerdictMet is the precision-met verdict: the scenario finishes.
+	VerdictMet = "met"
+	// VerdictAdditionalRunners is the precision-not-met verdict: the scenario
+	// starts a new runner round with the additional-runners count.
+	VerdictAdditionalRunners = "additional_runners"
+	// VerdictStopUnmet is the maximum-replications stop verdict: the scenario
+	// fails through the guarded PostProcessing -> Failed path.
+	VerdictStopUnmet = "stop_unmet"
+)
+
+// ScenarioEvaluationRequest is the evaluation request the Scenario Manager
+// publishes on cbse.<namespace>.<project>.pps.request. Every field is
+// required on the wire; UnmarshalJSON applies the strict shape and semantic
+// validation, so a decoded value always satisfies Validate.
+type ScenarioEvaluationRequest struct {
+	ExperimentUID    string  `json:"experiment_uid"`
+	Namespace        string  `json:"namespace"`
+	Project          string  `json:"project"`
+	ScenarioID       int     `json:"scenario_id"`
+	RunnerRound      int     `json:"runner_round"`
+	NumberOfReps     int     `json:"number_of_reps"`
+	ConfidenceMetric float64 `json:"confidence_metric"`
+}
+
+// ppSEvaluationRequestWireFields is the exact required field set of the
+// evaluation request payload; unknown or missing fields are poison.
+var ppSEvaluationRequestWireFields = map[string]struct{}{
+	"experiment_uid":    {},
+	"namespace":         {},
+	"project":           {},
+	"scenario_id":       {},
+	"runner_round":      {},
+	"number_of_reps":    {},
+	"confidence_metric": {},
+}
+
+// UnmarshalJSON decodes exactly one evaluation request and applies the strict
+// wire validation: every field present, no unknown fields, and the semantic
+// domain checks in Validate. Any violation is ErrEvaluationWire.
+func (r *ScenarioEvaluationRequest) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("%w: %v", ErrEvaluationWire, err)
+	}
+	if err := checkWireFields(raw, ppSEvaluationRequestWireFields); err != nil {
+		return err
+	}
+	// Decode into an intermediate shape to avoid re-entering this method.
+	var wire struct {
+		ExperimentUID    string  `json:"experiment_uid"`
+		Namespace        string  `json:"namespace"`
+		Project          string  `json:"project"`
+		ScenarioID       int     `json:"scenario_id"`
+		RunnerRound      int     `json:"runner_round"`
+		NumberOfReps     int     `json:"number_of_reps"`
+		ConfidenceMetric float64 `json:"confidence_metric"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return fmt.Errorf("%w: %v", ErrEvaluationWire, err)
+	}
+	*r = ScenarioEvaluationRequest{
+		ExperimentUID:    wire.ExperimentUID,
+		Namespace:        wire.Namespace,
+		Project:          wire.Project,
+		ScenarioID:       wire.ScenarioID,
+		RunnerRound:      wire.RunnerRound,
+		NumberOfReps:     wire.NumberOfReps,
+		ConfidenceMetric: wire.ConfidenceMetric,
+	}
+	return r.Validate()
+}
+
+// Validate applies the semantic domain checks of the evaluation request
+// contract: positive scenario id, runner round at least 1, at least one
+// replication, a finite positive confidence metric (the precision threshold
+// epsilon), and non-empty identity fields.
+func (r *ScenarioEvaluationRequest) Validate() error {
+	if r.ExperimentUID == "" {
+		return fmt.Errorf("%w: empty experiment_uid", ErrEvaluationWire)
+	}
+	if r.Namespace == "" {
+		return fmt.Errorf("%w: empty namespace", ErrEvaluationWire)
+	}
+	if r.Project == "" {
+		return fmt.Errorf("%w: empty project", ErrEvaluationWire)
+	}
+	if r.ScenarioID <= 0 {
+		return fmt.Errorf("%w: scenario_id %d must be positive", ErrEvaluationWire, r.ScenarioID)
+	}
+	if r.RunnerRound < 1 {
+		return fmt.Errorf("%w: runner_round %d must be at least 1", ErrEvaluationWire, r.RunnerRound)
+	}
+	if r.NumberOfReps < 1 {
+		return fmt.Errorf("%w: number_of_reps %d must be at least 1", ErrEvaluationWire, r.NumberOfReps)
+	}
+	if !isFinitePositive(r.ConfidenceMetric) {
+		return fmt.Errorf("%w: confidence_metric %v must be finite and positive", ErrEvaluationWire, r.ConfidenceMetric)
+	}
+	return nil
+}
+
+// PPSEvaluationVerdict is the evaluation verdict the PostProcessingService
+// publishes on cbse.<namespace>.<project>.pps.<scenario-id>.evaluation.
+// Every field is required on the wire; UnmarshalJSON applies the strict shape
+// and semantic validation, so a decoded value always satisfies Validate.
+type PPSEvaluationVerdict struct {
+	ExperimentUID     string  `json:"experiment_uid"`
+	Namespace         string  `json:"namespace"`
+	Project           string  `json:"project"`
+	ScenarioID        int     `json:"scenario_id"`
+	RunnerRound       int     `json:"runner_round"`
+	Metric            string  `json:"metric"`
+	Verdict           string  `json:"verdict"`
+	SampleMean        float64 `json:"sample_mean"`
+	HalfWidth         float64 `json:"half_width"`
+	Replications      int     `json:"replications"`
+	ConfidenceMetric  float64 `json:"confidence_metric"`
+	AdditionalRunners int     `json:"additional_runners"`
+	MaxReplications   int     `json:"max_replications"`
+}
+
+// ppSEvaluationVerdictWireFields is the exact required field set of the
+// evaluation verdict payload; unknown or missing fields are poison.
+var ppSEvaluationVerdictWireFields = map[string]struct{}{
+	"experiment_uid":     {},
+	"namespace":          {},
+	"project":            {},
+	"scenario_id":        {},
+	"runner_round":       {},
+	"metric":             {},
+	"verdict":            {},
+	"sample_mean":        {},
+	"half_width":         {},
+	"replications":       {},
+	"confidence_metric":  {},
+	"additional_runners": {},
+	"max_replications":   {},
+}
+
+// UnmarshalJSON decodes exactly one evaluation verdict and applies the strict
+// wire validation: every field present, no unknown fields, and the semantic
+// domain checks in Validate. Any violation is ErrEvaluationWire.
+func (v *PPSEvaluationVerdict) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("%w: %v", ErrEvaluationWire, err)
+	}
+	if err := checkWireFields(raw, ppSEvaluationVerdictWireFields); err != nil {
+		return err
+	}
+	// Decode into an intermediate shape to avoid re-entering this method.
+	var wire struct {
+		ExperimentUID     string  `json:"experiment_uid"`
+		Namespace         string  `json:"namespace"`
+		Project           string  `json:"project"`
+		ScenarioID        int     `json:"scenario_id"`
+		RunnerRound       int     `json:"runner_round"`
+		Metric            string  `json:"metric"`
+		Verdict           string  `json:"verdict"`
+		SampleMean        float64 `json:"sample_mean"`
+		HalfWidth         float64 `json:"half_width"`
+		Replications      int     `json:"replications"`
+		ConfidenceMetric  float64 `json:"confidence_metric"`
+		AdditionalRunners int     `json:"additional_runners"`
+		MaxReplications   int     `json:"max_replications"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return fmt.Errorf("%w: %v", ErrEvaluationWire, err)
+	}
+	*v = PPSEvaluationVerdict{
+		ExperimentUID:     wire.ExperimentUID,
+		Namespace:         wire.Namespace,
+		Project:           wire.Project,
+		ScenarioID:        wire.ScenarioID,
+		RunnerRound:       wire.RunnerRound,
+		Metric:            wire.Metric,
+		Verdict:           wire.Verdict,
+		SampleMean:        wire.SampleMean,
+		HalfWidth:         wire.HalfWidth,
+		Replications:      wire.Replications,
+		ConfidenceMetric:  wire.ConfidenceMetric,
+		AdditionalRunners: wire.AdditionalRunners,
+		MaxReplications:   wire.MaxReplications,
+	}
+	return v.Validate()
+}
+
+// Validate applies the semantic domain checks of the evaluation verdict
+// contract: non-empty identity and metric, positive scenario id, runner round
+// at least 1, a known verdict, finite sample mean and half width, a finite
+// positive confidence metric, non-negative replications, and
+// additional_runners >= 1 exactly when the verdict is additional_runners
+// (zero otherwise).
+func (v *PPSEvaluationVerdict) Validate() error {
+	if v.ExperimentUID == "" {
+		return fmt.Errorf("%w: empty experiment_uid", ErrEvaluationWire)
+	}
+	if v.Namespace == "" {
+		return fmt.Errorf("%w: empty namespace", ErrEvaluationWire)
+	}
+	if v.Project == "" {
+		return fmt.Errorf("%w: empty project", ErrEvaluationWire)
+	}
+	if v.Metric == "" {
+		return fmt.Errorf("%w: empty metric", ErrEvaluationWire)
+	}
+	if v.ScenarioID <= 0 {
+		return fmt.Errorf("%w: scenario_id %d must be positive", ErrEvaluationWire, v.ScenarioID)
+	}
+	if v.RunnerRound < 1 {
+		return fmt.Errorf("%w: runner_round %d must be at least 1", ErrEvaluationWire, v.RunnerRound)
+	}
+	switch v.Verdict {
+	case VerdictMet, VerdictAdditionalRunners, VerdictStopUnmet:
+	default:
+		return fmt.Errorf("%w: unknown verdict %q", ErrEvaluationWire, v.Verdict)
+	}
+	if !isFinite(v.SampleMean) {
+		return fmt.Errorf("%w: sample_mean %v must be finite", ErrEvaluationWire, v.SampleMean)
+	}
+	if !isFinite(v.HalfWidth) {
+		return fmt.Errorf("%w: half_width %v must be finite", ErrEvaluationWire, v.HalfWidth)
+	}
+	if !isFinitePositive(v.ConfidenceMetric) {
+		return fmt.Errorf("%w: confidence_metric %v must be finite and positive", ErrEvaluationWire, v.ConfidenceMetric)
+	}
+	if v.Replications < 0 {
+		return fmt.Errorf("%w: replications %d must be non-negative", ErrEvaluationWire, v.Replications)
+	}
+	if v.Verdict == VerdictAdditionalRunners {
+		if v.AdditionalRunners < 1 {
+			return fmt.Errorf("%w: additional_runners %d must be at least 1 for verdict %q", ErrEvaluationWire, v.AdditionalRunners, VerdictAdditionalRunners)
+		}
+	} else if v.AdditionalRunners != 0 {
+		return fmt.Errorf("%w: additional_runners %d must be zero unless the verdict is %q", ErrEvaluationWire, v.AdditionalRunners, VerdictAdditionalRunners)
+	}
+	return nil
+}
+
+// checkWireFields confirms that raw carries exactly the required field set:
+// every required key present and no unknown keys. It is the shared strict-shape
+// check of the evaluation request and verdict payloads.
+func checkWireFields(raw map[string]json.RawMessage, required map[string]struct{}) error {
+	for k := range raw {
+		if _, ok := required[k]; !ok {
+			return fmt.Errorf("%w: unknown field %q", ErrEvaluationWire, k)
+		}
+	}
+	for k := range required {
+		if _, ok := raw[k]; !ok {
+			return fmt.Errorf("%w: missing required field %q", ErrEvaluationWire, k)
+		}
+	}
+	return nil
+}
+
+// isFinite reports whether f is a finite float (not NaN or infinity).
+func isFinite(f float64) bool {
+	return !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
+// isFinitePositive reports whether f is finite and strictly positive.
+func isFinitePositive(f float64) bool {
+	return isFinite(f) && f > 0
 }

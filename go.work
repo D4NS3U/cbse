@@ -1,6 +1,7 @@
 go 1.26.3
 
 use (
+	./component-templates/post-processing-service
 	./component-templates/translator
 	./experiment-operator
 	./scenario-manager

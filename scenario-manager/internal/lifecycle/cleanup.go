@@ -23,16 +23,30 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// PPSCleaner performs the PPS-side deletion-time cleanup for one experiment:
+// ownership-verified deletion of the per-experiment PPS consumer. It is
+// injected so unit tests exercise the cleanup ordering with fakes; the real
+// adapter wraps a JetStream context (nats.NATSDeletionClient). The PPS
+// subject-filtered purges ride the shared MessagingCleaner.PurgeSubject on the
+// PPS stream.
+type PPSCleaner interface {
+	// DeletePPSConsumer deletes the per-experiment PPS consumer after
+	// ownership verification. A missing consumer is success (nil). An
+	// ownership collision returns an error so the caller retains the
+	// finalizer and retries.
+	DeletePPSConsumer(ctx context.Context, uid, namespace, project string) error
+}
+
 // RunDeletionCleanup performs the idempotent deleted-experiment cleanup in the
 // required order. The caller has already closed the lifecycle gate and re-got
 // the current object; exp is the still-present CR protected by the SM finalizer
 // and supplies the authoritative namespace, name, and UID.
 //
-// The two canonical JetStream stream names (edsStreamName and
-// translatorStreamName) are injected by the caller rather than imported from the
-// NATS package so this transport-neutral package has no dependency on the
-// transport; the composition (internal/core) supplies the nats package's
-// canonical constants.
+// The three canonical JetStream stream names (edsStreamName,
+// translatorStreamName, and ppsStreamName) are injected by the caller rather
+// than imported from the NATS package so this transport-neutral package has no
+// dependency on the transport; the composition (internal/core) supplies the
+// nats package's canonical constants.
 //
 //  1. Delete and confirm absence of all ownership-verified runner Jobs.
 //  2. Retrieve and ownership-verify the per-experiment Translator consumer; a
@@ -44,11 +58,18 @@ import (
 //     removes its scenarios.
 //  7. Final verified Job absence check.
 //  8. Remove the SM finalizer.
+//  9. Purge cbse.<ns>.<proj>.pps.request from ppsStreamName.
+//  10. Purge cbse.<ns>.<proj>.pps.*.evaluation from ppsStreamName.
+//  11. Retrieve and ownership-verify the per-experiment PPS consumer; a missing
+//     consumer is success, a collision fails the attempt.
 //
 // A missing stream, consumer, project row, verified Job, or finalizer is
 // success. Any failure returns an error so the caller retains the finalizer
 // and retries on the fixed cadence.
-func RunDeletionCleanup(ctx context.Context, k8s client.Client, store ProjectStore, msg MessagingCleaner, edsStreamName, translatorStreamName string, exp *experimentalpha4.SimulationExperiment) error {
+//
+// Steps 9-11 are the PPS deletion-cleanup extension, appended to the
+// translator-flow steps without renumbering them.
+func RunDeletionCleanup(ctx context.Context, k8s client.Client, store ProjectStore, msg MessagingCleaner, pps PPSCleaner, edsStreamName, translatorStreamName, ppsStreamName string, exp *experimentalpha4.SimulationExperiment) error {
 	if exp == nil {
 		return fmt.Errorf("deletion cleanup: experiment must not be nil")
 	}
@@ -105,6 +126,28 @@ func RunDeletionCleanup(ctx context.Context, k8s client.Client, store ProjectSto
 	// 8. Remove the SM finalizer.
 	if err := RemoveFinalizer(ctx, k8s, exp); err != nil {
 		return fmt.Errorf("deletion cleanup step 8 (remove finalizer): %w", err)
+	}
+
+	// 9-10. PPS subject-filtered purges on the PPS stream (the PPS cleanup
+	// extension, appended after the finalizer step without renumbering the
+	// translator-flow steps).
+	ppsPurges := []struct {
+		stream  string
+		subject string
+		step    int
+	}{
+		{ppsStreamName, subject.PPSRequestSubject(nsIdent, projIdent), 9},
+		{ppsStreamName, subject.PPSEvaluationWildcardSubject(nsIdent, projIdent), 10},
+	}
+	for _, p := range ppsPurges {
+		if err := msg.PurgeSubject(ctx, p.stream, p.subject); err != nil {
+			return fmt.Errorf("deletion cleanup step %d (purge %s from %s): %w", p.step, p.subject, p.stream, err)
+		}
+	}
+
+	// 11. Retrieve and ownership-verify the PPS consumer, then delete.
+	if err := pps.DeletePPSConsumer(ctx, string(exp.UID), exp.Namespace, exp.Name); err != nil {
+		return fmt.Errorf("deletion cleanup step 11 (pps consumer): %w", err)
 	}
 	return nil
 }

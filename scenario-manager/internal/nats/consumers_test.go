@@ -259,6 +259,123 @@ func TestReconcileStreamsAndConsumers(t *testing.T) {
 	if _, err := f.StreamInfo(TranslatorStreamName); err != nil {
 		t.Fatalf("translator stream missing: %v", err)
 	}
+	if _, err := f.StreamInfo(PPSStreamName); err != nil {
+		t.Fatalf("pps stream missing: %v", err)
+	}
+}
+
+func TestReconcileStreamsAndConsumersPPSIdempotent(t *testing.T) {
+	f := newFakeJS()
+	if err := ReconcileStreamsAndConsumers(f); err != nil {
+		t.Fatal(err)
+	}
+	// A second reconcile on matching streams/consumers is success.
+	if err := ReconcileStreamsAndConsumers(f); err != nil {
+		t.Fatalf("idempotent reconcile: %v", err)
+	}
+}
+
+func TestVerifyPPSConsumerOwnership(t *testing.T) {
+	uid := "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+	cfg := PPSConsumerConfig(uid, "default", "smoke")
+	info := &natsgo.ConsumerInfo{Stream: PPSStreamName, Name: cfg.Durable, Config: *cfg}
+	if err := VerifyPPSConsumerOwnership(info, PPSStreamName, uid, "default", "smoke"); err != nil {
+		t.Fatalf("matching: %v", err)
+	}
+
+	// Wrong namespace: collision.
+	if err := VerifyPPSConsumerOwnership(info, PPSStreamName, uid, "other", "smoke"); !errors.Is(err, ErrOwnershipCollision) {
+		t.Fatalf("wrong namespace: err = %v; want ErrOwnershipCollision", err)
+	}
+	// Wrong project: collision.
+	if err := VerifyPPSConsumerOwnership(info, PPSStreamName, uid, "default", "other"); !errors.Is(err, ErrOwnershipCollision) {
+		t.Fatalf("wrong project: err = %v; want ErrOwnershipCollision", err)
+	}
+	// Wrong UID: durable name prefix differs -> collision.
+	if err := VerifyPPSConsumerOwnership(info, PPSStreamName, "deadbeef-dead-beef-dead-beefdeadbeef", "default", "smoke"); !errors.Is(err, ErrOwnershipCollision) {
+		t.Fatalf("wrong uid: err = %v; want ErrOwnershipCollision", err)
+	}
+	// Tampered metadata: collision.
+	tampered := *cfg
+	tampered.Metadata = map[string]string{
+		"experiment.cbse.terministic.de/managed-by":     "pps",
+		"experiment.cbse.terministic.de/experiment-uid": "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+		"experiment.cbse.terministic.de/namespace":      "default",
+		"experiment.cbse.terministic.de/project":        "smoke",
+	}
+	tamperedInfo := &natsgo.ConsumerInfo{Stream: PPSStreamName, Name: tampered.Durable, Config: tampered}
+	if err := VerifyPPSConsumerOwnership(tamperedInfo, PPSStreamName, uid, "default", "smoke"); !errors.Is(err, ErrOwnershipCollision) {
+		t.Fatalf("tampered metadata: err = %v; want ErrOwnershipCollision", err)
+	}
+	// A translator-owned consumer on the same durable name is a collision.
+	transOwned := *cfg
+	transOwned.Metadata = translatorMetadata(uid, "default", "smoke")
+	transInfo := &natsgo.ConsumerInfo{Stream: PPSStreamName, Name: transOwned.Durable, Config: transOwned}
+	if err := VerifyPPSConsumerOwnership(transInfo, PPSStreamName, uid, "default", "smoke"); !errors.Is(err, ErrOwnershipCollision) {
+		t.Fatalf("translator-owned metadata: err = %v; want ErrOwnershipCollision", err)
+	}
+	// Tampered filter: collision.
+	badFilter := *cfg
+	badFilter.FilterSubject = "cbse.default.other.pps.request"
+	badFilterInfo := &natsgo.ConsumerInfo{Stream: PPSStreamName, Name: badFilter.Durable, Config: badFilter}
+	if err := VerifyPPSConsumerOwnership(badFilterInfo, PPSStreamName, uid, "default", "smoke"); !errors.Is(err, ErrOwnershipCollision) {
+		t.Fatalf("tampered filter: err = %v; want ErrOwnershipCollision", err)
+	}
+}
+
+func TestEnsurePPSConsumer(t *testing.T) {
+	uid := "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+	f := newFakeJS()
+
+	// Missing consumer: created.
+	if err := EnsurePPSConsumer(f, PPSStreamName, uid, "default", "smoke"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	info, err := f.ConsumerInfo(PPSStreamName, PPSConsumerName(uid))
+	if err != nil {
+		t.Fatalf("created consumer missing: %v", err)
+	}
+	if info.Config.FilterSubject != "cbse.default.smoke.pps.request" {
+		t.Fatalf("filter = %q", info.Config.FilterSubject)
+	}
+	// Existing matching consumer: success (idempotent).
+	if err := EnsurePPSConsumer(f, PPSStreamName, uid, "default", "smoke"); err != nil {
+		t.Fatalf("idempotent: %v", err)
+	}
+	// A consumer with the same durable name (same 12-char UID prefix) but a
+	// different full UID is a collision: not adopted.
+	otherUID := "A1B2C3D4-E5F6-7890-ABCD-EF1234567891"
+	if err := EnsurePPSConsumer(f, PPSStreamName, otherUID, "default", "smoke"); !errors.Is(err, ErrOwnershipCollision) {
+		t.Fatalf("collision: err = %v; want ErrOwnershipCollision", err)
+	}
+	// The original consumer is still present.
+	if _, err := f.ConsumerInfo(PPSStreamName, PPSConsumerName(uid)); err != nil {
+		t.Fatalf("original consumer missing: %v", err)
+	}
+}
+
+func TestDeletePPSConsumer(t *testing.T) {
+	uid := "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+	f := newFakeJS()
+	f.AddConsumer(PPSStreamName, PPSConsumerConfig(uid, "default", "smoke"))
+	if err := DeletePPSConsumer(f, PPSStreamName, uid, "default", "smoke"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ConsumerInfo(PPSStreamName, PPSConsumerName(uid)); !errors.Is(err, natsgo.ErrConsumerNotFound) {
+		t.Fatalf("consumer still present: %v", err)
+	}
+	// Missing consumer is success.
+	if err := DeletePPSConsumer(f, PPSStreamName, uid, "default", "smoke"); err != nil {
+		t.Fatalf("missing consumer: %v", err)
+	}
+	// Ownership collision: not deleted.
+	f.AddConsumer(PPSStreamName, PPSConsumerConfig(uid, "default", "smoke"))
+	if err := DeletePPSConsumer(f, PPSStreamName, uid, "other", "smoke"); !errors.Is(err, ErrOwnershipCollision) {
+		t.Fatalf("collision: err = %v; want ErrOwnershipCollision", err)
+	}
+	if _, err := f.ConsumerInfo(PPSStreamName, PPSConsumerName(uid)); err != nil {
+		t.Fatalf("collided consumer should remain: %v", err)
+	}
 }
 
 func TestVerifyTranslatorConsumerOwnership(t *testing.T) {

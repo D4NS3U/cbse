@@ -60,6 +60,18 @@ func (c *NATSDeletionClient) DeleteTranslatorConsumer(ctx context.Context, uid, 
 	return nil
 }
 
+// DeletePPSConsumer deletes the per-experiment PPS consumer from stream
+// cbse_pps after ownership verification. It satisfies
+// lifecycle.PPSCleaner. A missing consumer is success; a collision returns an
+// error so the caller retains the finalizer.
+func (c *NATSDeletionClient) DeletePPSConsumer(ctx context.Context, uid, namespace, project string) error {
+	_ = ctx
+	if err := DeletePPSConsumer(c.js, PPSStreamName, uid, namespace, project); err != nil {
+		return fmt.Errorf("delete pps consumer: %w", err)
+	}
+	return nil
+}
+
 // PurgeSubject purges messages matching subject from the named stream. A
 // missing stream is success.
 func (c *NATSDeletionClient) PurgeSubject(ctx context.Context, stream, subject string) error {

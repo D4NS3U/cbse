@@ -53,11 +53,11 @@ func connectITNATS(t *testing.T) (*natsgo.Conn, natsgo.JetStreamContext) {
 	return nc, js
 }
 
-// dropStreams deletes the two alpha4 streams if present so the test starts and
+// dropStreams deletes the alpha4 streams if present so the test starts and
 // ends from a clean state. A missing stream is success.
 func dropStreams(t *testing.T, js natsgo.JetStreamContext) {
 	t.Helper()
-	for _, s := range []string{EDSStreamName, TranslatorStreamName} {
+	for _, s := range []string{EDSStreamName, TranslatorStreamName, PPSStreamName} {
 		if err := js.DeleteStream(s); err != nil && !errors.Is(err, natsgo.ErrStreamNotFound) {
 			t.Logf("drop stream %s: %v", s, err)
 		}
@@ -72,8 +72,8 @@ func TestReconcileStreamsAndConsumersAgainstBroker(t *testing.T) {
 	if err := ReconcileStreamsAndConsumers(js); err != nil {
 		t.Fatalf("ReconcileStreamsAndConsumers: %v", err)
 	}
-	// Both streams exist.
-	for _, s := range []string{EDSStreamName, TranslatorStreamName} {
+	// All three streams exist.
+	for _, s := range []string{EDSStreamName, TranslatorStreamName, PPSStreamName} {
 		if _, err := js.StreamInfo(s); err != nil {
 			t.Fatalf("StreamInfo %s: %v", s, err)
 		}

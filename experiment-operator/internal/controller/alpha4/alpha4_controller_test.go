@@ -129,8 +129,9 @@ func localEnvtestAssets() string {
 const shaA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // validExperiment builds a SimulationExperiment fixture in the test namespace
-// with a digest-pinned image-based detail DB, a host-based result DB, and a
-// fully specified translator that passes provisioning validation.
+// with a digest-pinned image-based detail DB, a host-based result DB, a fully
+// specified translator that passes provisioning validation, and a fully
+// specified post-processing service that passes provisioning validation.
 func validExperiment(name string) *experimentalpha4.SimulationExperiment {
 	return &experimentalpha4.SimulationExperiment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: alpha4TestNamespace},
@@ -156,6 +157,13 @@ func validExperiment(name string) *experimentalpha4.SimulationExperiment {
 				BuilderImage:          "registry.unibw.de/i31bdase/cbse-test/buildkit@sha256:" + shaA,
 				RegistryAuthSecretRef: corev1.LocalObjectReference{Name: "cbse-registry-auth"},
 				Port:                  8080,
+			},
+			PostProcessingService: experimentalpha4.PostProcessingSpec{
+				Image:       "registry.unibw.de/i31bdase/cbse-test/pps@sha256:" + shaA,
+				ServiceType: experimentalpha4.ServiceTypeClusterIP,
+				Port:        8081,
+				Command:     []string{"/usr/local/bin/pps"},
+				Args:        []string{"--evaluate"},
 			},
 		},
 	}
@@ -574,6 +582,129 @@ func TestAlpha4HappyPathProvisioning(t *testing.T) {
 		t.Fatalf("configmap BASEIMAGE = %q", cm.Data["BASEIMAGE"])
 	}
 
+	// PPS Deployment: single container under the restricted profile, the
+	// resultdb connection Secret mounted read-only as the only volume, the
+	// verbatim spec image/port/command/args, the workload labels and owner
+	// reference, and the exact alpha4 PPS env contract.
+	ppsDep := &appsv1.Deployment{}
+	mustExist(t, ppsDep, "exp-happy-pps")
+	if len(ppsDep.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("pps Deployment has %d containers, want 1 (no BuildKit sidecar)", len(ppsDep.Spec.Template.Spec.Containers))
+	}
+	if got := ppsDep.Spec.Template.Spec.Containers[0].Name; got != "pps" {
+		t.Fatalf("pps container name = %q, want pps", got)
+	}
+	// Workload labels on the object, the Pod template, and the selector.
+	ppsInst := getExperiment(t, key)
+	for k, want := range map[string]string{
+		"app":                                    "exp-happy-pps",
+		"experiment.cbse.terministic.de/project": "exp-happy",
+		"experiment.cbse.terministic.de/experiment-uid": string(ppsInst.UID),
+	} {
+		if ppsDep.Labels[k] != want {
+			t.Fatalf("pps Deployment label %s = %q, want %q", k, ppsDep.Labels[k], want)
+		}
+		if ppsDep.Spec.Template.Labels[k] != want {
+			t.Fatalf("pps Pod template label %s = %q, want %q", k, ppsDep.Spec.Template.Labels[k], want)
+		}
+		if ppsDep.Spec.Selector.MatchLabels[k] != want {
+			t.Fatalf("pps selector label %s = %q, want %q", k, ppsDep.Spec.Selector.MatchLabels[k], want)
+		}
+	}
+	// Owner reference to the owning experiment.
+	if len(ppsDep.OwnerReferences) != 1 {
+		t.Fatalf("pps Deployment ownerReferences = %#v, want exactly one", ppsDep.OwnerReferences)
+	}
+	or := ppsDep.OwnerReferences[0]
+	if or.Kind != "SimulationExperiment" || or.Name != "exp-happy" || or.UID != ppsInst.UID || or.Controller == nil || !*or.Controller {
+		t.Fatalf("pps Deployment ownerReference = %#v, want controller reference to the experiment", or)
+	}
+
+	ppsCtr := containerByName(t, ppsDep, "pps")
+	// Verbatim image/port/command/args pass-through from spec.postProcessingService.
+	if got := ppsCtr.Image; got != "registry.unibw.de/i31bdase/cbse-test/pps@sha256:"+shaA {
+		t.Fatalf("pps image = %q", got)
+	}
+	if len(ppsCtr.Ports) != 1 || ppsCtr.Ports[0].ContainerPort != 8081 {
+		t.Fatalf("pps container ports = %#v, want [{8081}]", ppsCtr.Ports)
+	}
+	if got := ppsCtr.Command; len(got) != 1 || got[0] != "/usr/local/bin/pps" {
+		t.Fatalf("pps command = %#v, want [/usr/local/bin/pps]", got)
+	}
+	if got := ppsCtr.Args; len(got) != 1 || got[0] != "--evaluate" {
+		t.Fatalf("pps args = %#v, want [--evaluate]", got)
+	}
+	// Restricted security profile: UID/GID 1000, non-root, no escalation,
+	// runtime-default seccomp, all capabilities dropped.
+	sc := ppsCtr.SecurityContext
+	if sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 1000 ||
+		sc.RunAsGroup == nil || *sc.RunAsGroup != 1000 ||
+		sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot ||
+		sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
+		sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault ||
+		sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("pps security context = %#v, want the restricted profile (UID/GID 1000, non-root, no escalation, runtime-default seccomp, drop ALL)", sc)
+	}
+	// The resultdb connection Secret is the only volume, mounted read-only.
+	if len(ppsDep.Spec.Template.Spec.Volumes) != 1 {
+		t.Fatalf("pps Deployment volumes = %#v, want exactly [resultdb-connection]", ppsDep.Spec.Template.Spec.Volumes)
+	}
+	v := ppsDep.Spec.Template.Spec.Volumes[0]
+	if v.Name != "resultdb-connection" || v.Secret == nil || v.Secret.SecretName != "exp-happy-resultdb-sct" || len(v.Secret.Items) != 0 {
+		t.Fatalf("pps volume = %#v, want resultdb-connection secret exp-happy-resultdb-sct without items", v)
+	}
+	if !hasMount(ppsCtr, "resultdb-connection", true) {
+		t.Fatalf("pps missing read-only resultdb-connection mount: %+v", ppsCtr.VolumeMounts)
+	}
+	// The exact alpha4 PPS env contract: five fixed values plus the three
+	// downward-API identity vars, nothing else.
+	if len(ppsCtr.Env) != 8 {
+		t.Fatalf("pps env vars = %d, want 8", len(ppsCtr.Env))
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range ppsCtr.Env {
+		env[e.Name] = e
+	}
+	for name, want := range map[string]string{
+		"NATS_URL":                        "nats://sm-eds-nats:4222",
+		"PPS_STREAM":                      "cbse_pps",
+		"PPS_REQUEST_SUBJECT":             "cbse." + alpha4TestNamespace + ".exp-happy.pps.request",
+		"PPS_EVALUATION_SUBJECT_TEMPLATE": "cbse." + alpha4TestNamespace + ".exp-happy.pps.%s.evaluation",
+		"PPS_CONSUMER":                    "pps-" + controller.RunnerUIDPrefix(ppsInst.UID),
+	} {
+		got, ok := env[name]
+		if !ok || got.Value != want {
+			t.Fatalf("pps env %s = %#v, want value %q", name, got, want)
+		}
+	}
+	for name, fieldPath := range map[string]string{
+		"SIMULATIONPROJECTNAMESPACE": "metadata.namespace",
+		"SIMULATIONPROJECTNAME":      "metadata.labels['experiment.cbse.terministic.de/project']",
+		"SIMULATIONEXPERIMENTUID":    "metadata.labels['experiment.cbse.terministic.de/experiment-uid']",
+	} {
+		got, ok := env[name]
+		if !ok || got.ValueFrom == nil || got.ValueFrom.FieldRef == nil || got.ValueFrom.FieldRef.FieldPath != fieldPath {
+			t.Fatalf("pps env %s = %#v, want downward-API field ref %q", name, got, fieldPath)
+		}
+	}
+
+	// PPS Service: ClusterIP on the spec port selecting the pps app label,
+	// owned by the experiment.
+	ppsSvc := &corev1.Service{}
+	mustExist(t, ppsSvc, "exp-happy-pps-svc")
+	if ppsSvc.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Fatalf("pps Service type = %q, want ClusterIP", ppsSvc.Spec.Type)
+	}
+	if ppsSvc.Spec.Selector["app"] != "exp-happy-pps" {
+		t.Fatalf("pps Service selector = %#v, want app=exp-happy-pps", ppsSvc.Spec.Selector)
+	}
+	if len(ppsSvc.Spec.Ports) != 1 || ppsSvc.Spec.Ports[0].Port != 8081 || ppsSvc.Spec.Ports[0].TargetPort.IntValue() != 8081 {
+		t.Fatalf("pps Service ports = %#v, want [{port: 8081, targetPort: 8081}]", ppsSvc.Spec.Ports)
+	}
+	if len(ppsSvc.OwnerReferences) != 1 || ppsSvc.OwnerReferences[0].Kind != "SimulationExperiment" || ppsSvc.OwnerReferences[0].Name != "exp-happy" {
+		t.Fatalf("pps Service ownerReferences = %#v, want the owning experiment", ppsSvc.OwnerReferences)
+	}
+
 	// Translator Service and runner ServiceAccount.
 	transSvc := &corev1.Service{}
 	mustExist(t, transSvc, "exp-happy-translator-svc")
@@ -841,5 +972,75 @@ func TestAlpha4ImmutableUpdateRejected(t *testing.T) {
 	mustExist(t, dep2, "exp-immut-translator")
 	if got := containerByName(t, dep2, "translator").Image; got != originalImage {
 		t.Fatalf("translator image changed after rejected update: %q -> %q", originalImage, got)
+	}
+}
+
+// TestAlpha4PPSIdempotentReconcile verifies that a metadata-only update
+// (an annotation timestamp) is reconciled idempotently: the owned PPS
+// Deployment and Service are not duplicated and the PPS env contract stays
+// intact. It is the envtest-level mirror of the e2e idempotence spec.
+func TestAlpha4PPSIdempotentReconcile(t *testing.T) {
+	ctx := context.Background()
+	ensureRegistrySecret(t, goodRegistrySecret())
+	key := createExperiment(t, validExperiment("exp-pps-idem"))
+	r := newReconciler(func(_ context.Context, _ dbendpoint.Endpoint) error { return nil })
+	if phase := drive(t, r, key, 30); phase != "InProgress" {
+		t.Fatalf("phase = %q, want InProgress", phase)
+	}
+
+	countPPSChildren := func() (deps int, svc bool) {
+		depList := &appsv1.DeploymentList{}
+		if err := alpha4Client.List(ctx, depList, client.InNamespace(alpha4TestNamespace), client.MatchingLabels{"app": "exp-pps-idem-pps"}); err != nil {
+			t.Fatalf("list pps deployments: %v", err)
+		}
+		// The PPS Service carries no labels (like the Translator Service, whose
+		// selector app label is the only app identity), so it is counted by name.
+		svcObj := &corev1.Service{}
+		svcErr := alpha4Client.Get(ctx, types.NamespacedName{Name: "exp-pps-idem-pps-svc", Namespace: alpha4TestNamespace}, svcObj)
+		if svcErr != nil && !apierrors.IsNotFound(svcErr) {
+			t.Fatalf("get pps service: %v", svcErr)
+		}
+		return len(depList.Items), svcErr == nil
+	}
+	if deps, svc := countPPSChildren(); deps != 1 || !svc {
+		t.Fatalf("before metadata update: pps deployments = %d, pps service present = %v, want 1 of each", deps, svc)
+	}
+
+	// Metadata-only update: an annotation timestamp, mirroring the e2e spec.
+	inst := getExperiment(t, key)
+	if inst.Annotations == nil {
+		inst.Annotations = map[string]string{}
+	}
+	inst.Annotations["cbse.terministic.de/idempotence-check"] = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := alpha4Client.Update(ctx, inst); err != nil {
+		t.Fatalf("update experiment annotation: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d after metadata update: %v", i, err)
+		}
+	}
+
+	if phase := getExperiment(t, key).Status.Phase; phase != "InProgress" {
+		t.Fatalf("phase after metadata update = %q, want InProgress", phase)
+	}
+	if deps, svc := countPPSChildren(); deps != 1 || !svc {
+		t.Fatalf("after metadata update: pps deployments = %d, pps service present = %v, want 1 of each (no duplication)", deps, svc)
+	}
+
+	// The PPS env contract survives the re-reconcile verbatim.
+	dep := &appsv1.Deployment{}
+	mustExist(t, dep, "exp-pps-idem-pps")
+	ctr := containerByName(t, dep, "pps")
+	env := map[string]string{}
+	for _, e := range ctr.Env {
+		env[e.Name] = e.Value
+	}
+	if env["PPS_REQUEST_SUBJECT"] != "cbse."+alpha4TestNamespace+".exp-pps-idem.pps.request" {
+		t.Fatalf("pps PPS_REQUEST_SUBJECT after re-reconcile = %q", env["PPS_REQUEST_SUBJECT"])
+	}
+	if env["PPS_CONSUMER"] != "pps-"+controller.RunnerUIDPrefix(inst.UID) {
+		t.Fatalf("pps PPS_CONSUMER after re-reconcile = %q", env["PPS_CONSUMER"])
 	}
 }

@@ -17,14 +17,15 @@
 // it performs startup validation in the exact order and
 // classification required by the SM startup failure class, connects to NATS and
 // JetStream, reconciles streams and consumers, constructs the experiment
-// informer, the four NATS adapters, the selection loop, and the runner-start
-// and observation schedulers, starts them, emits the existing
+// informer, the four NATS adapters, the selection loop, the evaluation-request
+// publication loop, the PPS-evaluation consumer, and the runner-start and
+// observation schedulers, starts them, emits the existing
 // "Scenario Manager is ready" log only after every component has started,
 // blocks on the context, and joins every started component on shutdown.
 //
 // It owns no domain logic; it only constructs and starts the components owned by
-// the informer, natsadapter, selection, ready, runnerstart, and observation
-// packages.
+// the informer, natsadapter, selection, ready, evaluationpub, verdict,
+// runnerstart, and observation packages.
 package core
 
 import (
@@ -39,6 +40,7 @@ import (
 
 	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/config"
+	"github.com/D4NS3U/cbse/scenario-manager/internal/evaluationpub"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/informer"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/jobadapter"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/nats"
@@ -49,6 +51,7 @@ import (
 	"github.com/D4NS3U/cbse/scenario-manager/internal/runnerstart"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/selection"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/translatorconfig"
+	"github.com/D4NS3U/cbse/scenario-manager/internal/verdict"
 	_ "github.com/jackc/pgx/v5/stdlib" // pgx driver for database/sql
 	natsgo "github.com/nats-io/nats.go"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -87,7 +90,8 @@ type startupConfig struct {
 // canonicality, Core DB schema, Kubernetes authorization, authentication-free
 // NATS), connects to NATS and JetStream and reconciles streams and consumers,
 // constructs and starts the experiment informer, the four NATS adapters, the
-// selection loop, and the runner-start and observation schedulers, emits the
+// selection loop, the evaluation-request publication loop, the PPS-evaluation
+// consumer, and the runner-start and observation schedulers, emits the
 // ready log only after every component has started, blocks on ctx, and joins
 // every started component on shutdown. Any startup configuration failure is
 // fatal and terminates the process before any informer, consumer, selector, or
@@ -136,7 +140,7 @@ func RunScenarioManager(ctx context.Context) {
 	}
 
 	// NATS: validate the URL and legacy credentials, then connect with no
-	// credentials and reconcile the two streams and two SM-owned consumers.
+	// credentials and reconcile the three streams and three SM-owned consumers.
 	natsURL, err := validateNATSConfig(os.Getenv)
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: NATS config: %v", err)
@@ -162,9 +166,12 @@ func RunScenarioManager(ctx context.Context) {
 	readyHandler := ready.NewHandler(k8sClient, store, cfg.maxAttempts)
 	adapters := nats.NewAdapters(nc, js, k8sClient, db, readyHandler.Handle)
 	publisher := nats.NewTranslationRequestPublisher(js)
+	verdictHandler := verdict.NewHandler(k8sClient, db)
+	evalRequestPublisher := nats.NewEvaluationRequestPublisher(js)
 	availability := nats.NewEDSAvailabilityResponder(adapters)
 	edsBatch := nats.NewEDSBatchConsumer(adapters)
 	translatorReady := nats.NewTranslatorReadyConsumer(adapters)
+	ppsEvaluation := nats.NewPPSEvaluationConsumer(adapters)
 
 	selDeps, err := selection.NewProductionDependencies(selection.ProductionDeps{
 		K8s:         k8sClient,
@@ -178,6 +185,19 @@ func RunScenarioManager(ctx context.Context) {
 	selector, err := selection.NewSelector(publisher, cfg.publishRecoveryTimeout, selDeps)
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: selection: %v", err)
+	}
+	evalDeps, err := evaluationpub.NewProductionDependencies(evaluationpub.ProductionDeps{
+		K8s:       k8sClient,
+		Store:     store,
+		JS:        js,
+		Publisher: evalRequestPublisher,
+	})
+	if err != nil {
+		log.Fatalf("Scenario Manager startup: evaluation-publication dependencies: %v", err)
+	}
+	evalPublisher, err := evaluationpub.NewPublisher(evalRequestPublisher, evalDeps)
+	if err != nil {
+		log.Fatalf("Scenario Manager startup: evaluation-publication loop: %v", err)
 	}
 
 	adapter := jobadapter.NewControllerRuntimeAdapter(k8sClient)
@@ -200,8 +220,9 @@ func RunScenarioManager(ctx context.Context) {
 
 	// Start the components in dependency order: the informer registers projects
 	// and installs finalizers; the NATS consumers then consume on the
-	// reconciled durables; the selection loop and schedulers then discover DB
-	// rows. Only after every component has started is the ready log emitted.
+	// reconciled durables; the selection and evaluation-publication loops and
+	// schedulers then discover DB rows. Only after every component has started
+	// is the ready log emitted.
 	if err := inf.Start(ctx); err != nil {
 		log.Fatalf("Scenario Manager startup: informer start: %v", err)
 	}
@@ -214,9 +235,16 @@ func RunScenarioManager(ctx context.Context) {
 	if err := translatorReady.StartTranslatorReadyConsumer(ctx, readyHandler.Handle); err != nil {
 		log.Fatalf("Scenario Manager startup: translator-ready consumer: %v", err)
 	}
+	if err := ppsEvaluation.StartPPSEvaluationConsumer(ctx, verdictHandler.Handle); err != nil {
+		log.Fatalf("Scenario Manager startup: pps-evaluation consumer: %v", err)
+	}
 	selectorDone, err := selector.Start(ctx)
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: selection loop: %v", err)
+	}
+	evalPublisherDone, err := evalPublisher.Start(ctx)
+	if err != nil {
+		log.Fatalf("Scenario Manager startup: evaluation-publication loop: %v", err)
 	}
 	runnerStartScheduler.Start()
 	observationScheduler.Start()
@@ -237,6 +265,9 @@ func RunScenarioManager(ctx context.Context) {
 	go func() { defer wg.Done(); _ = observationScheduler.Shutdown(shutdownCtx) }()
 	if selectorDone != nil {
 		<-selectorDone
+	}
+	if evalPublisherDone != nil {
+		<-evalPublisherDone
 	}
 	wg.Wait()
 	log.Printf("Scenario Manager shutdown complete: %v", ctx.Err())

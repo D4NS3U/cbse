@@ -129,13 +129,23 @@ func buildScheme() (*runtime.Scheme, error) {
 	return s, nil
 }
 
+// productionMessenger is the production messaging cleaner: it must perform
+// both the translator deletion cleanup (lifecycle.MessagingCleaner) and the
+// PPS consumer deletion (lifecycle.PPSCleaner). nats.NATSDeletionClient
+// satisfies it; unit tests that exercise deletion cleanup call NewDispatcher
+// directly and set the PPS cleaner themselves.
+type productionMessenger interface {
+	lifecycle.MessagingCleaner
+	lifecycle.PPSCleaner
+}
+
 // NewProductionDispatcher builds a Dispatcher with the production dependencies
 // bound to the alpha4 library: a DBProjectStore over the persistence store, a
-// registerProject closure over persistence.RegisterProject, and the two
+// registerProject closure over persistence.RegisterProject, and the three
 // canonical JetStream stream names from the NATS package for deletion-cleanup
 // purges. It is a convenience for the app wiring so the informer and the
 // dispatcher share the same store and DB.
-func NewProductionDispatcher(k8s client.Client, store persistence.Store, msg lifecycle.MessagingCleaner) *Dispatcher {
+func NewProductionDispatcher(k8s client.Client, store persistence.Store, msg productionMessenger) *Dispatcher {
 	projectStore := lifecycle.DBProjectStore{Store: store}
 	d := NewDispatcher(k8s, projectStore, msg, func(ctx context.Context, namespace, project string) error {
 		_, err := persistence.RegisterProject(ctx, store, namespace, project)
@@ -143,5 +153,7 @@ func NewProductionDispatcher(k8s client.Client, store persistence.Store, msg lif
 	})
 	d.edsStreamName = nats.EDSStreamName
 	d.translatorStreamName = nats.TranslatorStreamName
+	d.ppsStreamName = nats.PPSStreamName
+	d.ppsCleaner = msg
 	return d
 }

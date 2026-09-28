@@ -36,6 +36,11 @@ const (
 	translatorReadySubjectTemplate = "cbse.{namespace}.{project}.trans.{scenario_id}.ready"
 )
 
+// ppsStream is the alpha4 PPS NATS/JetStream stream name. The PPS shares the
+// translator flow's in-cluster NATS URL (translatorNATSURL) and rides its own
+// stream for evaluation traffic.
+const ppsStream = "cbse_pps"
+
 // workloadLabels returns the shared labels carried by every Operator-managed
 // workload: a short app name and the two reserved identity labels the downward
 // API exposes to containers as SIMULATIONPROJECTNAME and SIMULATIONEXPERIMENTUID.
@@ -57,6 +62,23 @@ func workloadLabels(appName, projectName, experimentUID string) map[string]strin
 // validated DNS labels by the CRD admission rule.
 func translatorRequestSubject(namespace, project string) string {
 	return fmt.Sprintf("cbse.%s.%s.trans.request", namespace, project)
+}
+
+// ppsRequestSubject builds the canonical alpha4 PPS request subject
+// cbse.<namespace>.<project>.pps.request from the owning experiment's
+// namespace and name, mirroring translatorRequestSubject. The namespace and
+// project tokens are already validated DNS labels by the CRD admission rule.
+func ppsRequestSubject(namespace, project string) string {
+	return fmt.Sprintf("cbse.%s.%s.pps.request", namespace, project)
+}
+
+// ppsEvaluationSubjectTemplate builds the canonical alpha4 PPS evaluation
+// subject template cbse.<namespace>.<project>.pps.%s.evaluation, where the %s
+// token is substituted with the scenario id by the PPS at publish time. The
+// namespace and project tokens are already validated DNS labels by the CRD
+// admission rule.
+func ppsEvaluationSubjectTemplate(namespace, project string) string {
+	return fmt.Sprintf("cbse.%s.%s.pps.%%s.evaluation", namespace, project)
 }
 
 // simulationProjectEnvVar returns the downward-API env var that surfaces the

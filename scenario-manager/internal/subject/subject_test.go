@@ -95,8 +95,19 @@ func TestConstructorsAndParseRoundtrip(t *testing.T) {
 	if ready != "cbse.default.smoke-project.trans.scen-7.ready" {
 		t.Fatalf("TranslatorReadySubject = %q", ready)
 	}
+	evalReq := PPSRequestSubject(ns, proj)
+	if evalReq != "cbse.default.smoke-project.pps.request" {
+		t.Fatalf("PPSRequestSubject = %q", evalReq)
+	}
+	eval := PPSEvaluationSubject(ns, proj, "42")
+	if eval != "cbse.default.smoke-project.pps.42.evaluation" {
+		t.Fatalf("PPSEvaluationSubject = %q", eval)
+	}
+	if got := PPSEvaluationWildcardSubject(ns, proj); got != "cbse.default.smoke-project.pps.*.evaluation" {
+		t.Fatalf("PPSEvaluationWildcardSubject = %q", got)
+	}
 
-	for _, s := range []string{avail, batch, req, ready} {
+	for _, s := range []string{avail, batch, req, ready, evalReq, eval} {
 		p, err := Parse(s)
 		if err != nil {
 			t.Fatalf("Parse(%q) err = %v", s, err)
@@ -116,6 +127,27 @@ func TestConstructorsAndParseRoundtrip(t *testing.T) {
 	if p.Event != EventReady {
 		t.Fatalf("Event = %q; want ready", p.Event)
 	}
+	// The PPS evaluation subject parses with a positive-integer scenario id.
+	ep, err := Parse(eval)
+	if err != nil {
+		t.Fatalf("Parse(evaluation) err = %v", err)
+	}
+	if ep.Domain != DomainPPS || ep.Event != EventPPSEvaluation {
+		t.Fatalf("evaluation parse = %+v; want domain=pps event=evaluation", ep)
+	}
+	if ep.EvaluationScenarioID != "42" {
+		t.Fatalf("EvaluationScenarioID = %q; want 42", ep.EvaluationScenarioID)
+	}
+	if ep.ReadyScenarioID != "" {
+		t.Fatalf("ReadyScenarioID must stay empty for PPS subjects: %q", ep.ReadyScenarioID)
+	}
+	epr, err := Parse(evalReq)
+	if err != nil {
+		t.Fatalf("Parse(pps request) err = %v", err)
+	}
+	if epr.Domain != DomainPPS || epr.Event != EventRequest {
+		t.Fatalf("pps request parse = %+v; want domain=pps event=request", epr)
+	}
 	if got, _ := Parse(avail); got.Event != EventAvailable {
 		t.Fatalf("avail Event = %q; want available", got.Event)
 	}
@@ -133,6 +165,8 @@ func TestWildcards(t *testing.T) {
 		EDSBatchStreamSubject:          "cbse.*.*.eds.scenarios",
 		TranslatorRequestStreamSubject: "cbse.*.*.trans.request",
 		TranslatorReadyStreamSubject:   "cbse.*.*.trans.*.ready",
+		PPSRequestStreamSubject:        "cbse.*.*.pps.request",
+		PPSEvaluationStreamSubject:     "cbse.*.*.pps.*.evaluation",
 	}
 	for got, w := range want {
 		if got != w {
@@ -141,7 +175,7 @@ func TestWildcards(t *testing.T) {
 	}
 	// Wildcards are NOT parseable identities (they contain '*' which is not a
 	// DNS label). Parse must reject them rather than silently accept.
-	for _, s := range []string{EDSAvailabilityWildcard, EDSBatchStreamSubject, TranslatorRequestStreamSubject, TranslatorReadyStreamSubject} {
+	for _, s := range []string{EDSAvailabilityWildcard, EDSBatchStreamSubject, TranslatorRequestStreamSubject, TranslatorReadyStreamSubject, PPSRequestStreamSubject, PPSEvaluationStreamSubject} {
 		if _, err := Parse(s); err == nil {
 			t.Errorf("Parse(%q) succeeded; want error", s)
 		}
@@ -166,8 +200,18 @@ func TestParseRejectsMalformed(t *testing.T) {
 		"cbse.default.p.eds.scenarios.unavailable", // eds 5th token not available
 		"cbse.default.p.trans.scenarios",           // trans domain, 4 tokens but not request
 		"cbse.default.p.trans..ready",              // empty scenario-id token
-		"cbse.DEFAULT.p.eds.scenarios",             // uppercase namespace
 		"cbse.default.p.eds.scenarios.",            // trailing dot
+		"cbse.default.p.pps",                       // too few for pps
+		"cbse.default.p.pps.request.x",             // too many for pps request
+		"cbse.default.p.pps.scen.ready",            // wrong 5th token for evaluation
+		"cbse.default.p.pps.scen.evaluation.x",     // too many for evaluation
+		"cbse.default.p.pps.request.ready",         // 5 tokens but 4th not scenario-id form
+		"cbse.default.p.pps.evaluation",            // 4 tokens but not request
+		"cbse.default.p.pps.-7.evaluation",         // signed scenario-id
+		"cbse.default.p.pps.0.evaluation",          // zero scenario-id
+		"cbse.default.p.pps.007.evaluation",        // leading zeros
+		"cbse.default.p.pps.7x.evaluation",         // non-digit scenario-id
+		"cbse.DEFAULT.p.eds.scenarios",             // uppercase namespace
 	}
 	for _, s := range bad {
 		if _, err := Parse(s); err == nil {

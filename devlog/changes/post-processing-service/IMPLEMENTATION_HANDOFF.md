@@ -10,8 +10,35 @@ Umbrella: [FEATURE.md](FEATURE.md) (rulings Q1–Q5 recorded 2026-09-25). Orches
 - **Manager re-verification (all independently re-run, all rc=0):** containment (exactly the 24 files); `go build ./... && go vet ./...`; `make test-fast`; targeted six-package `go test -count=1`; greps — `ScenarioStateFinished` (db.go:146), six DDL columns (schema.go:95–100), `nonTerminalFailureStates` still exactly 5 members (no `Finished`); pin tests present — `TestBuildRoundOneNameByteIdentical` (effectivejob_test.go:178), `TestEnsureSchemaRejectsMissingRoundColumns` (persistence_integration_test.go:635), `TestComputedRepsSingleRoundEqualityPin` (persistence_integration_test.go:754).
 - **Frozen invariants proven:** round-1 Job name byte-equality; single-round `number_of_computed_reps == number_of_reps`; `PostProcessing` remains failable (stop-unmet verdict path for D7); `Finished` never failable.
 
+## S2 — SM messaging & wire contract — **complete** (settled 2026-09-28)
+
+- **Task/Dispatch:** `task_439814cd6f4e`; first dispatch `ctx_7c0e056d752a` crashed twice on provider failures (see LAPI incident below); replacement `ctx_658a9ea76255` repaired the predecessor's defects (literal `\t` parse failure in `evaluationpub_test.go`, six gofmt violations, two broken NATS integration bindings) and landed the missing production wiring in `internal/core/app.go`. Attested `ai.forge/qwen3.8-27b-nvfp4`.
+- **Landed:** `pps.*` subject grammar (`PPSRequestSubject`, `PPSEvaluationSubject`, wildcard, Parse rules); `cbse_pps` stream + `pps-<12char>` per-experiment consumers (ensure/delete mirroring the translator's); SM-anchored verdict consumer (`ppsevaluationconsumer.go`); strict wire types with golden-JSON proofs; the evaluation publication pipeline (`internal/evaluationpub/`, claim→mark→publish→mark, selection-mirrored); the verdict handler (`internal/verdict/`: `met`→`MarkScenarioFinished`, `additional_runners`→`ClaimScenarioForEvaluationRound`, `stop_unmet`→`MarkScenarioFailedFrom(PostProcessing)`); cleanup steps 9–11 (two purges + PPS consumer deletion, existing steps unrenumbered); dispatcher/informer/core wiring. SM stays Result-DB-free (ruling Q2).
+- **Discovered defect (manager triage, not fixed — pre-existing):** `internal/nats/messaging_integration_test.go:119 TestTranslatorConsumerOwnershipAndDeletion` fails against any real broker identically on pristine `5b3efa4` (wrong-UID deletion is implemented as missing-consumer=success; the test's collision expectation is stale). Integration-tagged suite only; `test-fast` unaffected. Queued for the next maintenance pass.
+
+## S3 — Operator PPS provisioning — **complete** (settled 2026-09-28)
+
+- **Task/Dispatch:** `task_b678c2ee441a` / `ctx_90c8f4ba5495` (first worker done, no retry needed). Attested `ai.forge/qwen3.8-27b-nvfp4`.
+- **Landed:** PPS Deployment `<experiment>-pps` (single container, restricted profile UID/GID 1000, read-only `resultdb-connection` Secret mount, workload labels, owner refs, verbatim image/port/command/args pass-through, digest validation) + PPS Service `<experiment>-pps-svc` via `applyServiceSpec`; env contract verbatim (`NATS_URL`, `PPS_STREAM`, `PPS_REQUEST_SUBJECT`, `PPS_EVALUATION_SUBJECT_TEMPLATE` with `%s`, `PPS_CONSUMER=pps-<12char>`, three downward identity vars); envtest coverage. GC envtest omitted per the slice's explicit conditional (no pre-existing translator-children GC assertions exist to mirror).
+- **Manager-licensed e2e truth update:** the idempotence spec's project-labeled Deployment count three→four (comment + `HaveLen`) — proven on-cluster by the wave smoke.
+
+## S4 — Reference PPS module — **complete** (settled 2026-09-28)
+
+- **Task/Dispatch:** `task_e39f57461c61`; first dispatch `ctx_268ecc6ec0e7` crashed once (LAPI), resumed, settled. Attested `ai.forge/qwen3.8-27b-nvfp4`.
+- **Landed:** new module `component-templates/post-processing-service/` (`cmd/post-processing-service` + `internal/{config,subject,wire,messaging,resultdb,evaluation}` + Dockerfile `USER 1000:1000` + README): wire contract field-for-field (golden-tested), paper-exact statistics (`h = t₀.₉₇₅,ₙ₋₁·s/√n` vs ε = `confidence_metric` via gonum distuv Student-t; `n_req = ⌈(t·s/ε)²⌉` with min-batch/per-round/max-replications caps; `stop_unmet`; degenerate n<2 / s=0 rules), `deterministic-first-round-not-met` policy knob, read-only Result DB (mounted-Secret parsing, `scenario_<id>_results`, 30s statement timeout, malformed-row accounting), bind-only NATS loop (AckExplicit, poison ACK+log, DB/publish failure NAK, PubAck-gated verdict), fail-fast config, flags `-evaluation-policy`/`-deterministic-additional-runners`/`-max-replications`/`-max-runners-per-round` (defaults statistical/2/10000/1000). `go.work` +1 use line (go.work.sum zero-diff; SM/exop/translator builds byte-stable) + the three manager-licensed Makefile test-fast line-contacts.
+- **Escalation precedent:** S4 settled on partition-local evidence when `make test-fast` failed only on S2's in-flight files (co-residency); the manager confirmed the consolidated re-run as the wave gate.
+
+## LAPI incident (environmental, 2026-09-28)
+
+The university RZ security system (LAPI) blocked the workstation IP mid-wave ("Zugriff vorübergehend blockiert … Grund: LAPI", auto-release), killing two worker turns (S2, S4) and — retroactively explaining — the S1 crash (`400 no body`). Three parallel long-running pi sessions on `ai.forge` tripped the rate limiter. **Policy going forward: serialize waves (one worker at a time) for this provider; S5/S6 dispatch single workers.** Resumes of crashed sessions worked only after the block lifted; fresh replacement dispatches (retry-of) remain the recovery for twice-crashed sessions.
+
+## Wave gate — **green** (2026-09-28)
+
+- Manager re-runs, all rc=0: consolidated `make test-fast` (S2+S3+S4 tree); S2's targeted six-package tests; NATS integration tests both directions (`TestPPSEvaluationRequestPublishAndConsumerDelivery`, `TestPPSEvaluationVerdictDeliveredToSMConsumer`); S4's module race suite.
+- **`make test-smoke` rc=0 on the private K3s** (run `artifacts/test/20260928114945-e832f6`, images version 26.9.28): 5/5 specs — complete owned resource set (incl. the PPS Deployment/Service), four deterministic Created scenarios, the full reference Translator chain to PostProcessing **with results persisted and evaluation requests flowing into `cbse_pps`**, the four-deployment idempotence count (S3's licensed truth), garbage collection cascade.
+
 ## Wave status
 
-- W1 [S1] — **complete** (this record).
-- W2 [S2 ∥ S3 ∥ S4] — next: SM messaging & wire contract; operator PPS provisioning; reference PPS module. Ownership-disjoint per FEATURE.md §6.
-- W3 [S5], W4 [S6] — after W2.
+- W1 [S1] — **complete**. W2 [S2 ∥ S3 ∥ S4] — **complete** (this record; wave gate green).
+- W3 [S5] — next: harness & stack integration (image lock 6→7, stack manifests, `CBSE_PPS_IMAGE`, smoke.sh plumbing). **Serialize: single worker.**
+- W4 [S6] — e2e smoke specs: statistical-met path + deterministic loop path to `Finished`. **Serialize: single worker.**

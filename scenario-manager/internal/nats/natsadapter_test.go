@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
@@ -406,4 +407,250 @@ func TestTranslatorReadyMalformedPayloadPoisonACK(t *testing.T) {
 	if rr.called {
 		t.Fatal("malformed payload must not invoke the handler")
 	}
+}
+
+// --- PPS evaluation ---
+
+func evaluationPayload(namespace, project, uid, metric, verdict string, additionalRunners int) []byte {
+	payload := communication.PPSEvaluationVerdict{
+		ExperimentUID:     uid,
+		Namespace:         namespace,
+		Project:           project,
+		ScenarioID:        7,
+		RunnerRound:       1,
+		Metric:            metric,
+		Verdict:           verdict,
+		SampleMean:        10.1,
+		HalfWidth:         0.9,
+		Replications:      40,
+		ConfidenceMetric:  0.5,
+		AdditionalRunners: additionalRunners,
+		MaxReplications:   10000,
+	}
+	data, _ := json.Marshal(payload)
+	return data
+}
+
+type evalRecorder struct {
+	called bool
+	msg    communication.PPSEvaluationMessage
+	status communication.PPSEvaluationHandlingStatus
+}
+
+func (r *evalRecorder) record(m communication.PPSEvaluationMessage) {
+	r.called = true
+	r.msg = m
+}
+
+// testEvalAdapters builds an Adapters whose readyHandler slot carries the
+// PPS-evaluation handler under test (the Adapters struct holds the handler
+// function directly).
+func testEvalAdapters(t *testing.T, k8s client.Client, status communication.PPSEvaluationHandlingStatus) (*Adapters, *evalRecorder) {
+	t.Helper()
+	er := &evalRecorder{status: status}
+	a := &Adapters{
+		k8s: k8s,
+		readyHandler: func(ctx context.Context, m communication.TranslatorReadyMessage) communication.TranslatorReadyHandlingResult {
+			// Never invoked in the PPS evaluation tests.
+			t.Fatal("translator ready handler invoked by pps evaluation consumer")
+			return communication.TranslatorReadyHandlingResult{}
+		},
+	}
+	return a, er
+}
+
+func TestPPSEvaluationAdmittedHandledACKs(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status, Reason: "test"}
+	})
+
+	decision, err := c.handlePPSEvaluation(context.Background(), subject.PPSEvaluationSubject("ns", "proj", "7"), evaluationPayload("ns", "proj", "uid-1", "mean_wait_time", communication.VerdictMet, 0), handler)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK", decision)
+	}
+	if !er.called || er.msg.ScenarioID != 7 || er.msg.RunnerRound != 1 || er.msg.Verdict != communication.VerdictMet || er.msg.ProjectNamespace != "ns" || er.msg.ProjectName != "proj" || er.msg.ExperimentUID != "uid-1" {
+		t.Fatalf("handler not called as expected: %+v", er)
+	}
+}
+
+func TestPPSEvaluationAdmittedRetryNAKs(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, _ := testEvalAdapters(t, k8s, communication.PPSEvaluationRetry)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		return communication.PPSEvaluationHandlingResult{Status: communication.PPSEvaluationRetry, Reason: "transient"}
+	})
+
+	decision, _ := c.handlePPSEvaluation(context.Background(), subject.PPSEvaluationSubject("ns", "proj", "7"), evaluationPayload("ns", "proj", "uid-1", "mean_wait_time", communication.VerdictMet, 0), handler)
+	if decision != decisionNAK {
+		t.Fatalf("decision = %v; want NAK", decision)
+	}
+}
+
+func TestPPSEvaluationTerminalACKDiscardNoHandler(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseCompleted))
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status}
+	})
+
+	decision, _ := c.handlePPSEvaluation(context.Background(), subject.PPSEvaluationSubject("ns", "proj", "7"), evaluationPayload("ns", "proj", "uid-1", "mean_wait_time", communication.VerdictMet, 0), handler)
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK (terminal discard)", decision)
+	}
+	if er.called {
+		t.Fatal("terminal must not invoke the evaluation handler")
+	}
+}
+
+func TestPPSEvaluationUnavailableNAKsNoHandler(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhasePending))
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status}
+	})
+
+	decision, _ := c.handlePPSEvaluation(context.Background(), subject.PPSEvaluationSubject("ns", "proj", "7"), evaluationPayload("ns", "proj", "uid-1", "mean_wait_time", communication.VerdictMet, 0), handler)
+	if decision != decisionNAK {
+		t.Fatalf("decision = %v; want NAK (unavailable)", decision)
+	}
+	if er.called {
+		t.Fatal("unavailable must not invoke the evaluation handler")
+	}
+}
+
+func TestPPSEvaluationInvalidSubjectPoisonACK(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status}
+	})
+
+	// The PPS request subject is not an evaluation subject.
+	decision, _ := c.handlePPSEvaluation(context.Background(), subject.PPSRequestSubject("ns", "proj"), evaluationPayload("ns", "proj", "uid-1", "m", communication.VerdictMet, 0), handler)
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK (poison)", decision)
+	}
+	if er.called {
+		t.Fatal("invalid subject must not invoke the handler")
+	}
+}
+
+func TestPPSEvaluationNonPositiveScenarioIDPoisonACK(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status}
+	})
+
+	// scenario id "0" is not a canonical positive decimal; the subject itself
+	// is malformed and rejected by Parse.
+	decision, _ := c.handlePPSEvaluation(context.Background(), "cbse.ns.proj.pps.0.evaluation", evaluationPayload("ns", "proj", "uid-1", "m", communication.VerdictMet, 0), handler)
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK (poison)", decision)
+	}
+	if er.called {
+		t.Fatal("non-positive scenario id must not invoke the handler")
+	}
+}
+
+func TestPPSEvaluationMalformedPayloadPoisonACK(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status}
+	})
+
+	decision, _ := c.handlePPSEvaluation(context.Background(), subject.PPSEvaluationSubject("ns", "proj", "7"), []byte("{not json"), handler)
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK (poison)", decision)
+	}
+	if er.called {
+		t.Fatal("malformed payload must not invoke the handler")
+	}
+}
+
+func TestPPSEvaluationInvalidEnumPoisonACK(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status}
+	})
+
+	// An unknown verdict enum is rejected by the strict wire type on decode.
+	bad := strings.Replace(string(evaluationPayload("ns", "proj", "uid-1", "m", "met", 0)), `"verdict":"met"`, `"verdict":"bogus"`, 1)
+	decision, _ := c.handlePPSEvaluation(context.Background(), subject.PPSEvaluationSubject("ns", "proj", "7"), []byte(bad), handler)
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK (poison)", decision)
+	}
+	if er.called {
+		t.Fatal("invalid verdict enum must not invoke the handler")
+	}
+}
+
+func TestPPSEvaluationIdentityMismatchPoisonACK(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status}
+	})
+
+	// Payload identity differs from the subject identity: permanent poison.
+	decision, _ := c.handlePPSEvaluation(context.Background(), subject.PPSEvaluationSubject("ns", "proj", "7"), evaluationPayload("other", "proj", "uid-1", "m", communication.VerdictMet, 0), handler)
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK (poison)", decision)
+	}
+	if er.called {
+		t.Fatal("identity mismatch must not invoke the handler")
+	}
+}
+
+func TestPPSEvaluationGateFetchErrorNAKs(t *testing.T) {
+	k8s := &errK8s{Client: fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress)), err: errors.New("apiserver unavailable")}
+	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
+	c := NewPPSEvaluationConsumer(a)
+	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {
+		er.record(m)
+		return communication.PPSEvaluationHandlingResult{Status: er.status}
+	})
+
+	decision, _ := c.handlePPSEvaluation(context.Background(), subject.PPSEvaluationSubject("ns", "proj", "7"), evaluationPayload("ns", "proj", "uid-1", "m", communication.VerdictMet, 0), handler)
+	if decision != decisionNAK {
+		t.Fatalf("decision = %v; want NAK (transient gate fetch failure)", decision)
+	}
+	if er.called {
+		t.Fatal("gate fetch failure must not invoke the handler")
+	}
+}
+
+// errK8s wraps a real client.Client and overrides Get to always fail with a
+// transient (non-NotFound) error, exercising the retry branch.
+type errK8s struct {
+	client.Client
+	err error
+}
+
+func (e *errK8s) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	return e.err
 }

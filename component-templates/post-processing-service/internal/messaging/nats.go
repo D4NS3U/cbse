@@ -1,0 +1,138 @@
+// Copyright 2025-2026 Daniel Seufferth
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// nats.go is the real NATS JetStream adapter implementing the
+// messaging.Consumer, messaging.Publisher, and messaging.Manager seams with
+// the official nats.go client. The processor depends on the seams; this
+// adapter is wired in main and exercised by the smoke suite.
+package messaging
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	nats "github.com/nats-io/nats.go"
+)
+
+// Client is the real NATS JetStream client. It holds one pull subscription
+// created lazily on the first Fetch.
+type Client struct {
+	js     nats.JetStreamContext
+	stream string
+	cfg    *nats.ConsumerConfig
+	sub    *nats.Subscription
+	subErr error
+}
+
+// NewClient takes an existing NATS connection, builds the per-experiment
+// consumer config, and returns a Client. It does not create the consumer;
+// call EnsureConsumer to bind to the Scenario Manager's durable.
+func NewClient(nc *nats.Conn, stream, uid, namespace, project, requestSubject string) (*Client, error) {
+	if nc == nil {
+		return nil, errors.New("messaging: nil nats connection")
+	}
+	js, err := nc.JetStream()
+	if err != nil {
+		return nil, fmt.Errorf("messaging: jetstream: %w", err)
+	}
+	return &Client{
+		js:     js,
+		stream: stream,
+		cfg:    ConsumerConfig(uid, namespace, project, requestSubject),
+	}, nil
+}
+
+// Config returns the consumer configuration (for diagnostics and ownership
+// comparison).
+func (c *Client) Config() *nats.ConsumerConfig { return c.cfg }
+
+// EnsureConsumer attaches to the per-experiment durable consumer created by
+// the Scenario Manager and verifies its identity exactly matches the
+// canonical configuration. The PPS never creates the consumer: a missing
+// consumer (or a missing stream) returns ErrConsumerNotReady so the
+// processing loop retries; a name collision with mismatched settings is an
+// identity collision rejected without deleting, updating, or adopting the
+// consumer.
+func (c *Client) EnsureConsumer() error {
+	info, err := c.js.ConsumerInfo(c.stream, c.cfg.Durable)
+	if err != nil {
+		if errors.Is(err, nats.ErrConsumerNotFound) || errors.Is(err, nats.ErrStreamNotFound) {
+			return fmt.Errorf("messaging: %w: %q on stream %q is Scenario Manager-owned and not created yet", ErrConsumerNotReady, c.cfg.Durable, c.stream)
+		}
+		return fmt.Errorf("messaging: consumer info: %w", err)
+	}
+	return CompareConsumer(info, c.cfg)
+}
+
+// Fetch blocks until one request is available or ctx is cancelled. It creates
+// the pull subscription lazily and polls with a bounded MaxWait so ctx
+// cancellation is honored promptly.
+func (c *Client) Fetch(ctx context.Context) (Message, error) {
+	if err := c.ensureSub(); err != nil {
+		return nil, err
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		msgs, err := c.sub.Fetch(1, nats.MaxWait(time.Second))
+		if err != nil {
+			if errors.Is(err, nats.ErrTimeout) {
+				continue
+			}
+			return nil, fmt.Errorf("messaging: fetch: %w", err)
+		}
+		if len(msgs) == 0 {
+			continue
+		}
+		return &msgWrapper{msg: msgs[0]}, nil
+	}
+}
+
+// ensureSub creates the pull subscription on the first Fetch and caches both
+// the subscription and any creation error. A failed first PullSubscribe is
+// not retried: the cached error is returned on every subsequent call. The
+// consumer must already exist (the processing loop binds before fetching).
+func (c *Client) ensureSub() error {
+	if c.sub != nil || c.subErr != nil {
+		return c.subErr
+	}
+	sub, err := c.js.PullSubscribe(c.cfg.FilterSubject, c.cfg.Durable, nats.BindStream(c.stream))
+	if err != nil {
+		c.subErr = fmt.Errorf("messaging: pull subscribe: %w", err)
+		return c.subErr
+	}
+	c.sub = sub
+	return nil
+}
+
+// Publish publishes a verdict and blocks until the server confirms
+// publication (PubAck).
+func (c *Client) Publish(subject string, data []byte) error {
+	if _, err := c.js.Publish(subject, data); err != nil {
+		return fmt.Errorf("messaging: publish verdict: %w", err)
+	}
+	return nil
+}
+
+// msgWrapper adapts *nats.Msg to the messaging.Message interface.
+type msgWrapper struct{ msg *nats.Msg }
+
+func (m *msgWrapper) Data() []byte      { return m.msg.Data }
+func (m *msgWrapper) Subject() string   { return m.msg.Subject }
+func (m *msgWrapper) Ack() error        { return m.msg.Ack() }
+func (m *msgWrapper) Nak() error        { return m.msg.Nak() }
+func (m *msgWrapper) InProgress() error { return m.msg.InProgress() }

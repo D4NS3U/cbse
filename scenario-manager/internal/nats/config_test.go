@@ -38,6 +38,10 @@ func TestValidateTemplatesAcceptsUnsetAndCanonical(t *testing.T) {
 			return CanonicalTranslatorRequestTemplate
 		case transReadyTemplateEnv:
 			return CanonicalTranslatorReadyTemplate
+		case ppsRequestTemplateEnv:
+			return CanonicalPPSRequestTemplate
+		case ppsEvalTemplateEnv:
+			return CanonicalPPSEvaluationTemplate
 		}
 		return ""
 	}
@@ -52,6 +56,8 @@ func TestValidateTemplatesRejectsNoncanonical(t *testing.T) {
 		edsBatchTemplateEnv:     "cbse.{project}.eds.scenarios",                   // missing {namespace}
 		transRequestTemplateEnv: "cbse.{namespace}.{project}.trans.req",           // wrong event
 		transReadyTemplateEnv:   "cbse.{namespace}.{project}.trans.%s.ready",      // %s not supported
+		ppsRequestTemplateEnv:   "cbse.{namespace}.{project}.pps.req",             // wrong event
+		ppsEvalTemplateEnv:      "cbse.{namespace}.{project}.pps.{id}.evaluation", // wrong placeholder
 	}
 	for env, bad := range cases {
 		get := func(k string) string {
@@ -81,6 +87,8 @@ func TestValidateStreamNames(t *testing.T) {
 			return EDSStreamName
 		case translatorStreamNameEnv:
 			return TranslatorStreamName
+		case ppsStreamNameEnv:
+			return PPSStreamName
 		}
 		return ""
 	}
@@ -95,6 +103,15 @@ func TestValidateStreamNames(t *testing.T) {
 	}
 	if err := ValidateStreamNames(getBad); !errors.Is(err, ErrNoncanonicalConfig) {
 		t.Fatalf("bad eds stream: err = %v; want ErrNoncanonicalConfig", err)
+	}
+	getBadPPS := func(k string) string {
+		if k == ppsStreamNameEnv {
+			return "legacy_pps_stream"
+		}
+		return ""
+	}
+	if err := ValidateStreamNames(getBadPPS); !errors.Is(err, ErrNoncanonicalConfig) {
+		t.Fatalf("bad pps stream: err = %v; want ErrNoncanonicalConfig", err)
 	}
 }
 
@@ -133,8 +150,31 @@ func TestSMConsumerConfigs(t *testing.T) {
 	if ready.FilterSubject != "cbse.*.*.trans.*.ready" || ready.MaxAckPending != 1024 || ready.MaxDeliver != -1 {
 		t.Fatalf("ready consumer settings = %+v", ready)
 	}
-	if got := SMConsumers(); len(got) != 2 || got[0].Stream != EDSStreamName || got[1].Stream != TranslatorStreamName {
+	if got := SMConsumers(); len(got) != 3 || got[0].Stream != EDSStreamName || got[1].Stream != TranslatorStreamName || got[2].Stream != PPSStreamName {
 		t.Fatalf("SMConsumers = %+v", got)
+	}
+}
+
+func TestPPSEvaluationConsumerConfig(t *testing.T) {
+	eval := PPSEvaluationConsumerConfig()
+	if eval.Durable != PPSEvaluationConsumerName || eval.DeliverGroup != "scenario-manager-pps-evaluation" {
+		t.Fatalf("eval consumer = %+v", eval)
+	}
+	if eval.FilterSubject != "cbse.*.*.pps.*.evaluation" || eval.MaxAckPending != 1024 || eval.MaxDeliver != -1 {
+		t.Fatalf("eval consumer settings = %+v", eval)
+	}
+	if eval.DeliverSubject != PPSEvaluationDeliverSubject {
+		t.Fatalf("deliver subject = %q", eval.DeliverSubject)
+	}
+}
+
+func TestPPSStreamConfig(t *testing.T) {
+	pps := PPSStreamConfig()
+	if pps.Name != PPSStreamName || pps.Retention != natsgo.WorkQueuePolicy || pps.Storage != natsgo.FileStorage || pps.Discard != natsgo.DiscardOld {
+		t.Fatalf("pps stream config = %+v", pps)
+	}
+	if len(pps.Subjects) != 2 || pps.Subjects[0] != "cbse.*.*.pps.request" || pps.Subjects[1] != "cbse.*.*.pps.*.evaluation" {
+		t.Fatalf("pps subjects = %v", pps.Subjects)
 	}
 }
 
@@ -168,6 +208,48 @@ func TestTranslatorConsumerConfig(t *testing.T) {
 	wantMeta := map[string]string{
 		"experiment.cbse.terministic.de/managed-by":     "translator",
 		"experiment.cbse.terministic.de/experiment-uid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",
+		"experiment.cbse.terministic.de/namespace":      "default",
+		"experiment.cbse.terministic.de/project":        "smoke",
+	}
+	for k, v := range wantMeta {
+		if cfg.Metadata[k] != v {
+			t.Fatalf("metadata %q = %q; want %q", k, cfg.Metadata[k], v)
+		}
+	}
+}
+
+func TestPPSConsumerName(t *testing.T) {
+	uid := "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+	// lowercase + hyphen-stripped + first 12 chars -> a1b2c3d4e5f6
+	want := "pps-a1b2c3d4e5f6"
+	if got := PPSConsumerName(uid); got != want {
+		t.Fatalf("PPSConsumerName(%q) = %q; want %q", uid, got, want)
+	}
+	// Already-lowercase, hyphenless UID.
+	if got := PPSConsumerName("a1b2c3d4e5f67890abcdef1234567890"); got != "pps-a1b2c3d4e5f6" {
+		t.Fatalf("hyphenless = %q", got)
+	}
+}
+
+func TestPPSConsumerConfig(t *testing.T) {
+	uid := "A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+	cfg := PPSConsumerConfig(uid, "default", "smoke")
+	if cfg.Durable != "pps-a1b2c3d4e5f6" {
+		t.Fatalf("durable = %q", cfg.Durable)
+	}
+	if cfg.FilterSubject != "cbse.default.smoke.pps.request" {
+		t.Fatalf("filter = %q", cfg.FilterSubject)
+	}
+	if cfg.AckPolicy != natsgo.AckExplicitPolicy || cfg.DeliverPolicy != natsgo.DeliverAllPolicy {
+		t.Fatalf("policies = %+v", cfg)
+	}
+	// The PPS consumer copies the translator consumer's exact settings.
+	if cfg.AckWait != 2*time.Minute || cfg.MaxAckPending != 1 || cfg.MaxDeliver != -1 {
+		t.Fatalf("tuning = %+v", cfg)
+	}
+	wantMeta := map[string]string{
+		"experiment.cbse.terministic.de/managed-by":     "pps",
+		"experiment.cbse.terministic.de/experiment-uid": uid,
 		"experiment.cbse.terministic.de/namespace":      "default",
 		"experiment.cbse.terministic.de/project":        "smoke",
 	}

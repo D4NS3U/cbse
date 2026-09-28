@@ -245,15 +245,18 @@ func ReconcileSMConsumer(js consumerManager, stream string, want *natsgo.Consume
 	return nil
 }
 
-// ReconcileStreamsAndConsumers reconciles the two shared streams and the two
-// SM-owned durable consumers to the canonical alpha4 configuration. It is the
-// SM startup reconciliation entry point. A remaining mismatch that cannot be
-// reconciled fails startup with the exact stream or consumer name.
+// ReconcileStreamsAndConsumers reconciles the three shared streams and the
+// three SM-owned durable consumers to the canonical alpha4 configuration. It
+// is the SM startup reconciliation entry point. A remaining mismatch that
+// cannot be reconciled fails startup with the exact stream or consumer name.
 func ReconcileStreamsAndConsumers(js jetStreamManager) error {
 	if err := ReconcileStream(js, EDSStreamConfig()); err != nil {
 		return err
 	}
 	if err := ReconcileStream(js, TranslatorStreamConfig()); err != nil {
+		return err
+	}
+	if err := ReconcileStream(js, PPSStreamConfig()); err != nil {
 		return err
 	}
 	for _, c := range SMConsumers() {
@@ -283,6 +286,83 @@ func DeleteTranslatorConsumer(js consumerManager, stream, uid, namespace, projec
 	}
 	if err := js.DeleteConsumer(stream, name); err != nil && !errors.Is(err, natsgo.ErrConsumerNotFound) {
 		return fmt.Errorf("delete translator consumer %q on stream %q: %w", name, stream, err)
+	}
+	return nil
+}
+
+// VerifyPPSConsumerOwnership reports whether an existing per-experiment PPS
+// consumer belongs to the given experiment. It requires the stream, durable
+// name, exact filter subject, and all four ownership metadata entries to
+// match the deleting CR's full UID, namespace, and project, plus the
+// acknowledgement policy, delivery policy, AckWait, MaxAckPending, and
+// MaxDeliver. Any mismatch is an identity collision: the caller must not
+// delete, update, or adopt the consumer.
+func VerifyPPSConsumerOwnership(info *natsgo.ConsumerInfo, stream, uid, namespace, project string) error {
+	if info == nil {
+		return errors.New("nil consumer info")
+	}
+	got := &info.Config
+	if got.Durable != PPSConsumerName(uid) {
+		return fmt.Errorf("%w: durable %q != %q", ErrOwnershipCollision, got.Durable, PPSConsumerName(uid))
+	}
+	wantFilter := fmt.Sprintf("cbse.%s.%s.pps.request", namespace, project)
+	if got.FilterSubject != wantFilter {
+		return fmt.Errorf("%w: filter %q != %q", ErrOwnershipCollision, got.FilterSubject, wantFilter)
+	}
+	want := PPSConsumerConfig(uid, namespace, project)
+	if err := compareConsumerSettings(got, want); err != nil {
+		return err
+	}
+	if err := compareMetadata(got.Metadata, want.Metadata); err != nil {
+		return fmt.Errorf("%w: %v", ErrOwnershipCollision, err)
+	}
+	return nil
+}
+
+// EnsurePPSConsumer ensures the per-experiment PPS durable consumer exists on
+// stream with the canonical configuration. A missing consumer is created;
+// a matching existing consumer is success. An existing consumer that does not
+// verify as this experiment's is a collision: it is neither adopted, updated,
+// nor deleted, and the error is returned so the caller can surface the
+// identity mismatch. This is the SM-side creation path for the durable the
+// PostProcessingService attaches to for the experiment's evaluation requests.
+func EnsurePPSConsumer(js consumerManager, stream, uid, namespace, project string) error {
+	name := PPSConsumerName(uid)
+	info, err := js.ConsumerInfo(stream, name)
+	if err != nil {
+		if !errors.Is(err, natsgo.ErrConsumerNotFound) {
+			return fmt.Errorf("lookup pps consumer %q on stream %q: %w", name, stream, err)
+		}
+		if _, err := js.AddConsumer(stream, PPSConsumerConfig(uid, namespace, project)); err != nil {
+			return fmt.Errorf("create pps consumer %q on stream %q: %w", name, stream, err)
+		}
+		return nil
+	}
+	if err := VerifyPPSConsumerOwnership(info, stream, uid, namespace, project); err != nil {
+		return err
+	}
+	return nil
+}
+
+// DeletePPSConsumer deletes a per-experiment PPS consumer from stream
+// cbse_pps only after verifying it belongs to the given experiment. A missing
+// consumer is success. An ownership mismatch is a collision: the consumer is
+// not deleted and the error is returned so the caller retains the finalizer
+// and retries.
+func DeletePPSConsumer(js consumerManager, stream, uid, namespace, project string) error {
+	name := PPSConsumerName(uid)
+	info, err := js.ConsumerInfo(stream, name)
+	if err != nil {
+		if errors.Is(err, natsgo.ErrConsumerNotFound) {
+			return nil
+		}
+		return fmt.Errorf("lookup pps consumer %q on stream %q: %w", name, stream, err)
+	}
+	if err := VerifyPPSConsumerOwnership(info, stream, uid, namespace, project); err != nil {
+		return err
+	}
+	if err := js.DeleteConsumer(stream, name); err != nil && !errors.Is(err, natsgo.ErrConsumerNotFound) {
+		return fmt.Errorf("delete pps consumer %q on stream %q: %w", name, stream, err)
 	}
 	return nil
 }

@@ -135,10 +135,19 @@ func (m *recordingMsg) PurgeSubject(_ context.Context, stream, subject string) e
 	m.purges = append(m.purges, stream+":"+subject)
 	return nil
 }
+func (m *recordingMsg) DeletePPSConsumer(_ context.Context, uid, namespace, project string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.consumerDeletions = append(m.consumerDeletions, "pps:"+uid+"/"+namespace+"/"+project)
+	return nil
+}
 
 // newDispatcher builds a Dispatcher with short retry cadence and a root context
 // for tests.
-func newDispatcher(t *testing.T, k8s client.Client, store lifecycle.ProjectStore, msg lifecycle.MessagingCleaner, register func(context.Context, string, string) error) *Dispatcher {
+func newDispatcher(t *testing.T, k8s client.Client, store lifecycle.ProjectStore, msg interface {
+	lifecycle.MessagingCleaner
+	lifecycle.PPSCleaner
+}, register func(context.Context, string, string) error) *Dispatcher {
 	t.Helper()
 	rootCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -153,6 +162,8 @@ func newDispatcher(t *testing.T, k8s client.Client, store lifecycle.ProjectStore
 		}
 	}
 	d := NewDispatcher(k8s, store, msg, register)
+	d.ppsStreamName = "cbse_pps"
+	d.ppsCleaner = msg
 	d.SetRetryCadence(2 * time.Millisecond)
 	d.SetRootContext(rootCtx)
 	return d
@@ -234,8 +245,13 @@ func TestHandleAddDeletingRunsCleanup(t *testing.T) {
 	}
 	msg.mu.Lock()
 	defer msg.mu.Unlock()
-	if len(msg.consumerDeletions) != 1 {
-		t.Fatalf("consumer deletions = %v; want 1", msg.consumerDeletions)
+	// Step 2 (translator) and step 11 (PPS) each delete one per-experiment
+	// consumer, recorded in the same slice.
+	if len(msg.consumerDeletions) != 2 {
+		t.Fatalf("consumer deletions = %v; want 2 (translator + pps)", msg.consumerDeletions)
+	}
+	if msg.consumerDeletions[0] != "uid-1/ns/proj" || msg.consumerDeletions[1] != "pps:uid-1/ns/proj" {
+		t.Fatalf("consumer deletions order = %v", msg.consumerDeletions)
 	}
 }
 
@@ -299,7 +315,7 @@ func TestHandleUpdateDeletingHasPrecedenceOverPhase(t *testing.T) {
 	if !waitUntil(time.Second, func() bool {
 		msg.mu.Lock()
 		defer msg.mu.Unlock()
-		return len(msg.consumerDeletions) == 1
+		return len(msg.consumerDeletions) == 2
 	}) {
 		t.Fatalf("deletion cleanup not run: %+v", msg)
 	}

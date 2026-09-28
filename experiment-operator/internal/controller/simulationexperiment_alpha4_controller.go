@@ -56,9 +56,10 @@ var alpha4ExperimentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 // RBAC markers for the alpha4 reconciler. They generate the operator's
 // manager-role ClusterRole and cover every resource the reconciler creates,
 // updates, watches, and finalizes: the alpha4 SimulationExperiment and its
-// status/finalizers, the image-based database and Translator Deployments and
-// Services, the database connection and registry-auth Secrets, the Translator
-// ConfigMap, and the deterministic runner ServiceAccount.
+// status/finalizers, the image-based database Deployments and the Translator
+// and PPS Deployments and Services, the database connection and registry-auth
+// Secrets, the Translator ConfigMap, and the deterministic runner
+// ServiceAccount.
 // +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments/finalizers,verbs=update
@@ -72,7 +73,8 @@ var alpha4ExperimentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 // components: image- and host-based database connection Secrets, image-based
 // database Deployments with exactly one cbse-registry-auth pull-Secret, the
 // two-container rootless BuildKit Translator Deployment and Service, the
-// Translator ConfigMap, and the deterministic runner ServiceAccount.
+// single-container PPS Deployment and Service, the Translator ConfigMap, and
+// the deterministic runner ServiceAccount.
 //
 // This is the only reconciler registered by the operator's controller-manager;
 // alpha2 and alpha3 are not served or reconciled.
@@ -232,6 +234,11 @@ func (r *Alpha4SimulationExperimentReconciler) validateExperiment(ctx context.Co
 		return fmt.Errorf("translator.registryAuthSecretRef.name must equal %q", registryAuthSecretName)
 	}
 
+	pps := instance.Spec.PostProcessingService
+	if err := ValidateDigestImage(pps.Image); err != nil {
+		return fmt.Errorf("postProcessingService.image: %w", err)
+	}
+
 	if _, err := EffectiveBuilderResources(t.BuilderResources); err != nil {
 		return fmt.Errorf("translator.builderResources: %w", err)
 	}
@@ -331,6 +338,9 @@ func (r *Alpha4SimulationExperimentReconciler) provisionComponents(ctx context.C
 		}
 	}
 	if err := r.reconcileTranslator(ctx, instance); err != nil {
+		return err
+	}
+	if err := r.reconcilePPS(ctx, instance); err != nil {
 		return err
 	}
 	if err := r.reconcileRunnerServiceAccount(ctx, instance); err != nil {
@@ -560,6 +570,65 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 	return nil
 }
 
+// reconcilePPS reconciles the single-container post-processing service
+// Deployment and the PPS Service from spec.postProcessingService. The PPS
+// differs from the Translator only per the alpha4 PPS contract: one container
+// under the restricted profile, the resultdb connection Secret mounted
+// read-only, and the PPS env contract in place of the translator env. Image,
+// port, command, and args pass through verbatim from the spec.
+func (r *Alpha4SimulationExperimentReconciler) reconcilePPS(ctx context.Context, instance *experimentalpha4.SimulationExperiment) error {
+	pps := instance.Spec.PostProcessingService
+
+	dep := &appsv1.Deployment{ObjectMeta: metav1ObjectName(instance, instance.Name+"-pps")}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+		if err := controllerutil.SetControllerReference(instance, dep, r.Scheme); err != nil {
+			return err
+		}
+		labels := workloadLabels(instance.Name+"-pps", instance.Name, string(instance.UID))
+		dep.Labels = labels
+		dep.Spec.Selector = metav1Selector(labels)
+		dep.Spec.Template.ObjectMeta.Labels = labels
+		dep.Spec.Template.Spec.Volumes = []corev1.Volume{{
+			Name: "resultdb-connection",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: instance.Name + "-resultdb-sct",
+			}},
+		}}
+		ctr := corev1.Container{
+			Name:  "pps",
+			Image: pps.Image,
+			Ports: []corev1.ContainerPort{{ContainerPort: pps.Port}},
+			Env:   ppsEnvVars(instance),
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "resultdb-connection", MountPath: "/resultdb-connection", ReadOnly: true},
+			},
+			SecurityContext: restrictedSecurityContext(),
+		}
+		if len(pps.Command) > 0 {
+			ctr.Command = pps.Command
+		}
+		if len(pps.Args) > 0 {
+			ctr.Args = pps.Args
+		}
+		dep.Spec.Template.Spec.Containers = []corev1.Container{ctr}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reconcile PPS Deployment: %w", err)
+	}
+
+	svc := &corev1.Service{ObjectMeta: metav1ObjectName(instance, instance.Name+"-pps-svc")}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		if err := controllerutil.SetControllerReference(instance, svc, r.Scheme); err != nil {
+			return err
+		}
+		applyServiceSpec(svc, pps.ServiceType, pps.Port, pps.NodePort, instance.Name+"-pps")
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reconcile PPS Service: %w", err)
+	}
+	return nil
+}
+
 // reconcileRunnerServiceAccount reconciles the deterministic runner
 // ServiceAccount. It grants no workload permissions and disables service
 // account token automount. The ServiceAccount name is the deterministic
@@ -607,6 +676,29 @@ func translatorEnvVars(instance *experimentalpha4.SimulationExperiment, cmName s
 		{Name: "TRANSLATOR_REQUEST_SUBJECT", Value: translatorRequestSubject(instance.Namespace, instance.Name)},
 		{Name: "TRANSLATOR_READY_SUBJECT_TEMPLATE", Value: translatorReadySubjectTemplate},
 		{Name: "TRANSLATOR_CONSUMER", Value: "translator-" + RunnerUIDPrefix(instance.UID)},
+		simulationProjectNamespaceEnvVar(),
+		simulationProjectEnvVar(),
+		simulationExperimentUIDEnvVar(),
+	}
+}
+
+// ppsEnvVars returns the full alpha4 env var set injected into the PPS
+// container, mirroring translatorEnvVars: NATS_URL carries the same value the
+// Translator gets, PPS_STREAM and the per-experiment derived request subject
+// and evaluation-subject template (with the scenario id as the %s token) are
+// the alpha4 PPS NATS/JetStream configuration, and the UID-specific durable
+// consumer name is pps-<12-char-UID-prefix>. SIMULATIONPROJECTNAMESPACE,
+// SIMULATIONPROJECTNAME, and SIMULATIONEXPERIMENTUID are the downward-API
+// identity vars. The reference PPS validates every value at startup, so a
+// missing or inconsistent injection fails fast with a descriptive
+// configuration error rather than a runtime crash.
+func ppsEnvVars(instance *experimentalpha4.SimulationExperiment) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "NATS_URL", Value: translatorNATSURL},
+		{Name: "PPS_STREAM", Value: ppsStream},
+		{Name: "PPS_REQUEST_SUBJECT", Value: ppsRequestSubject(instance.Namespace, instance.Name)},
+		{Name: "PPS_EVALUATION_SUBJECT_TEMPLATE", Value: ppsEvaluationSubjectTemplate(instance.Namespace, instance.Name)},
+		{Name: "PPS_CONSUMER", Value: "pps-" + RunnerUIDPrefix(instance.UID)},
 		simulationProjectNamespaceEnvVar(),
 		simulationProjectEnvVar(),
 		simulationExperimentUIDEnvVar(),

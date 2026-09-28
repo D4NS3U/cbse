@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // Package subject defines the canonical alpha4 NATS subject grammar for the
-// Scenario Manager's communication with the EDS and the Translator.
+// Scenario Manager's communication with the EDS, the Translator, and the
+// PostProcessingService (PPS).
 //
 // The grammar is namespace-aware and fixed: every subject has the form
 //
@@ -21,9 +22,11 @@
 //
 // where <namespace> and <project> are each a single DNS label (no dots) and
 // the remaining tokens are reserved names owned by this package. The
-// Translator-ready subject carries a per-scenario id as its fourth token:
+// Translator-ready and PPS-evaluation subjects carry a per-scenario id as
+// their fourth token:
 //
 //	cbse.<namespace>.<project>.trans.<scenario-id>.ready
+//	cbse.<namespace>.<project>.pps.<scenario-id>.evaluation
 //
 // The grammar is intentionally strict: project and namespace identifiers are
 // never normalized (no lowercasing, no token replacement) and never contain
@@ -37,7 +40,8 @@ import (
 	"strings"
 )
 
-// Domain identifies the two communication domains the Scenario Manager owns.
+// Domain identifies the three communication domains the Scenario Manager
+// owns.
 type Domain string
 
 const (
@@ -49,9 +53,15 @@ const (
 	// Translator publishes readiness on TranslatorReadySubject and consumes
 	// translation requests from TranslatorRequestSubject.
 	DomainTranslator Domain = "trans"
+	// DomainPPS is the Scenario-Manager-to-PostProcessingService domain. The
+	// Scenario Manager publishes evaluation requests on PPSRequestSubject and
+	// consumes evaluation verdicts from PPSEvaluationSubject.
+	DomainPPS Domain = "pps"
 )
 
-// Event names the concrete subjects within a domain.
+// Event names the concrete subjects within a domain. EventRequest is shared
+// by the Translator and PPS domains: the domain token disambiguates the two
+// four-token request subjects in Parse.
 type Event string
 
 const (
@@ -61,12 +71,16 @@ const (
 	// EventAvailable is the EDS availability request/reply subject:
 	// cbse.<ns>.<project>.eds.scenarios.available.
 	EventAvailable Event = "available"
-	// EventRequest is the Scenario Manager translation request subject:
-	// cbse.<ns>.<project>.trans.request.
+	// EventRequest is the translation request subject
+	// cbse.<ns>.<project>.trans.request and the PPS evaluation request
+	// subject cbse.<ns>.<project>.pps.request.
 	EventRequest Event = "request"
 	// EventReady is the Translator readiness subject:
 	// cbse.<ns>.<project>.trans.<scenario-id>.ready.
 	EventReady Event = "ready"
+	// EventPPSEvaluation is the PPS evaluation verdict subject:
+	// cbse.<ns>.<project>.pps.<scenario-id>.evaluation.
+	EventPPSEvaluation Event = "evaluation"
 )
 
 // Ident is a validated namespace or project identifier: a single lowercase
@@ -109,6 +123,12 @@ type Subject struct {
 	// subject (the <scenario-id> in cbse.<ns>.<project>.trans.<scenario-id>.ready).
 	// It is populated only for TranslatorReady subjects.
 	ReadyScenarioID string
+	// EvaluationScenarioID is the per-scenario id token in a PPS-evaluation
+	// subject (the <scenario-id> in
+	// cbse.<ns>.<project>.pps.<scenario-id>.evaluation). It is validated as a
+	// canonical positive integer (no sign, no leading zeros) and is populated
+	// only for PPSEvaluation subjects.
+	EvaluationScenarioID string
 }
 
 // EDSAvailabilitySubject is the Core NATS request/reply subject for an EDS
@@ -149,6 +169,31 @@ func TranslatorReadyWildcardSubject(namespace, project Ident) string {
 	return fmt.Sprintf("cbse.%s.%s.trans.*.ready", namespace, project)
 }
 
+// PPSRequestSubject is the subject on which the Scenario Manager publishes a
+// scenario evaluation request for a given (namespace, project):
+// cbse.<namespace>.<project>.pps.request.
+func PPSRequestSubject(namespace, project Ident) string {
+	return fmt.Sprintf("cbse.%s.%s.pps.request", namespace, project)
+}
+
+// PPSEvaluationSubject is the subject on which the PostProcessingService
+// publishes an evaluation verdict for a given (namespace, project) and
+// scenario id: cbse.<namespace>.<project>.pps.<scenario-id>.evaluation.
+//
+// scenarioID is the per-scenario id carried as the subject's fourth token. It
+// must be a canonical positive decimal integer (no sign, no leading zeros);
+// the subject is the transport of the evaluation round's scenario identity.
+func PPSEvaluationSubject(namespace, project Ident, scenarioID string) string {
+	return fmt.Sprintf("cbse.%s.%s.pps.%s.evaluation", namespace, project, scenarioID)
+}
+
+// PPSEvaluationWildcardSubject is the per-project wildcard subject used to
+// purge all PPS evaluation verdicts for a (namespace, project) at deletion
+// time: cbse.<namespace>.<project>.pps.*.evaluation.
+func PPSEvaluationWildcardSubject(namespace, project Ident) string {
+	return fmt.Sprintf("cbse.%s.%s.pps.*.evaluation", namespace, project)
+}
+
 // Wildcard subscriptions and stream subjects. The Scenario Manager derives
 // these only by replacing the namespace, project, and scenario placeholders
 // with *; callers do not configure a narrower namespace wildcard.
@@ -165,15 +210,21 @@ const (
 	// TranslatorReadyStreamSubject is the JetStream stream subject for
 	// Translator readiness: cbse.*.*.trans.*.ready.
 	TranslatorReadyStreamSubject = "cbse.*.*.trans.*.ready"
+	// PPSRequestStreamSubject is the JetStream stream subject for PPS
+	// evaluation requests: cbse.*.*.pps.request.
+	PPSRequestStreamSubject = "cbse.*.*.pps.request"
+	// PPSEvaluationStreamSubject is the JetStream stream subject for PPS
+	// evaluation verdicts: cbse.*.*.pps.*.evaluation.
+	PPSEvaluationStreamSubject = "cbse.*.*.pps.*.evaluation"
 )
 
 // errInvalidSubject is the base error for malformed subjects.
 var errInvalidSubject = errors.New("invalid alpha4 subject")
 
-// Parse parses an alpha4 subject produced by one of the four constructors
+// Parse parses an alpha4 subject produced by one of the constructors
 // (EDSAvailabilitySubject, EDSBatchSubject, TranslatorRequestSubject,
-// TranslatorReadySubject) into a Subject. It rejects any subject that does not
-// match the canonical grammar.
+// TranslatorReadySubject, PPSRequestSubject, PPSEvaluationSubject) into a
+// Subject. It rejects any subject that does not match the canonical grammar.
 //
 // The namespace and project tokens are validated as DNS labels; they are NOT
 // normalized. The <scenario-id> token in a ready subject is returned as a
@@ -238,9 +289,44 @@ func Parse(s string) (Subject, error) {
 		default:
 			return Subject{}, fmt.Errorf("%w: translator subject has wrong arity: %q", errInvalidSubject, s)
 		}
+	case DomainPPS:
+		switch len(tokens) {
+		case 4: // cbse.<ns>.<proj>.pps.request
+			if Event(tokens[3]) != EventRequest {
+				return Subject{}, fmt.Errorf("%w: not a pps request subject: %q", errInvalidSubject, s)
+			}
+			return Subject{Namespace: ns, Project: proj, Domain: dom, Event: EventRequest}, nil
+		case 5: // cbse.<ns>.<proj>.pps.<scenario-id>.evaluation
+			if Event(tokens[4]) != EventPPSEvaluation {
+				return Subject{}, fmt.Errorf("%w: not a pps evaluation subject: %q", errInvalidSubject, s)
+			}
+			scenarioID := tokens[3]
+			if !isCanonicalPositiveInt(scenarioID) {
+				return Subject{}, fmt.Errorf("%w: pps evaluation scenario-id token %q must be a positive integer: %q", errInvalidSubject, scenarioID, s)
+			}
+			return Subject{Namespace: ns, Project: proj, Domain: dom, Event: EventPPSEvaluation, EvaluationScenarioID: scenarioID}, nil
+		default:
+			return Subject{}, fmt.Errorf("%w: pps subject has wrong arity: %q", errInvalidSubject, s)
+		}
 	default:
 		return Subject{}, fmt.Errorf("%w: unknown domain %q: %q", errInvalidSubject, dom, s)
 	}
+}
+
+// isCanonicalPositiveInt reports whether s is a canonical positive decimal
+// integer: digits only, no sign, no leading zeros. It is the validation the
+// PPS-evaluation subject applies to its <scenario-id> token, stricter than the
+// Translator-ready token which is only required to be non-empty.
+func isCanonicalPositiveInt(s string) bool {
+	if s == "" || s[0] == '0' {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // Identity carries the validated (namespace, project) pair extracted from a
