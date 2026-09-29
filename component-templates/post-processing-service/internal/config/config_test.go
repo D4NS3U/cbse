@@ -15,6 +15,8 @@
 package config
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +117,46 @@ func TestLoadFlags(t *testing.T) {
 	}
 }
 
+// TestLoadMaxRunnersPerRoundZero is ruling Q7's 0-mode: 0 is accepted,
+// carries the disabled state into the Config, and is logged at startup with
+// an explicit observable line (the disabled state must be visible, not
+// silent).
+func TestLoadMaxRunnersPerRoundZero(t *testing.T) {
+	setEnv(t)
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	cfg, err := Load([]string{"-max-runners-per-round", "0"}, dbMounts(t))
+	if err != nil {
+		t.Fatalf("Load err = %v", err)
+	}
+	if cfg.MaxRunnersRound != 0 {
+		t.Fatalf("max runners per round = %d, want 0 (disabled)", cfg.MaxRunnersRound)
+	}
+	want := "pps: per-wave cap disabled"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("startup log = %q, want %q", buf.String(), want)
+	}
+}
+
+// TestLoadMaxRunnersPerRoundNegative is ruling Q7's fail-fast: a negative
+// -max-runners-per-round is a configuration error at startup.
+func TestLoadMaxRunnersPerRoundNegative(t *testing.T) {
+	setEnv(t)
+	_, err := Load([]string{"-max-runners-per-round", "-1000"}, dbMounts(t))
+	if err == nil {
+		t.Fatal("negative max-runners-per-round accepted")
+	}
+	if !strings.Contains(err.Error(), "-max-runners-per-round") {
+		t.Fatalf("error = %v, want mention of -max-runners-per-round", err)
+	}
+}
+
 func TestLoadUnknownFlag(t *testing.T) {
 	setEnv(t)
 	_, err := Load([]string{"-bogus-flag"}, dbMounts(t))
@@ -142,7 +184,7 @@ func TestLoadNonPositiveNumbers(t *testing.T) {
 		{"-deterministic-additional-runners", "0"},
 		{"-deterministic-additional-runners", "-1"},
 		{"-max-replications", "0"},
-		{"-max-runners-per-round", "0"},
+		{"-max-replications", "-1"},
 		{"-max-runners-per-round", "-1000"},
 	} {
 		if _, err := Load(args, dbMounts(t)); err == nil {

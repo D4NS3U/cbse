@@ -71,15 +71,21 @@ connects with `sslmode=disable`.
 
 ### Flags (container args)
 
-Passed through from `spec.postProcessingService.args`; unknown flags or
-non-positive numbers fail startup.
+Passed through from `spec.postProcessingService.args`; unknown flags,
+malformed numbers, or out-of-domain values fail startup (with one explicit
+off-mode: `-max-runners-per-round 0` disables the per-wave cap).
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `-evaluation-policy` | `statistical` | `statistical` (the paper-exact criterion) or `deterministic-first-round-not-met` (test/demo knob) |
-| `-deterministic-additional-runners` | `2` | the deterministic policy's fixed additional-runner count (clamped to `-max-runners-per-round`, at least 1) |
-| `-max-replications` | `10000` | user-defined maximum total replications across all rounds (the additional stopping criterion) |
-| `-max-runners-per-round` | `1000` | per-round safety clamp on any additional batch |
+| `-deterministic-additional-runners` | `2` | the deterministic policy's fixed additional-runner count (clamped to `-max-runners-per-round` while the cap is enabled, at least 1) |
+| `-max-replications` | `10000` | user-defined maximum total replications across all rounds (the additional stopping criterion; strictly positive-mandatory) |
+| `-max-runners-per-round` | `1000` | per-round safety clamp on any additional batch: **positive** = cap; **`0`** = disabled (waves sized by the estimate alone, verbatim within the `-max-replications` headroom, logged at startup); **negative** = configuration error (startup fails) |
+
+The operational/scientific separation (ruling Q7): `-max-runners-per-round`
+is the *operational* pacing knob and therefore has an explicit off (`0`),
+while `-max-replications` is the *scientific* stopping criterion and stays
+strictly positive-mandatory (no 0-mode).
 
 ## Wire contract
 
@@ -149,7 +155,10 @@ additional = min(additional, max-replications − n)
 
 with min-batch = max(1, min(2, max-runners-per-round)). If the clamped
 additional is 0, or if n ≥ max-replications with h > ε, the verdict is
-`stop_unmet` (additional_runners 0).
+`stop_unmet` (additional_runners 0). With `max-runners-per-round = 0`
+(disabled, ruling Q7) the per-wave clamp is skipped: the estimate flows
+verbatim, bounded only by the max-replications headroom, with the min-batch
+floor intact (2); the disabled state is logged at startup.
 
 Degenerate rule (the estimate cannot be formed): n = 0 or n = 1 counts as
 not-met with the minimum batch (h undefined, reported 0.0); s = 0 with n ≥ 2
@@ -165,7 +174,7 @@ application) from the model's randomness:
 
 - `runner_round == 1` → verdict `additional_runners` with
   `additional_runners` = `-deterministic-additional-runners` (clamped to
-  max-runners-per-round, at least 1).
+  max-runners-per-round while the cap is enabled, at least 1).
 - `runner_round >= 2` → verdict `met`.
 
 Both with `sample_mean`/`half_width` 0.0 and the request's `number_of_reps`

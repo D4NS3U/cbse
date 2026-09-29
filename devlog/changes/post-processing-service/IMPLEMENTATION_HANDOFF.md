@@ -51,7 +51,14 @@ The university RZ security system (LAPI) blocked the workstation IP mid-wave ("Z
 1. **LAPI block on `ai.forge` (2026-09-28):** "Zugriff vorübergehend blockiert … Grund: LAPI" — auto-release; killed the S1 first dispatch (retroactively explains its `400 no body`) and W2's S2+S4 turns; recovery by resume (S4) and fresh replacement dispatch (S1, S2). Probable trigger: three parallel long-running agent sessions. **Policy adopted: serialized single-worker waves.**
 2. **CrowdSec captcha block on `registry.unibw.de` (2026-09-29):** pushes *and* pulls returned 403; `GET /v2/` returned a **CrowdSec Captcha** page instead of Harbor's 401 — the workstation egress only (the cluster pulls via its own path, unaffected). Self-lifted after ~1.5 h; the settlement smoke then passed. **Likely the same security stack ("LAPI" is CrowdSec's Local API decision channel); recommendation: ask RZ/IT support to whitelist the workstation IP for both endpoints and pace image-push bursts.**
 
+## S4R — PPS wave-cap parsing (ruling Q7) — **complete** (settled 2026-09-29)
+
+- **Task/Dispatch:** `task_12c660a38c4e` / `ctx_ef95353eb181` (first-run clean). Attested `ai.forge/qwen3.8-27b-nvfp4`.
+- **Landed (five files):** `-max-runners-per-round` **0 = disabled** (accepted, startup-logged: "per-wave cap disabled; waves sized by the estimate alone, bounded only by max-replications headroom"), negative/non-integer fail-fast (unchanged), positive = cap (byte-for-byte unchanged), unset default 1000 (unchanged, ruling Q4); the disabled path skips only the per-wave clamp — min-batch floor and max-replications headroom always active, including the deterministic policy's fixed-count interaction; `-max-replications` deliberately untouched (strictly positive-mandatory). New tests: `TestLoadMaxRunnersPerRoundZero` (disabled state + log line), `TestLoadMaxRunnersPerRoundNegative`, `TestStatisticalDisabledCapVerbatim` (raw estimate 1290 > old cap 1000 flows verbatim), `TestStatisticalDisabledCapHeadroom`, `TestStatisticalDisabledCapMinBatch`, `TestDeterministicPolicyDisabledCap`; all enabled-path tests green as regression.
+- **Manager re-runs, all rc=0:** containment (exactly the five files), module build+vet, targeted config+evaluation race suites, `make test-fast`.
+- The rebuilt PPS image rides with S6's settlement smoke (no image build/push in this slice).
+
 ## Wave status
 
-- W1 [S1] — **complete**. W2 [S2 ∥ S3 ∥ S4] — **complete** (wave gate green). W3 [S5] — **complete** (this record; settlement smoke + retained verification green).
-- W4 [S6] — next: e2e smoke specs (loop-path spec over the two priority-2 scenarios under the real statistical policy + verdict-observability enrichment). **Serialize: single worker.**
+- W1 [S1] — **complete**. W2 [S2 ∥ S3 ∥ S4] — **complete** (wave gate green). W3 [S5] — **complete** (settlement smoke + retained verification green). W3.5 [S4R] — **complete** (this record).
+- W4 [S6] — next: e2e smoke specs (loop-path spec over the two priority-2 scenarios under the real statistical policy + verdict-observability enrichment; the settlement smoke also re-verifies the S4R image). **Serialize: single worker.**

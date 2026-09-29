@@ -25,6 +25,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"regexp"
@@ -83,7 +84,7 @@ func Load(args []string, mounts Mounts) (*Config, error) {
 	maxRepsFlag := fs.Int("max-replications", 10000,
 		"user-defined maximum total number of replications across all rounds")
 	maxRunnersFlag := fs.Int("max-runners-per-round", 1000,
-		"per-round safety clamp on any additional batch")
+		"per-round safety clamp on any additional batch (0 disables the per-wave cap)")
 	if err := fs.Parse(args); err != nil {
 		return nil, fmt.Errorf("flags: %w", err)
 	}
@@ -211,8 +212,14 @@ func Load(args []string, mounts Mounts) (*Config, error) {
 	} else {
 		cfg.MaxReplications = *maxRepsFlag
 	}
-	if *maxRunnersFlag < 1 {
-		add("-max-runners-per-round %d must be >= 1", *maxRunnersFlag)
+	// Ruling Q7: 0 explicitly disables the per-wave cap (the estimate
+	// flows verbatim within the max-replications headroom); negative
+	// values are a fail-fast configuration error. -max-replications
+	// stays strictly positive-mandatory: it is the scientific stopping
+	// criterion, not an operational pacing knob (ruling Q7's
+	// operational/scientific separation).
+	if *maxRunnersFlag < 0 {
+		add("-max-runners-per-round %d must be >= 0 (0 disables the per-wave cap)", *maxRunnersFlag)
 	} else {
 		cfg.MaxRunnersRound = *maxRunnersFlag
 	}
@@ -227,6 +234,11 @@ func Load(args []string, mounts Mounts) (*Config, error) {
 
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("post-processing-service configuration is invalid:\n  - %s", strings.Join(errs, "\n  - "))
+	}
+	if cfg.MaxRunnersRound == 0 {
+		// Ruling Q7: the disabled state is visible at startup, not
+		// silent.
+		log.Printf("pps: per-wave cap disabled; waves sized by the estimate alone, bounded only by max-replications headroom")
 	}
 	return cfg, nil
 }

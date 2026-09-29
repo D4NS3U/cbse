@@ -299,6 +299,82 @@ func TestStatisticalPerRoundClamp(t *testing.T) {
 	}
 }
 
+// TestStatisticalDisabledCapVerbatim is the ruling-Q7 disabled-cap vector:
+// with max-runners-per-round 0 the per-wave cap is skipped and the raw
+// estimate flows verbatim. The n = 2, s = sqrt(2), epsilon = 0.5 vector of
+// TestStatisticalNotMetWithNReq has n_req 1292, so the raw additional is
+// 1290 — above the old default cap of 1000 — and only the max-replications
+// headroom (10000 - 2 = 9998) is checked, so the wave is 1290.
+func TestStatisticalDisabledCapVerbatim(t *testing.T) {
+	params := testParams()
+	params.MaxRunnersPerRound = 0
+	out, err := Evaluate(Input{
+		RunnerRound:      1,
+		NumberOfReps:     2,
+		ConfidenceMetric: 0.5,
+		Observations:     []float64{0, 2},
+		Params:           params,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if out.Verdict != VerdictAdditionalRunners {
+		t.Fatalf("verdict = %q, want additional_runners", out.Verdict)
+	}
+	if out.AdditionalRunners != 1290 {
+		t.Fatalf("additional = %d, want 1290 (n_req 1292 - 2, not clamped by the disabled cap)", out.AdditionalRunners)
+	}
+	if out.Replications != 2 {
+		t.Fatalf("replications = %d, want 2", out.Replications)
+	}
+}
+
+// TestStatisticalDisabledCapHeadroom proves the max-replications headroom
+// stays active with the cap disabled: the same n = 2 vector (raw additional
+// 1290) with max-replications 200 is bounded to 200 - 2 = 198.
+func TestStatisticalDisabledCapHeadroom(t *testing.T) {
+	params := testParams()
+	params.MaxRunnersPerRound = 0
+	params.MaxReplications = 200
+	out, err := Evaluate(Input{
+		RunnerRound:      1,
+		NumberOfReps:     2,
+		ConfidenceMetric: 0.5,
+		Observations:     []float64{0, 2},
+		Params:           params,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if out.Verdict != VerdictAdditionalRunners {
+		t.Fatalf("verdict = %q, want additional_runners", out.Verdict)
+	}
+	if out.AdditionalRunners != 198 {
+		t.Fatalf("additional = %d, want 198 (bounded by max-replications - n)", out.AdditionalRunners)
+	}
+}
+
+// TestStatisticalDisabledCapMinBatch proves the min-batch floor stays active
+// with the cap disabled: the degenerate n = 1 vector asks for the full
+// minimum batch, max(1, min(2, cap-disabled)) = 2.
+func TestStatisticalDisabledCapMinBatch(t *testing.T) {
+	params := testParams()
+	params.MaxRunnersPerRound = 0
+	out, err := Evaluate(Input{
+		RunnerRound:      1,
+		NumberOfReps:     1,
+		ConfidenceMetric: 0.5,
+		Observations:     []float64{5},
+		Params:           params,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if out.Verdict != VerdictAdditionalRunners || out.AdditionalRunners != 2 {
+		t.Fatalf("verdict/additional = %q/%d, want additional_runners/2 (min-batch floor intact)", out.Verdict, out.AdditionalRunners)
+	}
+}
+
 // TestStatisticalMinBatchOneRunnerPerRound checks min-batch with
 // max-runners-per-round 1: the minimum batch is max(1, min(2, 1)) = 1, so the
 // n = 1 degenerate case asks for exactly one additional runner.
@@ -342,6 +418,9 @@ func TestMinBatch(t *testing.T) {
 	}
 	if MinBatch(2) != 2 {
 		t.Fatalf("min-batch(2) = %d, want 2", MinBatch(2))
+	}
+	if MinBatch(0) != 2 {
+		t.Fatalf("min-batch(0) = %d, want 2 (disabled cap keeps the full floor)", MinBatch(0))
 	}
 	if MinBatch(1000) != 2 {
 		t.Fatalf("min-batch(1000) = %d, want 2", MinBatch(1000))
@@ -451,6 +530,31 @@ func TestDeterministicPolicyClamp(t *testing.T) {
 	}
 }
 
+// TestDeterministicPolicyDisabledCap checks that with the cap disabled the
+// fixed deterministic count is no longer clamped to the per-wave cap:
+// 5000 stays 5000 (still at least 1).
+func TestDeterministicPolicyDisabledCap(t *testing.T) {
+	params := Params{
+		Policy:                         PolicyDeterministicFirstRoundNotMet,
+		DeterministicAdditionalRunners: 5000,
+		MaxReplications:                10000,
+		MaxRunnersPerRound:             0,
+	}
+	out, err := Evaluate(Input{
+		RunnerRound:      1,
+		NumberOfReps:     10,
+		ConfidenceMetric: 0.5,
+		Observations:     nil,
+		Params:           params,
+	})
+	if err != nil {
+		t.Fatalf("evaluate: %v", err)
+	}
+	if out.Verdict != VerdictAdditionalRunners || out.AdditionalRunners != 5000 {
+		t.Fatalf("%q/%d, want additional_runners/5000 (cap disabled)", out.Verdict, out.AdditionalRunners)
+	}
+}
+
 func TestParsePolicy(t *testing.T) {
 	if p, err := ParsePolicy("statistical"); err != nil || p != PolicyStatistical {
 		t.Fatalf("statistical: %v/%v", p, err)
@@ -477,7 +581,7 @@ func TestParamsValidate(t *testing.T) {
 		{"unknown policy", func(p *Params) { p.Policy = "bogus" }},
 		{"zero deterministic runners", func(p *Params) { p.DeterministicAdditionalRunners = 0 }},
 		{"zero max replications", func(p *Params) { p.MaxReplications = 0 }},
-		{"zero max runners per round", func(p *Params) { p.MaxRunnersPerRound = 0 }},
+		{"negative max runners per round", func(p *Params) { p.MaxRunnersPerRound = -1 }},
 		{"negative max replications", func(p *Params) { p.MaxReplications = -5 }},
 	}
 	for _, tc := range cases {
@@ -486,6 +590,12 @@ func TestParamsValidate(t *testing.T) {
 		if err := p.Validate(); err == nil {
 			t.Fatalf("%s: invalid params accepted", tc.name)
 		}
+	}
+	// Ruling Q7: 0 is the disabled state, a well-formed param value.
+	disabled := valid
+	disabled.MaxRunnersPerRound = 0
+	if err := disabled.Validate(); err != nil {
+		t.Fatalf("disabled (0) max runners per round rejected: %v", err)
 	}
 }
 

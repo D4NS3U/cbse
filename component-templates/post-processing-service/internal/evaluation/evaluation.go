@@ -36,6 +36,10 @@
 // max(1, min(2, max-runners-per-round)), clamped to max-runners-per-round
 // and to max-replications - n; a clamped result of 0, or n >=
 // max-replications with the criterion unmet, is the stop_unmet verdict.
+// With max-runners-per-round 0 (ruling Q7) the per-wave cap is disabled:
+// the estimate flows verbatim, bounded only by the max-replications
+// headroom; the min-batch floor and the headroom stay active in all
+// modes.
 //
 // Degenerate rule (the estimate cannot be formed): n = 0 or n = 1 counts as
 // not-met with the minimum batch (h is undefined and reported as 0.0);
@@ -44,7 +48,8 @@
 // Deterministic policy (deterministic-first-round-not-met, for tests and
 // demos): runner_round 1 always answers not-met with a fixed
 // additional-runners count (deterministic-additional-runners, clamped to
-// max-runners-per-round, at least 1); runner_round >= 2 always answers met.
+// max-runners-per-round while the cap is enabled, at least 1);
+// runner_round >= 2 always answers met.
 // sample_mean and half_width are reported as 0.0 and the request's
 // number_of_reps is echoed as replications. This decouples the loop-machinery
 // (messaging, round Jobs, verdict application) from the model's randomness;
@@ -95,19 +100,22 @@ type Params struct {
 	Policy Policy
 	// DeterministicAdditionalRunners is the fixed additional-runner count of
 	// the deterministic policy's first-round not-met verdict (clamped to
-	// MaxRunnersPerRound at evaluation time, at least 1).
+	// MaxRunnersPerRound at evaluation time while the cap is enabled,
+	// at least 1).
 	DeterministicAdditionalRunners int
 	// MaxReplications is the user-defined maximum total number of
 	// replications across all rounds; reaching it with the criterion unmet
 	// stops the scenario unmet.
 	MaxReplications int
 	// MaxRunnersPerRound is the per-round safety clamp on any additional
-	// batch.
+	// batch; 0 disables the per-wave cap (ruling Q7).
 	MaxRunnersPerRound int
 }
 
 // Validate reports whether the loop-bound knobs are well-formed. The policy
-// must be one of the two constants and every count must be positive.
+// must be one of the two constants, the deterministic count and
+// max-replications must be positive, and max-runners-per-round must be
+// non-negative (0 disables the per-wave cap, ruling Q7).
 func (p Params) Validate() error {
 	if _, err := ParsePolicy(string(p.Policy)); err != nil {
 		return err
@@ -118,8 +126,8 @@ func (p Params) Validate() error {
 	if p.MaxReplications < 1 {
 		return fmt.Errorf("max replications %d must be >= 1", p.MaxReplications)
 	}
-	if p.MaxRunnersPerRound < 1 {
-		return fmt.Errorf("max runners per round %d must be >= 1", p.MaxRunnersPerRound)
+	if p.MaxRunnersPerRound < 0 {
+		return fmt.Errorf("max runners per round %d must be >= 0 (0 disables the per-wave cap)", p.MaxRunnersPerRound)
 	}
 	return nil
 }
@@ -202,7 +210,7 @@ func evaluateDeterministic(in Input) Output {
 	if in.RunnerRound == 1 {
 		out.Verdict = VerdictAdditionalRunners
 		additional := in.Params.DeterministicAdditionalRunners
-		if additional > in.Params.MaxRunnersPerRound {
+		if in.Params.MaxRunnersPerRound > 0 && additional > in.Params.MaxRunnersPerRound {
 			additional = in.Params.MaxRunnersPerRound
 		}
 		if additional < 1 {
@@ -275,7 +283,9 @@ func evaluateStatistical(in Input) Output {
 	if nReq-n > additional {
 		additional = nReq - n
 	}
-	if additional > in.Params.MaxRunnersPerRound {
+	// The per-wave cap is skipped while disabled (0, ruling Q7); the
+	// max-replications headroom below stays active in all modes.
+	if in.Params.MaxRunnersPerRound > 0 && additional > in.Params.MaxRunnersPerRound {
 		additional = in.Params.MaxRunnersPerRound
 	}
 	if additional > in.Params.MaxReplications-n {
@@ -343,11 +353,12 @@ func RequiredReplications(n int, s, eps float64) int {
 }
 
 // MinBatch returns the minimum additional batch: max(1, min(2,
-// maxRunnersPerRound)). The caller guarantees maxRunnersPerRound >= 1, so
-// the result is 1 for maxRunnersPerRound = 1 and 2 otherwise.
+// maxRunnersPerRound)). The caller guarantees maxRunnersPerRound >= 0; the
+// result is 1 for maxRunnersPerRound = 1, and the full floor 2 otherwise
+// (including the disabled cap, 0).
 func MinBatch(maxRunnersPerRound int) int {
 	if maxRunnersPerRound < 1 {
-		return 1
+		return 2
 	}
 	if maxRunnersPerRound > 2 {
 		return 2
