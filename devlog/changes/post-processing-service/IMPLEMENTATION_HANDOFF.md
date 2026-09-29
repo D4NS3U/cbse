@@ -58,7 +58,14 @@ The university RZ security system (LAPI) blocked the workstation IP mid-wave ("Z
 - **Manager re-runs, all rc=0:** containment (exactly the five files), module build+vet, targeted config+evaluation race suites, `make test-fast`.
 - The rebuilt PPS image rides with S6's settlement smoke (no image build/push in this slice).
 
-## Wave status
+## S6 — E2E smoke specs — **complete** (settled 2026-09-29) — FEATURE COMPLETE
 
-- W1 [S1] — **complete**. W2 [S2 ∥ S3 ∥ S4] — **complete** (wave gate green). W3 [S5] — **complete** (settlement smoke + retained verification green). W3.5 [S4R] — **complete** (this record).
-- W4 [S6] — next: e2e smoke specs (loop-path spec over the two priority-2 scenarios under the real statistical policy + verdict-observability enrichment; the settlement smoke also re-verifies the S4R image). **Serialize: single worker.**
+- **Task/Dispatch:** `task_64fa23273179` / `ctx_2b3c7b1c32b4` (first-run clean). Attested `ai.forge/qwen3.8-27b-nvfp4`.
+- **Landed:** exactly one new Ordered spec (`smoke_test.go`, single 190-line hunk between the chain and idempotence specs, zero deletions): the 8-minute convergence gate (all four `Finished`), per-family bookkeeping (met-path: `runner_round==1`, `round_reps==40`, `computed==40`, `evaluation_attempts>=1`; loop-path: `number_of_reps==1`, `runner_round>=2`, `computed>1`, `round_reps<=30` cap observability, `evaluation_attempts>=runner_round` redelivery tolerance), round-Job identity (exactly two `-r2` Jobs, one per loop scenario, scenario-ids matched; runner-round-3 unpinned; no met-path Job above round 1), four-row diagnostics dump. Structural invariants only — no observed coincidences pinned. All other specs byte-identical.
+- **Manager settlement:** re-ran containment + `make test-fast` (rc=0). **`make test-smoke` rc=0 — 6/6 specs** (run with `SKIP_BUILD=1` over the settled digests: the six from `20260929110148-a2590b` + the fleet-40 eds-mock `6cecbdf9…`): the new spec passed on the live cluster — all four scenarios converge with the exact bookkeeping the design promised.
+- **Third CrowdSec incident:** the fresh 26.9.29 image build/push hit the registry block again (403, captcha mode) — the settlement proceeded with existing digests (the cluster pulls via its own path; the S4R delta does not touch the smoke's exercised path, cap=30 → byte-identical). **Open follow-up:** the next fresh-build smoke (once the block lifts or the RZ whitelists the IP) re-verifies the S4R-built PPS image; recorded here as the feature's one pending verification.
+
+## Wave status — **feature complete**
+
+- W1 [S1], W2 [S2 ∥ S3 ∥ S4], W3 [S5], W3.5 [S4R], W4 [S6] — **all complete**. Every worker attested `ai.forge/qwen3.8-27b-nvfp4`; every settlement independently re-verified by the manager.
+- The PostProcessingService feature delivers: the paper-exact precision-based stopping criterion in a reference component (S4 + Q7 semantics), the SM evaluation messaging and state machine (`Finished`, rounds, guarded exactly-once publication), operator per-experiment provisioning, the real image in the mandatory harness set, and e2e specs proving both halves of the criterion's story — met-on-wave-1 and the natural top-up loop — on the live cluster. The devlog index row turns `implemented`.

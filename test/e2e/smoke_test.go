@@ -337,6 +337,196 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			"expected %d distinct effective seeds, got %d", numberOfReps, len(effectiveSeeds))
 	})
 
+	// Convergence spec for the live smoke profile (ruling Q6: determinism
+	// through fleet-size variation, never ε manipulation). The EDS batch is
+	// two met-path scenarios (priority 1, number_of_reps 40) that are met on
+	// the first wave, and two loop-path scenarios (priority 2,
+	// number_of_reps 1) that are deterministically not-met via the
+	// degenerate n<2 rule and each top themselves up naturally under the
+	// real statistical policy. This spec pins the per-family bookkeeping of
+	// that loop plus the round-Job identities: the met path stays
+	// single-wave (runner_round 1, round_reps == number_of_reps == computed
+	// == 40, byte-identical single-round Job name); the loop path shows the
+	// natural top-up (runner_round >= 2 — never pinned equal, computed > 1)
+	// with the final wave bounded by the experiment's -max-runners-per-round
+	// 30 (rulings Q4/Q7: the per-round safety clamp made observable; 0
+	// disables pacing). Each round is one runner Job, so exactly two Jobs
+	// carry the runner-round "2" label — one per loop scenario, each with
+	// the -r2 name suffix — and no met-path Job carries a round label above
+	// "1". Wave counts are the estimator's output and stay unpinned beyond
+	// the structural invariants.
+	It("converges all four scenarios: met-path single-wave bookkeeping and loop-path natural top-up", func() {
+		// 1. Convergence gate: all four scenarios reach the terminal
+		// Finished state. The chain spec above already proved one met-path
+		// Finished; in the observed runs the loop-path scenarios converge
+		// within minutes of the met-path scenarios.
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf(
+				"SELECT COUNT(*) FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' AND ss.state='Finished'",
+				project,
+			))
+		}, 8*time.Minute, 5*time.Second).Should(Equal("4"),
+			"not all four scenarios reached Finished within 8 minutes; loop stalled (inspect SM/PPS logs and the runner Jobs)")
+
+		// 2a. Met-path bookkeeping (both priority=1 rows): single wave.
+		// Round 1's round_reps equals the intake number_of_reps (40), the
+		// computed total equals it, and the verdict was published at least
+		// once; >= tolerates the at-least-once redelivery the settlement
+		// runs observed.
+		var metScenarioIDs []string
+		Eventually(func(g Gomega) bool {
+			rows := strings.Split(queryDatabase(fmt.Sprintf(
+				"SELECT ss.id, ss.runner_round, ss.round_reps, ss.number_of_reps, ss.number_of_computed_reps, ss.evaluation_attempts FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' AND ss.priority = 1 AND ss.state='Finished' ORDER BY ss.id",
+				project,
+			)), "\n")
+			g.Expect(len(rows)).To(Equal(2), "expected both priority-1 met-path rows, got %d", len(rows))
+			metScenarioIDs = metScenarioIDs[:0]
+			for _, row := range rows {
+				parts := strings.Split(row, "|")
+				g.Expect(parts).To(HaveLen(6), "malformed met-path row %q", row)
+				runnerRound, err := strconv.Atoi(parts[1])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				roundReps, err := strconv.Atoi(parts[2])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				numberOfReps, err := strconv.Atoi(parts[3])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				computedReps, err := strconv.Atoi(parts[4])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				evaluationAttempts, err := strconv.Atoi(parts[5])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				metScenarioIDs = append(metScenarioIDs, parts[0])
+				g.Expect(runnerRound).To(Equal(1),
+					"met-path scenario %s: runner_round %d, want single-wave 1", parts[0], runnerRound)
+				g.Expect(numberOfReps).To(Equal(40),
+					"met-path scenario %s: number_of_reps %d, want the smoke batch's 40", parts[0], numberOfReps)
+				g.Expect(roundReps).To(Equal(40),
+					"met-path scenario %s: round_reps %d, want 40 (round 1 = number_of_reps)", parts[0], roundReps)
+				g.Expect(computedReps).To(Equal(40),
+					"met-path scenario %s: number_of_computed_reps %d, want 40", parts[0], computedReps)
+				g.Expect(evaluationAttempts).To(BeNumerically(">=", 1),
+					"met-path scenario %s: evaluation_attempts %d, want >= 1", parts[0], evaluationAttempts)
+			}
+			return true
+		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+			"met-path single-wave bookkeeping did not settle within 2 minutes")
+
+		// 2b. Loop-path bookkeeping (both priority=2 rows): natural top-up.
+		// runner_round is >= 2 and never pinned equal — observed runs
+		// converged at round 3, but wave counts vary with the estimator.
+		// The final wave's round_reps must respect the experiment's
+		// -max-runners-per-round 30 cap (rulings Q4/Q7). Each round
+		// publishes one verdict, so evaluation_attempts >= runner_round
+		// (>= tolerates the at-least-once redelivery the settlement runs
+		// observed).
+		var loopScenarioIDs []string
+		Eventually(func(g Gomega) bool {
+			rows := strings.Split(queryDatabase(fmt.Sprintf(
+				"SELECT ss.id, ss.runner_round, ss.round_reps, ss.number_of_reps, ss.number_of_computed_reps, ss.evaluation_attempts FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' AND ss.priority = 2 AND ss.state='Finished' ORDER BY ss.id",
+				project,
+			)), "\n")
+			g.Expect(len(rows)).To(Equal(2), "expected both priority-2 loop-path rows, got %d", len(rows))
+			loopScenarioIDs = loopScenarioIDs[:0]
+			for _, row := range rows {
+				parts := strings.Split(row, "|")
+				g.Expect(parts).To(HaveLen(6), "malformed loop-path row %q", row)
+				runnerRound, err := strconv.Atoi(parts[1])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				roundReps, err := strconv.Atoi(parts[2])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				numberOfReps, err := strconv.Atoi(parts[3])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				computedReps, err := strconv.Atoi(parts[4])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				evaluationAttempts, err := strconv.Atoi(parts[5])
+				g.Expect(err).NotTo(HaveOccurred(), row)
+				loopScenarioIDs = append(loopScenarioIDs, parts[0])
+				g.Expect(runnerRound).To(BeNumerically(">=", 2),
+					"loop-path scenario %s: runner_round %d, want >= 2 (natural top-up)", parts[0], runnerRound)
+				g.Expect(numberOfReps).To(Equal(1),
+					"loop-path scenario %s: number_of_reps %d, want the smoke batch's 1", parts[0], numberOfReps)
+				g.Expect(computedReps).To(BeNumerically(">", 1),
+					"loop-path scenario %s: number_of_computed_reps %d, want > 1", parts[0], computedReps)
+				g.Expect(roundReps).To(BeNumerically("<=", 30),
+					"loop-path scenario %s: round_reps %d exceeds the -max-runners-per-round 30 wave cap", parts[0], roundReps)
+				g.Expect(evaluationAttempts).To(BeNumerically(">=", runnerRound),
+					"loop-path scenario %s: evaluation_attempts %d < runner_round %d", parts[0], evaluationAttempts, runnerRound)
+			}
+			return true
+		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+			"loop-path natural top-up bookkeeping did not settle within 2 minutes")
+
+		// Echo the full four-row dump for diagnostics.
+		dump := queryDatabase(fmt.Sprintf(
+			"SELECT ss.id, ss.state, ss.priority, ss.number_of_reps, ss.runner_round, ss.round_reps, ss.number_of_computed_reps, ss.evaluation_attempts, ss.confidence_metric FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' ORDER BY ss.id",
+			project,
+		))
+		Expect(dump).NotTo(HavePrefix("query-error"))
+		Expect(strings.Count(dump, "\n")+1).To(Equal(4), "expected the full four-row scenario dump, got %q", dump)
+		writeDatabaseArtifact(dump)
+
+		// 3. Round-Job identity (the chain spec's Job-listing pattern): each
+		// round is exactly one runner Job. Exactly two Jobs carry the
+		// runner-round "2" label — one per loop scenario — each named with
+		// the -r2 suffix; no met-path Job carries a round label above "1".
+		var allJobs batchv1.JobList
+		Eventually(func(g Gomega) bool {
+			g.Expect(k8sClient.List(ctx, &allJobs,
+				client.InNamespace(namespace),
+				client.MatchingLabels{"experiment.cbse.terministic.de/project": project},
+			)).To(Succeed())
+			roundTwoScenarioIDs := map[string]bool{}
+			roundTwo := 0
+			for i := range allJobs.Items {
+				j := &allJobs.Items[i]
+				if j.Labels["experiment.cbse.terministic.de/runner-round"] != "2" {
+					continue
+				}
+				roundTwo++
+				g.Expect(strings.Contains(j.Name, "-r2")).To(BeTrue(),
+					"round-2 Job %s name lacks the -r2 suffix", j.Name)
+				g.Expect(loopScenarioIDs).To(ContainElement(j.Labels["experiment.cbse.terministic.de/scenario-id"]),
+					"round-2 Job %s belongs to scenario %q, not a loop-path scenario",
+					j.Name, j.Labels["experiment.cbse.terministic.de/scenario-id"])
+				roundTwoScenarioIDs[j.Labels["experiment.cbse.terministic.de/scenario-id"]] = true
+			}
+			g.Expect(roundTwo).To(Equal(2),
+				"expected exactly two runner-round-2 Jobs (one per loop scenario), got %d", roundTwo)
+			g.Expect(len(roundTwoScenarioIDs)).To(Equal(2),
+				"the two round-2 Jobs must belong to two distinct loop scenarios")
+			return true
+		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+			"exactly two round-2 runner Jobs (one per loop scenario, -r2 names) did not appear within 2 minutes")
+
+		// Round-3 Jobs may or may not exist depending on where the estimator
+		// converged; their presence is intentionally unpinned.
+		roundThree := 0
+		for i := range allJobs.Items {
+			if allJobs.Items[i].Labels["experiment.cbse.terministic.de/runner-round"] == "3" {
+				roundThree++
+			}
+		}
+		Expect(roundThree).To(BeNumerically(">=", 0),
+			"round-3 Job count is convergence-dependent and deliberately unpinned")
+
+		// No met-path scenario's Job may carry a round label above "1":
+		// every priority-1 Job keeps runner-round "1" and the
+		// byte-identical single-round name (no -r<round> suffix).
+		for _, sid := range metScenarioIDs {
+			for i := range allJobs.Items {
+				j := &allJobs.Items[i]
+				if j.Labels["experiment.cbse.terministic.de/scenario-id"] != sid {
+					continue
+				}
+				Expect(j.Labels["experiment.cbse.terministic.de/runner-round"]).To(Equal("1"),
+					"met-path scenario %s Job %s carries runner-round %q; the met path is single-wave",
+					sid, j.Name, j.Labels["experiment.cbse.terministic.de/runner-round"])
+				Expect(strings.Contains(j.Name, "-r")).To(BeFalse(),
+					"met-path scenario %s Job name %q must keep the byte-identical single-round format (no -r suffix)",
+					sid, j.Name)
+			}
+		}
+	})
+
 	// Verifies a metadata-only update (an annotation timestamp) is reconciled
 	// idempotently: the operator does not create duplicate owned Deployments,
 	// so the project-labeled Deployment count stays at four.
