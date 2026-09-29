@@ -16,8 +16,9 @@
 # build-images.sh — build and push the CBSE component test images.
 #
 # Builds the selected components (default alpha4 reference set: experiment
-# operator, scenario manager, EDS mock, real translator, runner base, and the
-# scenario detail database) and pushes each to the NESTED repository layout
+# operator, scenario manager, EDS mock, real translator, runner base, the
+# scenario detail database, and the reference Post Processing Service) and
+# pushes each to the NESTED repository layout
 # <CBSE_REGISTRY>/<component>:<version> with a date-versioned canonical tag plus
 # an immutable provenance tag. It then writes a digest-pinned images.env that
 # smoke.sh sources to render the experiment manifest. Source images come from
@@ -35,7 +36,7 @@
 #              credentials; copied into an isolated DOCKER_CONFIG so the host
 #              Docker contexts/builders/plugins are preserved.
 #   CBSE_IMAGE_COMPONENTS (default exop,sm,eds-mock,translator,runner-base,
-#              scenario-detail-database) comma-separated component selection.
+#              scenario-detail-database,pps) comma-separated component selection.
 #
 # Exit codes:
 #   0  all selected components built and pushed; images.env written.
@@ -56,7 +57,7 @@ version="${TEST_IMAGE_VERSION:-$(date -u +%-y.%-m.%-d)}"
 run_id="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 3)}"
 artifact_dir="${CBSE_IMAGE_ARTIFACT_DIR:-${root}/artifacts/test-images/${version}/${run_id}}"
 auth_file="${CBSE_REGISTRY_AUTH_FILE:-}"
-components="${CBSE_IMAGE_COMPONENTS:-exop,sm,eds-mock,translator,runner-base,scenario-detail-database}"
+components="${CBSE_IMAGE_COMPONENTS:-exop,sm,eds-mock,translator,runner-base,scenario-detail-database,pps}"
 lock_file="${root}/test/e2e/images.lock.env"
 
 [[ "${registry}" != */ ]] || registry="${registry%/}"
@@ -69,7 +70,7 @@ docker buildx version >/dev/null
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 
 # --- Source-image lock (immutable build-only inputs) -------------------------
-# The four locked source images and their provenance versions live in
+# The five locked source images and their provenance versions live in
 # test/e2e/images.lock.env. They are repository inputs with no environment
 # override; the shared loader validates them before any build or registry
 # mutation and sets the lock variables in this shell.
@@ -81,9 +82,9 @@ load_image_lock "${lock_file}"
 # validate_components parses CBSE_IMAGE_COMPONENTS as a comma list and rejects
 # empty input, unknown tokens, and duplicates. Only the supported component
 # names (exop, sm, eds-mock, trans-mock, translator, runner-base,
-# scenario-detail-database) are accepted; trans-mock is the synthetic mock kept
-# for harness self-tests while the default alpha4 set builds the real
-# translator.
+# scenario-detail-database, pps) are accepted; trans-mock is the synthetic
+# mock kept for harness self-tests while the default alpha4 set builds the
+# real translator.
 validate_components() {
   [[ -n "${components}" ]] || { echo "CBSE_IMAGE_COMPONENTS is empty" >&2; return 1; }
   local IFS=','
@@ -93,7 +94,7 @@ validate_components() {
   for t in "${tokens[@]}"; do
     [[ -n "${t}" ]] || { echo "empty component token in CBSE_IMAGE_COMPONENTS" >&2; return 1; }
     case "${t}" in
-      exop|sm|eds-mock|trans-mock|translator|runner-base|scenario-detail-database) ;;
+      exop|sm|eds-mock|trans-mock|translator|runner-base|scenario-detail-database|pps) ;;
       *) echo "unknown component token: ${t}" >&2; return 1 ;;
     esac
     for s in ${seen[@]+"${seen[@]}"}; do
@@ -188,6 +189,7 @@ component_enabled trans-mock && build_nested trans-mock TRANS_IMAGE "${root}/tes
 component_enabled translator && build_nested translator TRANS_IMAGE "${root}/component-templates/translator/Dockerfile" "${root}/component-templates/translator" "CBSE Translator" --build-arg "TRANSLATOR_GO_BUILDER_IMAGE=${TRANSLATOR_GO_BUILDER_IMAGE}"
 component_enabled runner-base && build_nested runner-base RUNNER_BASE_IMAGE "${root}/component-templates/translator/runner-base/Dockerfile" "${root}/component-templates/translator/runner-base" "CBSE Runner Base" --build-arg "PYTHON_BASE_IMAGE=${PYTHON_BASE_IMAGE}"
 component_enabled scenario-detail-database && build_nested scenario-detail-database DETAIL_DB_IMAGE "${root}/component-templates/scenario-detail-database/Dockerfile" "${root}/component-templates/scenario-detail-database" "CBSE Scenario Detail Database" --build-arg "POSTGRES_IMAGE=${POSTGRES_IMAGE}"
+component_enabled pps && build_nested pps PPS_IMAGE "${root}/component-templates/post-processing-service/Dockerfile" "${root}/component-templates/post-processing-service" "CBSE Post Processing Service" --build-arg "PPS_GO_BUILDER_IMAGE=${PPS_GO_BUILDER_IMAGE}"
 printf 'REGISTRY=%s\nVERSION=%s\nCOMMIT=%s\nSOURCE_HASH=%s\nRUN_ID=%s\n' \
   "${registry}" "${version}" "${commit}" "${source_hash}" "${run_id}" >"${artifact_dir}/build-info.env"
 echo "Published test images; metadata: ${artifact_dir}"

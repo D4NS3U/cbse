@@ -33,7 +33,8 @@
 #   TEST_IMAGE_VERSION (default 26.7.16) canonical image tag (YY.M.D).
 #   CBSE_REGISTRY_AUTH_FILE  passed to build-images.sh for push credentials.
 #   SKIP_BUILD=1  reuse pre-built images from OPERATOR_IMAGE, SM_IMAGE, EDS_IMAGE,
-#            TRANS_IMAGE, RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE instead of building.
+#            TRANS_IMAGE, RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE, PPS_IMAGE instead of
+#            building.
 #   CBSE_KEEP_ON_FAILURE=1  retain the namespace if the run fails (for debugging).
 #   CBSE_KEEP_NAMESPACE=1  retain the namespace unconditionally.
 #   CBSE_ALLOW_CRD_UPGRADE=1  allow applying an existing non-pipeline-managed CRD.
@@ -164,11 +165,12 @@ else
   TRANS_IMAGE="${TRANS_IMAGE}"
   RUNNER_BASE_IMAGE="${RUNNER_BASE_IMAGE}"
   DETAIL_DB_IMAGE="${DETAIL_DB_IMAGE}"
+  PPS_IMAGE="${PPS_IMAGE}"
 fi
-export OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE RUNNER_BASE_IMAGE DETAIL_DB_IMAGE
-printf 'OPERATOR_IMAGE=%s\nSM_IMAGE=%s\nEDS_IMAGE=%s\nTRANS_IMAGE=%s\nRUNNER_BASE_IMAGE=%s\nDETAIL_DB_IMAGE=%s\n' \
+export OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE RUNNER_BASE_IMAGE DETAIL_DB_IMAGE PPS_IMAGE
+printf 'OPERATOR_IMAGE=%s\nSM_IMAGE=%s\nEDS_IMAGE=%s\nTRANS_IMAGE=%s\nRUNNER_BASE_IMAGE=%s\nDETAIL_DB_IMAGE=%s\nPPS_IMAGE=%s\n' \
   "${OPERATOR_IMAGE}" "${SM_IMAGE}" "${EDS_IMAGE}" "${TRANS_IMAGE}" \
-  "${RUNNER_BASE_IMAGE}" "${DETAIL_DB_IMAGE}" >"${artifact_dir}/images.env"
+  "${RUNNER_BASE_IMAGE}" "${DETAIL_DB_IMAGE}" "${PPS_IMAGE}" >"${artifact_dir}/images.env"
 
 crd="${root}/experiment-operator/config/crd/bases/experiment.cbse.terministic.de_simulationexperiments.yaml"
 crd_name="simulationexperiments.experiment.cbse.terministic.de"
@@ -241,6 +243,7 @@ sed \
   -e "s|CBSE_PROJECT|${project}|g" \
   -e "s|CBSE_RUN_ID|${run_id}|g" \
   -e "s|CBSE_SUPPORT_IMAGE|${EDS_IMAGE}|g" \
+  -e "s|CBSE_PPS_IMAGE|${PPS_IMAGE}|g" \
   -e "s|CBSE_TRANS_IMAGE|${TRANS_IMAGE}|g" \
   -e "s|CBSE_BUILDER_IMAGE|${BUILDER_IMAGE}|g" \
   -e "s|CBSE_RUNNER_BASE_IMAGE|${RUNNER_BASE_IMAGE}|g" \

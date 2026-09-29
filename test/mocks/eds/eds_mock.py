@@ -229,16 +229,25 @@ def build_batch_payload(
     # generator can look up one of the four fixed rows initialized by the
     # repository-built Scenario Detail Database image
     # (public.simulation_parameters). Cycle parameterset_id 1..4 across the
-    # scenarios so each scenario resolves a distinct fixed row. Keep
-    # number_of_reps >= 2 so each scenario runs at least two repetitions as
-    # distinct completion indexes through one indexed Job.
+    # scenarios so each scenario resolves a distinct fixed row. The
+    # per-scenario number_of_reps is the smoke determinism lever (ruling Q6,
+    # extended 2026-09-28; margin-verified 2026-09-29: the settlement run
+    # measured eps/h = 1.76x at a 30-rep fleet, so the met-path fleet was
+    # raised to 40 reps per the ruling's escalation clause - projected
+    # eps/h >= 2x): scenario idx 1 (priority 1) carries the met-path
+    # fleet of 40 reps - the real statistical PPS evaluates it as met on wave
+    # 1 with margin - while scenarios idx 2-4 (priorities 2-4) each carry the
+    # loop-path fleet of 1 rep, deterministically not-met on wave 1 via the
+    # degenerate n<2 rule and naturally topped up by the PPS's additional
+    # runners. The confidence_metric values stay the real, sensible
+    # precision demands.
     scenarios: list[dict[str, Any]] = []
     for idx in range(1, scenarios_per_batch + 1):
         parameterset_id = ((seed_base + idx - 1) % 4) + 1
         scenarios.append(
             {
                 "priority": idx,
-                "number_of_reps": 10 + idx,
+                "number_of_reps": 40 if idx == 1 else 1,
                 "recipe_info": {"parameterset_id": parameterset_id},
                 "confidence_metric": round(0.90 + (idx * 0.01), 3),
             }

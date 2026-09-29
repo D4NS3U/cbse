@@ -14,7 +14,7 @@ RUN_ID ?=
 # test-smoke, test-e2e-retained) fail fast when it is unset.
 CBSE_REGISTRY ?=
 TEST_IMAGE_VERSION ?= $(shell date -u +%-y.%-m.%-d)
-CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database
+CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database,pps
 
 .PHONY: help test-fast test-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools verify-generated
 

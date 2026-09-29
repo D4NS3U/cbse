@@ -31,9 +31,10 @@ spec:
     port: 8080
     serviceType: ClusterIP
   postProcessingService:
-    image: CBSE_SUPPORT_IMAGE
+    image: CBSE_PPS_IMAGE
     port: 8081
     serviceType: ClusterIP
+    args: ["-max-runners-per-round", "30"]
   experimentalDesignService:
     design: "two deterministic batches with two scenarios each"
     image: CBSE_SUPPORT_IMAGE

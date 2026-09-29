@@ -104,6 +104,7 @@ common=(
   TRANS_IMAGE=registry.example.test/trans@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
   RUNNER_BASE_IMAGE=registry.example.test/runner-base@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
   DETAIL_DB_IMAGE=registry.example.test/scenario-detail-database@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  PPS_IMAGE=registry.example.test/pps@sha256:1111111111111111111111111111111111111111111111111111111111111111
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json"
 )
 
@@ -111,8 +112,9 @@ common=(
 env "${common[@]}" "${root}/test/harness/preflight.sh" >/dev/null
 
 # Preflight must reject a partial skip-build set: the alpha4 smoke requires all
-# six images (operator, sm, eds, translator, runner base, and Detail Database).
-# partial_common omits RUNNER_BASE_IMAGE and DETAIL_DB_IMAGE, so preflight must fail.
+# seven images (operator, sm, eds, translator, runner base, Detail Database,
+# and PPS). partial_common omits RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE, and
+# PPS_IMAGE, so preflight must fail.
 partial_common=(
   KUBECTL="${tmp}/kubectl"
   KUBECONFIG="${tmp}/kubeconfig"
@@ -134,7 +136,7 @@ fi
 
 # Repository-structure invariants.
 grep -Fqx 'CBSE_REGISTRY ?=' "${root}/Makefile"
-grep -Fqx 'CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database' "${root}/Makefile"
+grep -Fqx 'CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database,pps' "${root}/Makefile"
 grep -Fqx '  local immutable="${repository}:${immutable_suffix}"' "${root}/test/harness/build-images.sh"
 # The flat layout (cbse-test:<component>.test.<version>) is retired; every
 # component uses the nested layout cbse-test/<component>:<version>.
@@ -177,6 +179,12 @@ fi
 if env "${common[@]}" BUILDER_IMAGE=override "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted a locked source-image environment override" >&2; exit 1
 fi
+if env "${common[@]}" PPS_GO_BUILDER_IMAGE=override "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a PPS locked source-image environment override" >&2; exit 1
+fi
+if env "${common[@]}" PPS_GO_VERSION=override "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a PPS locked source-version environment override" >&2; exit 1
+fi
 
 # build-images.sh: flat shared components, nested Detail DB, locked build args.
 mkdir -p "${tmp}/fake-bin" "${tmp}/docker-source" "${tmp}/build-artifacts"
@@ -204,28 +212,30 @@ PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
   FAKE_DOCKER_LOG="${tmp}/docker-tags.txt" \
   CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test \
   TEST_IMAGE_VERSION=26.9.7 RUN_ID=alpha4-repository-test \
-  CBSE_IMAGE_COMPONENTS=exop,sm,eds-mock,translator,runner-base,scenario-detail-database \
+  CBSE_IMAGE_COMPONENTS=exop,sm,eds-mock,translator,runner-base,scenario-detail-database,pps \
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json" \
   CBSE_IMAGE_ARTIFACT_DIR="${tmp}/build-artifacts" \
   "${root}/test/harness/build-images.sh" >/dev/null
-for image in exop sm eds-mock translator runner-base scenario-detail-database; do
+for image in exop sm eds-mock translator runner-base scenario-detail-database pps; do
   grep -Fqx "registry.unibw.de/i31bdase/cbse-test/${image}:26.9.7" "${tmp}/docker-tags.txt"
   grep -Eq "^registry\.unibw\.de/i31bdase/cbse-test/${image}:26\.9\.7\.sha-" "${tmp}/docker-tags.txt"
 done
 grep -Fqx 'ARG TRANSLATOR_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:3bf5b04541eb4a37fe62aa1bc9c98a1dec09db9d2e79c1d2eb54e3c9d08dbca9' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG PYTHON_BASE_IMAGE=docker.io/library/python@sha256:b921fe7e7522f828d45197a47656ec465a9b15689b27fa8e1fba2864fca5b967' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG POSTGRES_IMAGE=docker.io/library/postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7' "${tmp}/docker-tags.txt"
+grep -Fqx 'ARG PPS_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:3bf5b04541eb4a37fe62aa1bc9c98a1dec09db9d2e79c1d2eb54e3c9d08dbca9' "${tmp}/docker-tags.txt"
 grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^SM_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/sm@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^EDS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/eds-mock@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+grep -Eq '^PPS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/pps@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 
 # build-images.sh default (alpha4): the cutover build default is the real
-# translator 6-component set, so the default build produces the real Translator
-# and runner base, and the reference Detail Database, not the synthetic
-# translator mock.
+# translator 7-component set, so the default build produces the real Translator
+# and runner base, the reference Detail Database, and the reference PPS, not the
+# synthetic translator mock.
 PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
   FAKE_DOCKER_LOG="${tmp}/docker-tags-default.txt" \
   CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test \
@@ -236,10 +246,12 @@ PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/translator:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/runner-base:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/scenario-detail-database:26.9.7" "${tmp}/docker-tags-default.txt"
+grep -Fqx "registry.unibw.de/i31bdase/cbse-test/pps:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^PPS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/pps@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 if grep -Fq 'trans-mock' "${tmp}/docker-tags-default.txt"; then
   echo "alpha4 default build produced the synthetic translator mock" >&2; exit 1
 fi
@@ -266,6 +278,20 @@ if BUILDER_IMAGE=override PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/d
   CBSE_IMAGE_ARTIFACT_DIR="${tmp}/bad-artifacts" \
   "${root}/test/harness/build-images.sh" >/dev/null 2>&1; then
   echo "build-images accepted a locked source-image environment override" >&2; exit 1
+fi
+if PPS_GO_BUILDER_IMAGE=override PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
+  CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test TEST_IMAGE_VERSION=26.9.7 \
+  CBSE_IMAGE_COMPONENTS=exop CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json" \
+  CBSE_IMAGE_ARTIFACT_DIR="${tmp}/bad-artifacts" \
+  "${root}/test/harness/build-images.sh" >/dev/null 2>&1; then
+  echo "build-images accepted a PPS locked source-image environment override" >&2; exit 1
+fi
+if PPS_GO_VERSION=override PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
+  CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test TEST_IMAGE_VERSION=26.9.7 \
+  CBSE_IMAGE_COMPONENTS=exop CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json" \
+  CBSE_IMAGE_ARTIFACT_DIR="${tmp}/bad-artifacts" \
+  "${root}/test/harness/build-images.sh" >/dev/null 2>&1; then
+  echo "build-images accepted a PPS locked source-version environment override" >&2; exit 1
 fi
 
 # registry-cleanup.sh: annotation-verified generated-runner cleanup. The

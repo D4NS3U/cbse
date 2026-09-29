@@ -163,15 +163,17 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 	// PostgreSQL Result DB persistence -> scenario transition through
 	// InProcessing to PostProcessing. This spec does NOT delete the experiment;
 	// the cleanup spec owns deletion.
-	It("drives one scenario through the full reference Translator chain to PostProcessing and persists results", func() {
-		// 1. Wait for at least one scenario to reach PostProcessing. The full
-		// chain (Detail DB lookup, rootless BuildKit build, authenticated
-		// push, runner Job, SimPy run, Result DB insert) takes minutes.
+	It("drives one scenario through the full reference Translator chain to Finished and persists results", func() {
+		// 1. Wait for the met-path scenario to reach the terminal Finished
+		// state. The chain runs into the real PPS evaluation and the met
+		// verdict lands the scenario in Finished; the full chain (Detail DB
+		// lookup, rootless BuildKit build, authenticated push, runner Job,
+		// SimPy run, Result DB insert) takes minutes.
 		var doneScenarioID string
 		var doneParametersetID string
 		Eventually(func(g Gomega) bool {
 			row := queryDatabase(fmt.Sprintf(
-				"SELECT ss.id, ss.state, ss.recipe_info->>'parameterset_id' FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' AND ss.state='PostProcessing' ORDER BY ss.id LIMIT 1",
+				"SELECT ss.id, ss.state, ss.recipe_info->>'parameterset_id' FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' AND ss.state='Finished' AND ss.priority = 1 ORDER BY ss.id LIMIT 1",
 				project,
 			))
 			if row == "" || strings.HasPrefix(row, "query-error") {

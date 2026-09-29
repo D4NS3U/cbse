@@ -40,7 +40,7 @@
 #              a non-empty Docker config with creds for the registry host.
 #   SKIP_BUILD=1  skip docker/registry checks and require pre-built digest
 #              images (OPERATOR_IMAGE, SM_IMAGE, EDS_IMAGE, TRANS_IMAGE,
-#              RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE) instead.
+#              RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE, PPS_IMAGE) instead.
 #   CBSE_HARBOR_API, CBSE_HARBOR_PROJECT, CBSE_RUNNER_REPO  Harbor defaults.
 #
 # Exit codes:
@@ -157,7 +157,7 @@ done
   exit 2
 }
 
-# Source-image lock: load and validate the four locked source images and their
+# Source-image lock: load and validate the five locked source images and their
 # provenance versions before any registry or cluster mutation. Rejects
 # duplicates, unknown keys, environment overrides, and malformed digests.
 # shellcheck disable=SC1091
@@ -179,9 +179,10 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
     exit 2
   }
   # A smoke build builds the component set requested via CBSE_IMAGE_COMPONENTS
-  # (defaulting to the alpha4 reference set: real Translator, runner base, and
-  # Detail Database). The alpha4 reference build is the default; the harness
-  # self-tests validate the full six-component set.
+  # (defaulting to the alpha4 reference set: real Translator, runner base,
+  # Detail Database, and reference Post Processing Service). The alpha4
+  # reference build is the default; the harness self-tests validate the full
+  # seven-component set.
 else
   for variable in OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE; do
     value="${!variable:-}"
@@ -190,9 +191,10 @@ else
       exit 2
     }
   done
-  # The alpha4 reference outputs (runner base and Detail Database) are required
-  # by the alpha4 smoke path; they must be immutable digest references.
-  for variable in RUNNER_BASE_IMAGE DETAIL_DB_IMAGE; do
+  # The alpha4 reference outputs (runner base, Detail Database, and the
+  # reference Post Processing Service) are required by the alpha4 smoke path;
+  # they must be immutable digest references.
+  for variable in RUNNER_BASE_IMAGE DETAIL_DB_IMAGE PPS_IMAGE; do
     value="${!variable:-}"
     [[ "${value}" == *@sha256:* ]] || {
       echo "${variable} must be an immutable digest reference when SKIP_BUILD=1" >&2
