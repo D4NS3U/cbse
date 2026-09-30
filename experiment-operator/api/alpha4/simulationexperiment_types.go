@@ -244,16 +244,33 @@ type ExperimentalDesignServiceSpec struct {
 	Port int32 `json:"port,omitempty"`
 }
 
-// SimulationExperimentStatus is the observed state the reconciler writes to
-// the status subresource. Phase is the lifecycle phase (Pending,
-// Provisioning, InProgress, Completed, Failed, Error), Message carries a
-// human-readable detail string for the current phase, and Metrics holds
-// count-based progress observed by the controller.
+// SimulationExperimentStatus is the observed state reported through the
+// status subresource, owned at field level: the Experiment Operator (the CR's
+// owning controller) writes Phase and Message, and the Scenario Manager
+// writes ScenarioManagerVerdict - the two writers' merge patches are
+// field-disjoint by construction. Phase is the lifecycle phase (Pending,
+// Provisioning, InProgress, Completed, Failed, Error, Finished); Finished
+// and Failed are its terminals, which the operator derives from the
+// ScenarioManagerVerdict report. Message carries a human-readable detail
+// string for the current phase, and Metrics holds count-based progress
+// observed by the controller.
 type SimulationExperimentStatus struct {
-	// +kubebuilder:validation:Enum=Pending;Provisioning;InProgress;Completed;Failed;Error
+	// +kubebuilder:validation:Enum=Pending;Provisioning;InProgress;Completed;Failed;Error;Finished
 	Phase   string         `json:"phase,omitempty"`
 	Message string         `json:"message,omitempty"`
 	Metrics *StatusMetrics `json:"metrics,omitempty"`
+
+	// ScenarioManagerVerdict is the scenario-aggregate verdict over the
+	// experiment's scenarios as held in the Scenario Manager's Core Database.
+	// Field ownership: it is written by the Scenario Manager and consumed by
+	// the Experiment Operator, which uses it as the sole input to the
+	// terminal phase derivation. The field is optional and absent until the
+	// Scenario Manager writes its first verdict; absence means "not yet
+	// reported" - it is never user input and never an alternative
+	// phase-transition path. Once written, the verdict is absorbing and
+	// never changes.
+	// +kubebuilder:validation:Enum=Finished;Failed
+	ScenarioManagerVerdict string `json:"scenarioManagerVerdict,omitempty"`
 }
 
 // StatusMetrics holds scenario-count progress the controller observes during
