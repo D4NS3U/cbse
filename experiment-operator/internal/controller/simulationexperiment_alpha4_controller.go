@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -43,6 +44,8 @@ const (
 	alpha4PhaseProvisioning = "Provisioning"
 	alpha4PhaseInProgress   = "InProgress"
 	alpha4PhaseError        = "Error"
+	alpha4PhaseFinished     = "Finished"
+	alpha4PhaseFailed       = "Failed"
 )
 
 // alpha4RequeueAfter is the transient retry cadence for provisioning and
@@ -86,10 +89,17 @@ type Alpha4SimulationExperimentReconciler struct {
 	// fake to exercise the readiness and requeue paths without a live
 	// PostgreSQL instance.
 	DBProbe func(ctx context.Context, ep dbendpoint.Endpoint) error
+	// Recorder emits the terminal-phase transition Events (D7). When nil, the
+	// Events are discarded without panicking (mirroring the DBProbe
+	// nil-default pattern).
+	Recorder record.EventRecorder
 }
 
 // Reconcile moves an alpha4 SimulationExperiment through Pending, Provisioning,
-// and InProgress, or to Error for a provisioning validation problem.
+// and InProgress, derives the terminal phases Finished or Failed from the
+// Scenario Manager's scenarioManagerVerdict report, or moves it to Error for a
+// provisioning validation problem. A terminal phase or Error parks: it is
+// not Operator-owned beyond provisioning and never re-transitions.
 func (r *Alpha4SimulationExperimentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	instance := &experimentalpha4.SimulationExperiment{}
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
@@ -101,9 +111,13 @@ func (r *Alpha4SimulationExperimentReconciler) Reconcile(ctx context.Context, re
 		return r.startProvisioning(ctx, instance)
 	case alpha4PhaseProvisioning:
 		return r.checkReadiness(ctx, instance)
+	case alpha4PhaseInProgress:
+		return r.deriveTerminalPhase(ctx, instance)
 	default:
-		// InProgress, Error, and terminal phases are not Operator-owned beyond
-		// provisioning.
+		// Error and the terminal phases (Finished, Failed) are not
+		// Operator-owned beyond provisioning: they park here and never
+		// re-transition (stickiness inherited from the existing park
+		// architecture).
 		return ctrl.Result{}, nil
 	}
 }
@@ -188,6 +202,47 @@ func (r *Alpha4SimulationExperimentReconciler) checkReadiness(ctx context.Contex
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// deriveTerminalPhase applies the D4/D6 terminal-phase derivation for an
+// InProgress experiment. It reads the Scenario Manager's report
+// (status.scenarioManagerVerdict) and transitions to the matching terminal
+// phase, then parks. D4: only the known verdict values are trusted - an
+// absent field (not yet reported) or an unknown value parks without a write.
+// D9 field ownership: the operator reads the verdict and writes only
+// phase/message through patchPhase; it never writes
+// scenarioManagerVerdict. D7: each transition emits a Normal Event on the
+// experiment. Stickiness is inherited from the park architecture: once
+// terminal, the phase parks in Reconcile's default case and never
+// re-transitions.
+func (r *Alpha4SimulationExperimentReconciler) deriveTerminalPhase(ctx context.Context, instance *experimentalpha4.SimulationExperiment) (ctrl.Result, error) {
+	switch instance.Status.ScenarioManagerVerdict {
+	case alpha4PhaseFinished:
+		if err := r.patchPhase(ctx, instance, alpha4PhaseFinished, "All scenarios finished (scenarioManagerVerdict report)"); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.emitTransitionEvent(instance, alpha4PhaseFinished)
+		return ctrl.Result{}, nil
+	case alpha4PhaseFailed:
+		if err := r.patchPhase(ctx, instance, alpha4PhaseFailed, "A scenario failed (scenarioManagerVerdict report)"); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.emitTransitionEvent(instance, alpha4PhaseFailed)
+		return ctrl.Result{}, nil
+	default:
+		// Absent (not yet reported) or unknown verdict: park without a write.
+		return ctrl.Result{}, nil
+	}
+}
+
+// emitTransitionEvent emits the D7 Normal Event on a terminal-phase
+// transition (kubectl describe visibility). A nil Recorder discards the
+// Event without panicking (mirroring the DBProbe nil-default pattern).
+func (r *Alpha4SimulationExperimentReconciler) emitTransitionEvent(instance *experimentalpha4.SimulationExperiment, phase string) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Event(instance, corev1.EventTypeNormal, "PhaseTransition", fmt.Sprintf("experiment phase transitioned to %s", phase))
 }
 
 // probeDB runs the availability probe, using an injected DBProbe when set and

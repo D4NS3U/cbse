@@ -225,8 +225,9 @@ func main() {
 	}
 
 	if err := (&controller.Alpha4SimulationExperimentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("SimulationExperiment"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimulationExperiment")
 		os.Exit(1)
