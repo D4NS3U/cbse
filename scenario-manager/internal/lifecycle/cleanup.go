@@ -123,21 +123,14 @@ func RunDeletionCleanup(ctx context.Context, k8s client.Client, store ProjectSto
 		return fmt.Errorf("deletion cleanup step 7 (final job absence): %w", err)
 	}
 
-	// 8. Remove the SM finalizer.
-	if err := RemoveFinalizer(ctx, k8s, exp); err != nil {
-		return fmt.Errorf("deletion cleanup step 8 (remove finalizer): %w", err)
-	}
-
-	// 9-10. PPS subject-filtered purges on the PPS stream (the PPS cleanup
-	// extension, appended after the finalizer step without renumbering the
-	// translator-flow steps).
+	// 8-9. PPS subject-filtered purges on the PPS stream.
 	ppsPurges := []struct {
 		stream  string
 		subject string
 		step    int
 	}{
-		{ppsStreamName, subject.PPSRequestSubject(nsIdent, projIdent), 9},
-		{ppsStreamName, subject.PPSEvaluationWildcardSubject(nsIdent, projIdent), 10},
+		{ppsStreamName, subject.PPSRequestSubject(nsIdent, projIdent), 8},
+		{ppsStreamName, subject.PPSEvaluationWildcardSubject(nsIdent, projIdent), 9},
 	}
 	for _, p := range ppsPurges {
 		if err := msg.PurgeSubject(ctx, p.stream, p.subject); err != nil {
@@ -145,9 +138,19 @@ func RunDeletionCleanup(ctx context.Context, k8s client.Client, store ProjectSto
 		}
 	}
 
-	// 11. Retrieve and ownership-verify the PPS consumer, then delete.
+	// 10. Retrieve and ownership-verify the PPS consumer, then delete.
 	if err := pps.DeletePPSConsumer(ctx, string(exp.UID), exp.Namespace, exp.Name); err != nil {
-		return fmt.Errorf("deletion cleanup step 11 (pps consumer): %w", err)
+		return fmt.Errorf("deletion cleanup step 10 (pps consumer): %w", err)
+	}
+
+	// 11. Remove the SM finalizer — the completion signal and the LAST step.
+	// The finalizer gates the entire cleanup: while it is present, a failed
+	// attempt retries the idempotent sequence on the still-existing object;
+	// once it is removed the API server deletes the object immediately, so no
+	// cleanup step may follow it (a step after the finalizer would leak its
+	// resources permanently whenever the object vanishes mid-cleanup).
+	if err := RemoveFinalizer(ctx, k8s, exp); err != nil {
+		return fmt.Errorf("deletion cleanup step 11 (remove finalizer): %w", err)
 	}
 	return nil
 }

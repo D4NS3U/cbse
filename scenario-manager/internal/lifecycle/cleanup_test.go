@@ -191,7 +191,7 @@ func TestRunDeletionCleanupPPSConsumerCollision(t *testing.T) {
 
 	err := RunDeletionCleanup(context.Background(), k8s, store, msg, pps, testEDSStream, testTranslatorStream, testPPSStream, exp)
 	if err == nil || !strings.Contains(err.Error(), "pps consumer") {
-		t.Fatalf("err = %v; want pps consumer error at step 11", err)
+		t.Fatalf("err = %v; want pps consumer error at step 10", err)
 	}
 	if len(pps.deletions) != 1 {
 		t.Fatalf("pps deletions = %v; want exactly one attempt", pps.deletions)

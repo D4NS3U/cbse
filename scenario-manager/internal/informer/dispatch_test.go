@@ -245,7 +245,7 @@ func TestHandleAddDeletingRunsCleanup(t *testing.T) {
 	}
 	msg.mu.Lock()
 	defer msg.mu.Unlock()
-	// Step 2 (translator) and step 11 (PPS) each delete one per-experiment
+	// Step 2 (translator) and step 10 (PPS) each delete one per-experiment
 	// consumer, recorded in the same slice.
 	if len(msg.consumerDeletions) != 2 {
 		t.Fatalf("consumer deletions = %v; want 2 (translator + pps)", msg.consumerDeletions)
