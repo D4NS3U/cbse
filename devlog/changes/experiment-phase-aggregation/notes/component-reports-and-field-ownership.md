@@ -45,23 +45,20 @@ The design this note grounds: the SimulationExperiment becomes a **multi-writer 
 
 ```
 status:
-  scenarioManagerVerdict:            # owned and written by the Scenario Manager
-    verdict: Finished | Failed
-    finished: <n>
-    failed: <n>
-    total: <n>
-    observedGeneration: <generation the report was computed over>
-  phase: ...                    # owned and written by the Experiment Operator,
-                               # derived from scenarioManagerVerdict via its existing
-                               # patch path, with terminal stickiness
+  scenarioManagerVerdict: Finished | Failed   # owned and written by the Scenario Manager
+  phase: ...                                   # owned and written by the Experiment Operator,
+                                               # derived from scenarioManagerVerdict via its
+                                               # existing patch path, with terminal stickiness
 ```
+
+The payload is deliberately minimal — the bare verdict value (ruling 2026-09-30): the field carries exactly what the Scenario Manager knows and the Experiment Operator needs. Should a future report grow richer (counts, generation stamps), the richer typed shape follows the same field-ownership discipline — the pattern is independent of the payload size.
 
 The mapping to the core precedent is direct: *the Scenario Manager is to the SimulationExperiment what the kubelet is to the Node* — the on-the-ground component that knows the ground truth, reporting into the object that a higher-level controller owns and derives from.
 
 Two properties of the application domain make the design especially simple:
 
 - **The reported condition is absorbing.** Scenario terminality is permanent (nothing leaves `Finished` or `Failed`), so the aggregate is computed once and is stable forever. Idempotent, at-least-once reports plus an idempotent derive are provably sufficient — no exactly-once machinery, no guard columns.
-- **The report is monotone and typed.** The aggregate verdict plus component counts fit a small struct, giving the report first-class typing, API-documentation of ownership, and `kubectl` inspectability — rather than a stringly annotation.
+- **The report is monotone and minimal.** The bare verdict value carries exactly the decision the owner needs; it is first-class typed (a schema-validated enum), API-documented as to ownership, and `kubectl`-inspectable — rather than a stringly annotation. Richer typed data (counts, generation stamps) would follow the same ownership discipline if a report ever grows.
 
 ### Design consequences
 
