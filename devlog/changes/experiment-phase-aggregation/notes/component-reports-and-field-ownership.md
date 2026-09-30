@@ -45,14 +45,14 @@ The design this note grounds: the SimulationExperiment becomes a **multi-writer 
 
 ```
 status:
-  scenarioAggregate:            # owned and written by the Scenario Manager
+  scenarioManagerVerdict:            # owned and written by the Scenario Manager
     verdict: Finished | Failed
     finished: <n>
     failed: <n>
     total: <n>
     observedGeneration: <generation the report was computed over>
   phase: ...                    # owned and written by the Experiment Operator,
-                               # derived from scenarioAggregate via its existing
+                               # derived from scenarioManagerVerdict via its existing
                                # patch path, with terminal stickiness
 ```
 
@@ -65,7 +65,7 @@ Two properties of the application domain make the design especially simple:
 
 ### Design consequences
 
-- The operator's reconcile gains one derive branch: read `scenarioAggregate`; if terminal, patch `phase` once; **terminal stickiness** — a terminal phase never regresses to `InProgress`.
+- The operator's reconcile gains one derive branch: read `scenarioManagerVerdict`; if terminal, patch `phase` once; **terminal stickiness** — a terminal phase never regresses to `InProgress`.
 - The `phase` becomes a derived cache of the report; any drift is self-healing on the next reconcile.
 - The RBAC delta is one line: the Scenario Manager's role gains `patch` on `simulationexperiments/status`.
 - The SM's report write is idempotent and hangs off its existing experiment informer.
