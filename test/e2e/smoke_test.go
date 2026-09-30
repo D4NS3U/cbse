@@ -527,6 +527,87 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}
 	})
 
+	// Proves the live Finished chain end-to-end (D10): after the convergence
+	// spec above has driven all four scenarios to the terminal Finished
+	// state, the Scenario Manager's aggregation pass reports
+	// status.scenarioManagerVerdict = "Finished", and the Experiment Operator
+	// derives the absorbing terminal phase from that report. The spec
+	// observes the verdict at or before the phase (the report precedes the
+	// derivation), proves stickiness under a follow-up reconcile triggered
+	// the same way as the idempotent-metadata spec (a metadata-only
+	// annotation update plus a bounded Consistently window), and persists
+	// the terminal experiment status to the artifact directory for triage.
+	It("derives the experiment's terminal phase from the scenario-aggregate verdict", func() {
+		key := types.NamespacedName{Namespace: namespace, Name: project}
+
+		// 1. The verdict and the phase. The aggregation pass runs at its
+		// 5-second cadence, so the verdict lands at most one tick after the
+		// scenarios converge, and the operator's watch reacts to the status
+		// patch immediately - a ~2-minute bound is generous for the live
+		// chain. Both values are observed in this single poll loop: the poll
+		// on which the verdict first reads "Finished" is recorded, likewise
+		// for the phase, so the report-precedes-derivation ordering is
+		// asserted from what the spec actually observed, not just from the
+		// phase value.
+		var poll int
+		var verdictSeenAtPoll int
+		var phaseSeenAtPoll int
+		Eventually(func(g Gomega) bool {
+			poll++
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, key, experiment)).To(Succeed())
+			if verdictSeenAtPoll == 0 && experiment.Status.ScenarioManagerVerdict == "Finished" {
+				verdictSeenAtPoll = poll
+			}
+			if phaseSeenAtPoll == 0 && experiment.Status.Phase == "Finished" {
+				phaseSeenAtPoll = poll
+			}
+			return verdictSeenAtPoll != 0 && phaseSeenAtPoll != 0
+		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+			"the scenario-aggregate verdict and the derived terminal phase did not both read Finished within 2 minutes")
+
+		Expect(verdictSeenAtPoll).To(BeNumerically("<=", phaseSeenAtPoll),
+			"the scenarioManagerVerdict report (first observed at poll %d) must appear at or before the derived phase (poll %d): the report precedes the derivation",
+			verdictSeenAtPoll, phaseSeenAtPoll)
+
+		// 2. Stickiness under a follow-up reconcile. A metadata-only
+		// annotation update (the idempotent-metadata spec's reconcile
+		// trigger) forces a fresh reconcile after the terminal phase is
+		// reached; the absorbing verdict (the aggregation pass no-ops once
+		// written) and the parked terminal case (the reconcile parks without
+		// re-deriving) guarantee neither value can regress. The window spans
+		// several of the aggregation pass's 5-second ticks.
+		experiment := &experimentalpha4.SimulationExperiment{}
+		Expect(k8sClient.Get(ctx, key, experiment)).To(Succeed())
+		if experiment.Annotations == nil {
+			experiment.Annotations = map[string]string{}
+		}
+		experiment.Annotations["cbse.terministic.de/phase-stickiness-probe"] = time.Now().UTC().Format(time.RFC3339Nano)
+		Expect(k8sClient.Update(ctx, experiment)).To(Succeed())
+
+		Consistently(func(g Gomega) {
+			terminal := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, key, terminal)).To(Succeed())
+			g.Expect(terminal.Status.ScenarioManagerVerdict).To(Equal("Finished"),
+				"the absorbing scenarioManagerVerdict regressed from Finished")
+			g.Expect(terminal.Status.Phase).To(Equal("Finished"),
+				"the terminal phase regressed from Finished under a follow-up reconcile")
+		}, 30*time.Second, time.Second).Should(Succeed())
+
+		// 3. Diagnostics artifact: persist the terminal experiment status
+		// (phase, message, verdict) under CBSE_ARTIFACT_DIR so the live
+		// Finished chain's outcome is captured alongside the run's JUnit
+		// artifacts, following the suite's writeDatabaseArtifact discipline.
+		terminal := &experimentalpha4.SimulationExperiment{}
+		Expect(k8sClient.Get(ctx, key, terminal)).To(Succeed())
+		writeExperimentStatusArtifact("experiment-terminal-status.txt", fmt.Sprintf(
+			"phase=%s\nmessage=%s\nscenarioManagerVerdict=%s\n",
+			terminal.Status.Phase,
+			terminal.Status.Message,
+			terminal.Status.ScenarioManagerVerdict,
+		))
+	})
+
 	// Verifies a metadata-only update (an annotation timestamp) is reconciled
 	// idempotently: the operator does not create duplicate owned Deployments,
 	// so the project-labeled Deployment count stays at four.
@@ -686,4 +767,18 @@ func writeDatabaseArtifact(contents string) {
 	}
 	Expect(os.MkdirAll(directory, 0o755)).To(Succeed())
 	Expect(os.WriteFile(filepath.Join(directory, "database.txt"), []byte(contents+"\n"), 0o644)).To(Succeed())
+}
+
+// writeExperimentStatusArtifact persists an experiment status snapshot to the
+// named file under CBSE_ARTIFACT_DIR so a run's terminal phase, message, and
+// scenario-aggregate verdict can be triaged alongside the JUnit artifacts.
+// It mirrors writeDatabaseArtifact's discipline: a no-op when
+// CBSE_ARTIFACT_DIR is unset.
+func writeExperimentStatusArtifact(name, contents string) {
+	directory := strings.TrimSpace(os.Getenv("CBSE_ARTIFACT_DIR"))
+	if directory == "" {
+		return
+	}
+	Expect(os.MkdirAll(directory, 0o755)).To(Succeed())
+	Expect(os.WriteFile(filepath.Join(directory, name), []byte(contents+"\n"), 0o644)).To(Succeed())
 }
