@@ -18,14 +18,14 @@
 // classification required by the SM startup failure class, connects to NATS and
 // JetStream, reconciles streams and consumers, constructs the experiment
 // informer, the four NATS adapters, the selection loop, the evaluation-request
-// publication loop, the PPS-evaluation consumer, and the runner-start and
-// observation schedulers, starts them, emits the existing
+// publication loop, the PPS-evaluation consumer, and the runner-start,
+// observation, and aggregate schedulers, starts them, emits the existing
 // "Scenario Manager is ready" log only after every component has started,
 // blocks on the context, and joins every started component on shutdown.
 //
 // It owns no domain logic; it only constructs and starts the components owned by
 // the informer, natsadapter, selection, ready, evaluationpub, verdict,
-// runnerstart, and observation packages.
+// runnerstart, observation, and aggregate packages.
 package core
 
 import (
@@ -39,6 +39,7 @@ import (
 	"time"
 
 	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
+	"github.com/D4NS3U/cbse/scenario-manager/internal/aggregate"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/config"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/evaluationpub"
 	"github.com/D4NS3U/cbse/scenario-manager/internal/informer"
@@ -91,7 +92,8 @@ type startupConfig struct {
 // NATS), connects to NATS and JetStream and reconciles streams and consumers,
 // constructs and starts the experiment informer, the four NATS adapters, the
 // selection loop, the evaluation-request publication loop, the PPS-evaluation
-// consumer, and the runner-start and observation schedulers, emits the
+// consumer, and the runner-start, observation, and aggregate schedulers,
+// emits the
 // ready log only after every component has started, blocks on ctx, and joins
 // every started component on shutdown. Any startup configuration failure is
 // fatal and terminates the process before any informer, consumer, selector, or
@@ -217,6 +219,16 @@ func RunScenarioManager(ctx context.Context) {
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: observation scheduler: %v", err)
 	}
+	// The aggregate verdict pass reports the SM-owned scenarioManagerVerdict
+	// through the status subresource; it reads only Core DB and Kubernetes.
+	aggregateScheduler, err := aggregate.NewScheduler(
+		&aggregate.PersistenceStore{DB: store},
+		aggregate.NewKube(k8sClient),
+		aggregate.Config{},
+	)
+	if err != nil {
+		log.Fatalf("Scenario Manager startup: aggregate scheduler: %v", err)
+	}
 
 	// Start the components in dependency order: the informer registers projects
 	// and installs finalizers; the NATS consumers then consume on the
@@ -248,6 +260,7 @@ func RunScenarioManager(ctx context.Context) {
 	}
 	runnerStartScheduler.Start()
 	observationScheduler.Start()
+	aggregateScheduler.Start()
 
 	log.Println("Scenario Manager is ready")
 
@@ -259,10 +272,11 @@ func RunScenarioManager(ctx context.Context) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() { defer wg.Done(); inf.Shutdown() }()
 	go func() { defer wg.Done(); _ = runnerStartScheduler.Shutdown(shutdownCtx) }()
 	go func() { defer wg.Done(); _ = observationScheduler.Shutdown(shutdownCtx) }()
+	go func() { defer wg.Done(); _ = aggregateScheduler.Shutdown(shutdownCtx) }()
 	if selectorDone != nil {
 		<-selectorDone
 	}

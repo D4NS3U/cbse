@@ -62,7 +62,7 @@ const (
 	PhasePending      = "Pending"
 	PhaseProvisioning = "Provisioning"
 	PhaseInProgress   = "InProgress"
-	PhaseCompleted    = "Completed"
+	PhaseFinished     = "Finished"
 	PhaseFailed       = "Failed"
 	PhaseError        = "Error"
 )

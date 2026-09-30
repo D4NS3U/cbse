@@ -156,7 +156,7 @@ func (d *Dispatcher) HandleAdd(obj interface{}) {
 // stale event for an old UID neither closes nor cleans a replacement. Once
 // accepted it closes the per-incarnation lifecycle gate synchronously and
 // dispatches lifecycle.DispatchAction: deletionTimestamp takes precedence
-// (RunDeletionCleanup only), Error/Failed to RunTerminalAction, Completed to
+// (RunDeletionCleanup only), Error/Failed to RunTerminalAction, Finished to
 // RunCompletedAction. It does not write status.
 func (d *Dispatcher) HandleUpdate(oldObj, newObj interface{}) {
 	newExp, ok := newObj.(*experimentalpha4.SimulationExperiment)
@@ -207,7 +207,7 @@ func (d *Dispatcher) dispatch(exp *experimentalpha4.SimulationExperiment, kind l
 	case lifecycle.ActionTerminal, lifecycle.ActionDeletionCleanup:
 		d.startAction(key, exp, kind)
 	case lifecycle.ActionCompleted:
-		// Completed only closes the gate (already closed above); the completed
+		// Finished only closes the gate (already closed above); the completed
 		// action is a documented no-op, run synchronously without a retry.
 		ctx, cancel := d.actionContext()
 		defer cancel()

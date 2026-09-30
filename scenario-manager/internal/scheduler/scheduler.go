@@ -85,7 +85,7 @@ const (
 	// Failed transition and makes no Job create call.
 	RunnerStartProjectionInvalid
 	// RunnerStartExperimentTerminal means the live experiment is Error, Failed,
-	// Completed, or deleting. Core orchestration makes no state transition or
+	// Finished, or deleting. Core orchestration makes no state transition or
 	// Job create; the experiment phase action owns cancellation and bulk
 	// updates.
 	RunnerStartExperimentTerminal

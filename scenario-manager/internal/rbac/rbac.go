@@ -72,18 +72,25 @@ func (c Check) String() string {
 
 // RequiredChecks returns the exact set of workload permissions the default SM
 // ServiceAccount must hold: get/list/watch/patch on alpha4
-// simulationexperiments; create/delete/get/list/watch on batch jobs; get on the
+// simulationexperiments; patch on the simulationexperiments/status
+// subresource (the SM-owned scenarioManagerVerdict report, written only by
+// the aggregate pass); create/delete/get/list/watch on batch jobs; get on the
 // fixed registry Secret; and get on core serviceaccounts. SM receives no
 // deletecollection, Pod, ConfigMap, Job update/patch, experiment
-// status/update/delete, PriorityClass, RuntimeClass, or RBAC-management
-// permission, so those are deliberately absent.
+// status/update/delete (the status patch above is the single deliberate
+// exception - the narrow SM-owned report field), PriorityClass, RuntimeClass,
+// or RBAC-management permission, so those are deliberately absent.
 func RequiredChecks() []Check {
 	return []Check{
-		// Alpha4 SimulationExperiments: get, list, watch, patch (finalizer).
+		// Alpha4 SimulationExperiments: get, list, watch, patch (finalizer),
+		// and patch on the status subresource (the SM-owned
+		// scenarioManagerVerdict report field - the aggregate pass writes it,
+		// never phase or message).
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "get"},
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "list"},
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "watch"},
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "patch"},
+		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "patch", Subresource: "status"},
 		// batch Jobs: create, delete, get, list, watch.
 		{Group: "batch", Resource: "jobs", Verb: "create"},
 		{Group: "batch", Resource: "jobs", Verb: "delete"},

@@ -84,7 +84,7 @@ func RunTerminalAction(ctx context.Context, k8s client.Client, store ProjectStor
 	return nil
 }
 
-// RunCompletedAction closes only the lifecycle gate for a Completed, non-deleting
+// RunCompletedAction closes only the lifecycle gate for a Finished, non-deleting
 // experiment. It does not delete Jobs, change scenario rows, delete the
 // Translator consumer, or purge subjects. The gate closure itself is the
 // caller's responsibility (the informer event handler); this function is a

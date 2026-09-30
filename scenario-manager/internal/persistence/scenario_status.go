@@ -586,3 +586,38 @@ func strings_join(elems []string, sep string) string {
 	}
 	return out
 }
+
+// ScenarioStateCounts is the per-project scenario-state count projection the
+// aggregate verdict pass aggregates over.
+type ScenarioStateCounts struct {
+	// Total is the project's scenario_status row count.
+	Total int64
+	// Finished is the count of rows in the Finished state.
+	Finished int64
+	// Failed is the count of rows in the Failed state.
+	Failed int64
+}
+
+// ScenarioStateCountsByProject aggregates the scenario-state counts of one
+// project over the configured scenario-status table: the total row count plus
+// the Finished and Failed counts. It is a read-only aggregation: it applies
+// no transition and updates no row. The aggregate verdict pass uses it to
+// derive the experiment's scenarioManagerVerdict report.
+func ScenarioStateCountsByProject(ctx context.Context, db DB, projectID int) (ScenarioStateCounts, error) {
+	if projectID <= 0 {
+		return ScenarioStateCounts{}, fmt.Errorf("project id must be positive")
+	}
+	query := fmt.Sprintf(`
+		SELECT
+			COUNT(*) AS total,
+			COUNT(*) FILTER (WHERE state = $1) AS finished,
+			COUNT(*) FILTER (WHERE state = $2) AS failed
+		FROM %s
+		WHERE project_id = $3`, ScenarioStatusTable())
+	var c ScenarioStateCounts
+	err := db.QueryRowContext(ctx, query, ScenarioStateFinished, ScenarioStateFailed, projectID).Scan(&c.Total, &c.Finished, &c.Failed)
+	if err != nil {
+		return ScenarioStateCounts{}, fmt.Errorf("aggregate scenario state counts for project %d: %w", projectID, err)
+	}
+	return c, nil
+}

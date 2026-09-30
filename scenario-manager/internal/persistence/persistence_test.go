@@ -106,6 +106,16 @@ func TestMarkScenarioFinishedValidation(t *testing.T) {
 	}
 }
 
+func TestScenarioStateCountsByProjectValidation(t *testing.T) {
+	var db DB
+	if _, err := ScenarioStateCountsByProject(context.Background(), db, 0); err == nil {
+		t.Fatal("zero project id: want error")
+	}
+	if _, err := ScenarioStateCountsByProject(context.Background(), db, -1); err == nil {
+		t.Fatal("negative project id: want error")
+	}
+}
+
 func TestClaimScenarioForEvaluationValidation(t *testing.T) {
 	var store Store
 	if _, _, err := ClaimScenarioForEvaluation(context.Background(), store, 0); !errors.Is(err, errPositiveID) {
