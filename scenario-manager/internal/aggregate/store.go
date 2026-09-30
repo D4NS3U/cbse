@@ -60,9 +60,11 @@ func (s *PersistenceStore) ScenarioStateCounts(ctx context.Context, projectID in
 type Kube interface {
 	// ListExperiments lists every SimulationExperiment cluster-wide.
 	ListExperiments(ctx context.Context) ([]experimentalpha4.SimulationExperiment, error)
-	// PatchVerdict reports the verdict through the status subresource with a
-	// merge patch whose status payload carries only scenarioManagerVerdict
-	// (D9 field ownership: never phase, never message).
+	// PatchVerdict reports the verdict through the status subresource writer
+	// (client.Status().Patch) with a merge patch whose status payload carries
+	// only scenarioManagerVerdict (D9 field ownership: never phase, never
+	// message). The alpha4 CRD enables the status subresource, so a
+	// main-resource patch would be silently discarded by the API server.
 	PatchVerdict(ctx context.Context, namespace, name, verdict string) error
 }
 
@@ -107,7 +109,13 @@ func (k *kubeAdapter) PatchVerdict(ctx context.Context, namespace, name, verdict
 	exp := &experimentalpha4.SimulationExperiment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
 	}
-	if err := k.k8s.Patch(ctx, exp, client.RawPatch(types.MergePatchType, payload)); err != nil {
+	// The status subresource writer: the alpha4 CRD enables
+	// subresources.status, so the verdict must be written through
+	// client.Status().Patch; a main-resource patch carries the status stanza
+	// to the wrong endpoint and the API server discards it (nil error, no
+	// effect) - exactly the precedent of the operator's Status().Patch phase
+	// writer.
+	if err := k.k8s.Status().Patch(ctx, exp, client.RawPatch(types.MergePatchType, payload)); err != nil {
 		return fmt.Errorf("patch scenarioManagerVerdict on %s/%s: %w", namespace, name, err)
 	}
 	return nil

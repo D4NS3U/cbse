@@ -408,8 +408,12 @@ func TestTickPatchErrorRetriesNextTick(t *testing.T) {
 // ---- the status patch payload (D9: only scenarioManagerVerdict) ----
 
 // recordingClient wraps a controller-runtime client and records every
-// RawPatch payload and its target before delegating, so a test can assert on
-// the actual patch bytes.
+// pre-encoded merge patch payload and its target before delegating, so a test
+// can assert on the actual patch bytes. The production write goes through the
+// status subresource writer (Status().Patch), which is recorded by the
+// recordingStatusWriter; the main-resource Patch override records any
+// main-resource raw merge patch as well, so a regression to the wrong
+// endpoint is captured here.
 type recordingClient struct {
 	client.WithWatch
 
@@ -423,21 +427,46 @@ type recordedPatch struct {
 	data      []byte
 }
 
+// record appends one captured patch payload under the recorder's lock.
+func (r *recordingClient) record(obj client.Object, data []byte) {
+	r.mu.Lock()
+	r.patches = append(r.patches, recordedPatch{
+		namespace: obj.GetNamespace(),
+		name:      obj.GetName(),
+		data:      append([]byte(nil), data...),
+	})
+	r.mu.Unlock()
+}
+
 func (r *recordingClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-	// The aggregate pass writes a pre-encoded merge patch; capture its exact
-	// bytes before delegation.
 	if patch.Type() == types.MergePatchType {
 		if data, err := patch.Data(obj); err == nil && len(data) > 0 {
-			r.mu.Lock()
-			r.patches = append(r.patches, recordedPatch{
-				namespace: obj.GetNamespace(),
-				name:      obj.GetName(),
-				data:      append([]byte(nil), data...),
-			})
-			r.mu.Unlock()
+			r.record(obj, data)
 		}
 	}
 	return r.WithWatch.Patch(ctx, obj, patch, opts...)
+}
+
+// Status returns the status subresource writer with raw merge patches
+// recorded before delegation.
+func (r *recordingClient) Status() client.SubResourceWriter {
+	return &recordingStatusWriter{SubResourceWriter: r.WithWatch.Status(), rec: r}
+}
+
+// recordingStatusWriter records the status-subresource patch payload and
+// delegates the write to the wrapped client.
+type recordingStatusWriter struct {
+	client.SubResourceWriter
+	rec *recordingClient
+}
+
+func (r *recordingStatusWriter) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+	if patch.Type() == types.MergePatchType {
+		if data, err := patch.Data(obj); err == nil && len(data) > 0 {
+			r.rec.record(obj, data)
+		}
+	}
+	return r.SubResourceWriter.Patch(ctx, obj, patch, opts...)
 }
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -457,7 +486,11 @@ func TestKubePatchVerdictPayloadCarriesOnlyScenarioManagerVerdict(t *testing.T) 
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "proj", UID: types.UID("uid-1")},
 		Status:     experimentalpha4.SimulationExperimentStatus{Phase: "InProgress"},
 	}
-	cs := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obj).Build()
+	cs := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obj).
+		// Enforce the live API-server semantics: with the status subresource
+		// enabled, a main-resource write never alters status (the alpha4 CRD
+		// enables subresources.status).
+		WithStatusSubresource(&experimentalpha4.SimulationExperiment{}).Build()
 	rc := &recordingClient{WithWatch: cs}
 
 	if err := NewKube(rc).PatchVerdict(context.Background(), "ns", "proj", "Finished"); err != nil {
@@ -502,7 +535,11 @@ func TestPassWriteIfAbsentIsIdempotent(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "proj", UID: types.UID("uid-1")},
 		Status:     experimentalpha4.SimulationExperimentStatus{Phase: "InProgress"},
 	}
-	cs := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obj).Build()
+	cs := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obj).
+		// Same live semantics as TestKubePatchVerdictPayloadCarriesOnlyScenarioManagerVerdict:
+		// the status subresource is enabled, so only a Status().Patch lands the
+		// verdict.
+		WithStatusSubresource(&experimentalpha4.SimulationExperiment{}).Build()
 	rc := &recordingClient{WithWatch: cs}
 	s, err := NewScheduler(store, NewKube(rc), Config{})
 	if err != nil {
