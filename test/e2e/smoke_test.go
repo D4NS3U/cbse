@@ -1013,6 +1013,279 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			"the GC cascade did not remove the red experiment and its complete child set within 90 seconds")
 	})
 
+	// Proves the live Failed chain end-to-end (FEATURE.md D4, ruling F - the
+	// single observed-failure route; the trigger is zero component changes):
+	// the builder deep-copies the live green experiment's CR with exactly two
+	// deltas - the name and a runner jobTemplate carrying
+	// activeDeadlineSeconds 1 (the JobTemplate policy's allow-listed Job-level
+	// field, validated > 0; the SM's effective-Job builder passes it through
+	// to every created runner Job). The one-shot eds-mock (the green CR's
+	// experimentalDesignService.image, launched with the installation's env
+	// contract, PROJECT_NAME = the red project, and EDS_KEEP_ALIVE disabled
+	// so it publishes the standard batch and exits) serves the red batch;
+	// the mock's own bounded retry covers the window before the red
+	// experiment reaches InProgress. Every runner Job is killed one second
+	// after it becomes active, so the Job's own Failed condition
+	// (DeadlineExceeded) is the observed failure the state machine consumes:
+	// ObservationFailed -> the guarded InProcessing -> Failed -> the
+	// scenario-aggregate verdict Failed (fail-fast: any scenario Failed) ->
+	// the operator's terminal-phase derivation with the D7 PhaseTransition
+	// Event. The spec asserts the verdict at or before the phase (the report
+	// precedes the derivation - the Finished-chain spec's ordering idiom),
+	// the D7 PhaseTransition Event, stickiness under an annotation-triggered
+	// reconcile, the GC cascade over the complete owned set including the
+	// runner Jobs on user deletion, and terminal-evidence persistence (the
+	// runner Job's DeadlineExceeded condition as triage). The green
+	// experiment is read by the builder and never touched.
+	It("drives a deadline-exceeded runner Job through the live Failed chain", func() {
+		redName := project + "-fcrash"
+		redKey := types.NamespacedName{Namespace: namespace, Name: redName}
+		mockPodName := redName + "-eds-mock"
+		mockPodKey := types.NamespacedName{Namespace: namespace, Name: mockPodName}
+
+		// Builder: deep-copy the live green experiment, rename, apply the
+		// single red delta - a runner jobTemplate with activeDeadlineSeconds
+		// 1. The JobTemplate policy (validator) admits exactly the Job-level
+		// ActiveDeadlineSeconds plus the Pod template, and the Pod template
+		// requires exactly one regular container named runner with no image
+		// (CBSE supplies the runner image: the SM's effective-Job builder
+		// replaces it with the accepted Translator digest), so the minimal
+		// valid jobTemplate is the name-only runner container plus the
+		// one-second deadline.
+		red := buildRedExperiment(ctx, k8sClient, types.NamespacedName{Namespace: namespace, Name: project}, redName)
+		deadlineSeconds := int64(1)
+		red.Spec.Runner.JobTemplate = &batchv1.JobTemplateSpec{
+			Spec: batchv1.JobSpec{
+				ActiveDeadlineSeconds: &deadlineSeconds,
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "runner"}},
+					},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, red)).To(Succeed())
+
+		// Batch: launch the unchanged eds-mock one-shot for the red project
+		// with the installation's env contract (test/e2e/manifests/base/
+		// stack.yaml): the stack's NATS_URL, the red project's canonical
+		// availability subject (cbse.<ns>.<project>.eds.scenarios.available),
+		// PROJECT_NAME = the red project, and the green profile's two-batch
+		// shape - with EDS_KEEP_ALIVE disabled so the mock publishes the
+		// standard batch and exits instead of the installation's keep-alive
+		// loop. The mock's own bounded retry (availability requests every
+		// ~2s) covers the window before the red experiment reaches
+		// InProgress.
+		launchEdsMockOneShot(red.Spec.ExperimentalDesignService.Image, namespace, redName)
+
+		// 1. The readiness gate passes (the standard image-form profile):
+		// the experiment reaches InProgress, so its scenarios are admitted
+		// and the chain below is the standard run.
+		Eventually(func(g Gomega) string {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			return experiment.Status.Phase
+		}, 4*time.Minute, 2*time.Second).Should(Equal("InProgress"),
+			"the Failed-chain experiment did not reach InProgress within 4 minutes")
+
+		// 2. The one-shot mock fixture published both standard batches and
+		// exited: the red project's batch intake is in.
+		Eventually(func(g Gomega) corev1.PodPhase {
+			pod := &corev1.Pod{}
+			g.Expect(k8sClient.Get(ctx, mockPodKey, pod)).To(Succeed())
+			return pod.Status.Phase
+		}, 5*time.Minute, 2*time.Second).Should(Equal(corev1.PodSucceeded),
+			"the eds-mock one-shot did not publish the standard batch and exit within 5 minutes")
+
+		// 3. The chain. Every runner Job is killed one second after it
+		// becomes active (the jobTemplate's activeDeadlineSeconds 1), so the
+		// Job's own Failed condition (DeadlineExceeded) is the observed
+		// failure the state machine consumes: ObservationFailed -> the
+		// guarded InProcessing -> Failed -> the scenario-aggregate verdict
+		// Failed (fail-fast: any scenario Failed) -> the operator derives the
+		// absorbing terminal phase. The bound covers provisioning (~1 min) +
+		// the batch + the Translator build/push + the deadline kill + the
+		// observation and aggregation ticks; 10 minutes is generous. Both
+		// values are observed in this single poll loop (the Finished-chain
+		// spec's ordering idiom): the poll on which the verdict first reads
+		// "Failed" is recorded, likewise for the phase, so the
+		// report-precedes-derivation ordering is asserted from what the spec
+		// actually observed.
+		var poll int
+		var verdictSeenAtPoll int
+		var phaseSeenAtPoll int
+		Eventually(func(g Gomega) bool {
+			poll++
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			if verdictSeenAtPoll == 0 && experiment.Status.ScenarioManagerVerdict == "Failed" {
+				verdictSeenAtPoll = poll
+			}
+			if phaseSeenAtPoll == 0 && experiment.Status.Phase == "Failed" {
+				phaseSeenAtPoll = poll
+			}
+			return verdictSeenAtPoll != 0 && phaseSeenAtPoll != 0
+		}, 10*time.Minute, 5*time.Second).Should(BeTrue(),
+			"the scenario-aggregate verdict and the derived terminal phase did not both read Failed within 10 minutes (inspect the runner Jobs, the SM/PPS logs, and the mock Pod)")
+
+		Expect(verdictSeenAtPoll).To(BeNumerically("<=", phaseSeenAtPoll),
+			"the scenarioManagerVerdict report (first observed at poll %d) must appear at or before the derived phase (poll %d): the report precedes the derivation",
+			verdictSeenAtPoll, phaseSeenAtPoll)
+
+		// The derivation's message names the report.
+		terminal := &experimentalpha4.SimulationExperiment{}
+		Expect(k8sClient.Get(ctx, redKey, terminal)).To(Succeed())
+		Expect(terminal.Status.Message).To(Equal("A scenario failed (scenarioManagerVerdict report)"),
+			"the Failed phase message must carry the operator's derivation text; got %q", terminal.Status.Message)
+
+		// 4. The D7 PhaseTransition Event: a Normal Event on the red
+		// experiment with reason PhaseTransition and the Failed transition
+		// named in the message.
+		Eventually(func(g Gomega) bool {
+			events := &corev1.EventList{}
+			g.Expect(k8sClient.List(ctx, events, client.InNamespace(namespace))).To(Succeed())
+			for i := range events.Items {
+				event := &events.Items[i]
+				if event.InvolvedObject.Name != redName {
+					continue
+				}
+				if event.Reason == "PhaseTransition" && strings.Contains(event.Message, "Failed") {
+					return true
+				}
+			}
+			return false
+		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+			"no PhaseTransition Event naming the Failed transition was found on the red experiment within 2 minutes")
+
+		// 5. Stickiness under a follow-up reconcile. A metadata-only
+		// annotation update (the idempotent-metadata spec's reconcile
+		// trigger) forces a fresh reconcile after the terminal phase is
+		// reached; the absorbing verdict (the aggregation pass no-ops once
+		// written) and the parked terminal case (the reconcile parks without
+		// re-deriving) guarantee neither value can regress. The window spans
+		// several of the aggregation pass's 5-second ticks.
+		fresh := &experimentalpha4.SimulationExperiment{}
+		Expect(k8sClient.Get(ctx, redKey, fresh)).To(Succeed())
+		if fresh.Annotations == nil {
+			fresh.Annotations = map[string]string{}
+		}
+		fresh.Annotations["cbse.terministic.de/failed-stickiness"] = time.Now().UTC().Format(time.RFC3339Nano)
+		Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+
+		Consistently(func(g Gomega) {
+			probe := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, probe)).To(Succeed())
+			g.Expect(probe.Status.ScenarioManagerVerdict).To(Equal("Failed"),
+				"the absorbing scenarioManagerVerdict regressed from Failed")
+			g.Expect(probe.Status.Phase).To(Equal("Failed"),
+				"the terminal phase regressed from Failed under a follow-up reconcile")
+		}, 30*time.Second, time.Second).Should(Succeed())
+
+		// 6. The complete owned set is present before deletion (the
+		// image-form profile owns everything: the two databases'
+		// Deployments/Services/Secrets, the translator ConfigMap/Deployment/
+		// Service, the PPS Deployment/Service, and the deterministic runner
+		// ServiceAccount) - so the GC cascade below has the full set to
+		// cascade over.
+		states := observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID)
+		for _, state := range states {
+			Expect(state.state).To(Equal("present"),
+				"owned %s %s must exist before deletion: the full owned set is provisioned", state.kind, state.name)
+		}
+
+		// 7. The observed failure on the wire: at least one simrun-* runner
+		// Job of the red project carries the JobFailed condition - the
+		// DeadlineExceeded failure the state machine consumed. Captured as
+		// triage evidence.
+		var jobFailure string
+		Eventually(func(g Gomega) bool {
+			jobs := &batchv1.JobList{}
+			g.Expect(k8sClient.List(ctx, jobs,
+				client.InNamespace(namespace),
+				client.MatchingLabels{"experiment.cbse.terministic.de/project": redName},
+			)).To(Succeed())
+			for i := range jobs.Items {
+				job := &jobs.Items[i]
+				if !strings.HasPrefix(job.Name, "simrun-") {
+					continue
+				}
+				for _, cond := range job.Status.Conditions {
+					if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+						jobFailure = fmt.Sprintf("job=%s reason=%s message=%s", job.Name, cond.Reason, cond.Message)
+						return true
+					}
+				}
+			}
+			return false
+		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+			"no simrun-* runner Job of the red project carried the JobFailed condition within 2 minutes")
+
+		// 8. Diagnostics artifact: persist the terminal evidence (phase,
+		// message, verdict, the scenario states via the suite's Core DB
+		// query helper, and the runner Job's failure condition) under
+		// CBSE_ARTIFACT_DIR per the suite's triage discipline.
+		var scenarioRows string
+		Eventually(func(g Gomega) string {
+			scenarioRows = queryDatabase(fmt.Sprintf(
+				"SELECT ss.id, ss.state, ss.priority, ss.number_of_reps, ss.runner_round, ss.number_of_computed_reps FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' ORDER BY ss.id",
+				redName,
+			))
+			g.Expect(scenarioRows).NotTo(HavePrefix("query-error"))
+			return scenarioRows
+		}, 2*time.Minute, 2*time.Second).ShouldNot(BeEmpty(),
+			"the red project's scenario rows did not appear in the Core DB within 2 minutes")
+		writeExperimentStatusArtifact("experiment-failed-status.txt", fmt.Sprintf(
+			"experiment=%s\nphase=%s\nmessage=%s\nscenarioManagerVerdict=%s\nscenario states:\n%s\nrunner job failure:\n%s\n",
+			redName, terminal.Status.Phase, terminal.Status.Message, terminal.Status.ScenarioManagerVerdict, scenarioRows, jobFailure,
+		))
+
+		// 9. The GC cascade over the complete owned set: the user deletes
+		// the red experiment and every owned child - the databases' and
+		// translator's and PPS's Deployments/Services/Secrets, the
+		// translator ConfigMap, the runner ServiceAccount, and the runner
+		// Jobs - disappears (owner-reference cascade plus the SM's
+		// verified-Job cleanup), and the red project's persisted rows are
+		// removed by the SM's deletion cleanup.
+		Expect(k8sClient.Delete(ctx, red)).To(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, redKey, &experimentalpha4.SimulationExperiment{})
+			if !apierrors.IsNotFound(err) {
+				return false
+			}
+			for _, state := range observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID) {
+				if state.state != "absent" {
+					return false
+				}
+			}
+			jobs := &batchv1.JobList{}
+			if err := k8sClient.List(ctx, jobs, client.InNamespace(namespace), client.MatchingLabels{
+				"experiment.cbse.terministic.de/project": redName,
+			}); err != nil {
+				return false
+			}
+			return len(jobs.Items) == 0
+		}, 90*time.Second, 2*time.Second).Should(BeTrue(),
+			"the GC cascade did not remove the red experiment, its complete child set, and its runner Jobs within 90 seconds")
+
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf("SELECT COUNT(*) FROM project WHERE project_name='%s'", redName))
+		}, 90*time.Second, 2*time.Second).Should(Equal("0"),
+			"the red project's persisted project row did not disappear within 90 seconds")
+		Expect(queryDatabase(fmt.Sprintf(
+			"SELECT COUNT(*) FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
+			redName,
+		))).To(Equal("0"), "the red project's scenario rows must be cascade-deleted with the project row")
+
+		// 10. Teardown the one-shot mock fixture: the spec's own Pod, never
+		// an owned child - it is completed (Succeeded) and simply removed.
+		Expect(k8sClient.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: mockPodName, Namespace: namespace}})).To(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, mockPodKey, &corev1.Pod{})
+			return apierrors.IsNotFound(err)
+		}, 90*time.Second, 2*time.Second).Should(BeTrue(),
+			"the eds-mock one-shot fixture did not disappear within 90 seconds")
+	})
+
 	// Verifies garbage collection: deleting the SimulationExperiment removes
 	// the owned translator Deployment via owner-reference cascade and cascades
 	// to the persisted database rows so the project and scenario_status tables
@@ -1297,4 +1570,37 @@ func ownedChildrenText(states []ownedChildState) string {
 		lines = append(lines, state.kind+" "+state.name+"="+state.state)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// launchEdsMockOneShot launches the green experiment's eds-mock image as a
+// one-shot Pod named <redName>-eds-mock in the smoke namespace, replicating
+// the installation's eds-mock env contract (test/e2e/manifests/base/
+// stack.yaml) for the red project: the stack's NATS_URL, the red project's
+// canonical availability subject (cbse.<ns>.<project>.eds.scenarios.available),
+// PROJECT_NAME = the red project, and the green profile's two-batch shape -
+// with EDS_KEEP_ALIVE disabled so the mock publishes the standard batch and
+// exits instead of the installation's keep-alive loop. It follows the suite's
+// kubectl pattern (requiredEnv KUBECTL/KUBECONFIG, the smoke namespace).
+func launchEdsMockOneShot(image, namespace, redName string) {
+	kubectl := requiredEnv("KUBECTL")
+	cmd := exec.Command(
+		kubectl,
+		"--kubeconfig", requiredEnv("KUBECONFIG"),
+		"run", redName+"-eds-mock",
+		"--namespace", namespace,
+		"--image", image,
+		"--restart=Never",
+		"--env", "NATS_URL=nats://sm-eds-nats:4222",
+		"--env", "AVAILABILITY_SUBJECT="+fmt.Sprintf("cbse.%s.%s.eds.scenarios.available", namespace, redName),
+		"--env", "PROJECT_NAME="+redName,
+		"--env", "TOTAL_BATCHES=2",
+		"--env", "SCENARIOS_PER_BATCH=2",
+		"--env", "EDS_KEEP_ALIVE=false",
+	)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	Expect(cmd.Run()).To(Succeed(),
+		"the eds-mock one-shot launch failed: stdout=%q stderr=%q", strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 }
