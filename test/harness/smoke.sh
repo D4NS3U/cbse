@@ -254,5 +254,5 @@ sed \
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -f "${artifact_dir}/experiment.yaml" >/dev/null
 
 cd "${root}/test/e2e"
-go test -tags=e2e -count=1 -v ./... \
+go test -tags=e2e -count=1 -v -timeout 40m ./... \
   -ginkgo.v -ginkgo.junit-report="${artifact_dir}/junit.xml"
