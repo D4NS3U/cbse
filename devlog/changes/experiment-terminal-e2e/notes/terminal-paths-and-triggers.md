@@ -59,6 +59,14 @@ The SM has exactly three writers of scenario-`Failed` (code-verified), and only 
 
 **The richness option (open ruling S):** a second red scenario that *would* meet, still running when the first fails, live-proves the two rulings that only the live path can show: the verdict lands **while the sibling is in flight** (fail-fast), and the experiment stays `Failed` even after the sibling finishes (absorbing).
 
+## The EDS concept gap (found during the gate recon; user disposition 2026-10-01)
+
+**Finding (code-verified):** the alpha4 API *keeps* the EDS inside the SimulationExperiment CR — `experimentalDesignService` is a **required** field with a full provisioning-shaped spec (`design`, `image`, `command`, `args`, `serviceType`, `nodePort`, `port`; its doc comment: "configures the experimental-design scenario service deployment"), and the live smoke experiment earnestly declares a digest-pinned eds-mock image. The **operator implementation never reads it**: no `reconcileEDS`, no provisioning, not even validation — the declaration is required-but-inert on every experiment. The concept doc's diagram line "EDS (installed by the installation)" documents the current *workaround* (the harness-level mock publisher), not the API's intent. The field is in exactly the state the PPS field was in before the S3 slice built `reconcilePPS` (same spec shape; the PPS went from required-but-inert to operator-provisioned).
+
+**User disposition (2026-10-01):** the API-level fact satisfies the concept (the EDS *is* part of the SimulationExperiment); with only the eds-mock existing today, **the installation-level workaround stays as it is**. The **EDS reference component — the template image plus `reconcileEDS` provisioning — is ruled the next feature to implement** after this one.
+
+**Consequences for this feature:** the EDS remains outside the readiness gate (nothing owned to check); an absent or silent EDS remains an operational responsibility — the experiment idles in `InProgress` with zero scenarios, a documented silent-stall class (no aggregation, no verdict, no terminal phase). Once the EDS feature lands (owned deployment from the CR's existing declaration), the gate and the watchdog can cover it and this stall class becomes bounded.
+
 ## 3. The red-profile mechanics (open ruling M)
 
 Scenarios reach the SM through the EDS: each experiment owns its EDS deployment (the spec's `experimentalDesignService`), and the smoke's eds-mock is already env-driven (`PROJECT_NAME`-keyed, deterministic payload generation). A red batch served when the project name matches a convention is a licensed-mock extension — zero operator changes. The second experiment is a full but minimal per-experiment stack (its own databases, translator, PPS, EDS), exactly what the multi-experiment SM design (`ListSimulationExperiments` cluster-wide, per-project subjects) already serves.
