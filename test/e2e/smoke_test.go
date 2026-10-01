@@ -884,6 +884,135 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			"the blocker Service fixture did not disappear within 90 seconds")
 	})
 
+	// Proves the readiness watchdog live (FEATURE.md D1, flavor 3; ruling R):
+	// the builder deep-copies the live green experiment's CR with exactly one
+	// red delta - translator.image as a well-formed digest reference that
+	// does not exist (a syntactically valid name@sha256:<64 hex> pointing at
+	// an unreachable registry) - so the validation gate passes, provisioning
+	// completes (the full child set exists), the translator image pull fails
+	// observably, and the bounded-retry watchdog collects the per-retry
+	// not-ready inventory across three counted retries spaced ~60s before
+	// transitioning the experiment to Error with the aggregated per-retry
+	// message. The spec asserts the Error phase with the aggregated message
+	// (naming the translator and its observed failure, each retry labeled),
+	// the full-but-not-ready child set (the databases healthy and probed
+	// ready on the green images), stickiness across a follow-up reconcile,
+	// the GC cascade over the complete owned set, and terminal-evidence
+	// persistence. The green experiment is read by the builder and never
+	// touched.
+	It("drives an image-pull failure through the readiness watchdog to an aggregated Error", func() {
+		redName := project + "-errready"
+		redKey := types.NamespacedName{Namespace: namespace, Name: redName}
+
+		// Builder: deep-copy the live green experiment, rename, apply the
+		// single red delta (a well-formed digest that does not exist),
+		// create.
+		red := buildRedExperiment(ctx, k8sClient, types.NamespacedName{Namespace: namespace, Name: project}, redName)
+		red.Spec.Translator.Image = errReadyImage
+		Expect(k8sClient.Create(ctx, red)).To(Succeed())
+
+		// 1. The watchdog budget: the initial not-ready evaluation starts
+		// the watchdog, the three counted retries are spaced ~60s apart
+		// (production defaults), and the third still-not-ready counted retry
+		// transitions to Error - ~3 minutes after the first not-ready
+		// evaluation, plus pod-scheduling and pull-failure latency, so a
+		// 6-minute bound is generous for the live chain.
+		var phase, message string
+		Eventually(func(g Gomega) bool {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			if experiment.Status.Phase != "Error" {
+				return false
+			}
+			phase = experiment.Status.Phase
+			message = experiment.Status.Message
+			return true
+		}, 6*time.Minute, 5*time.Second).Should(BeTrue(),
+			"the readiness-watchdog experiment did not reach Error within 6 minutes (watchdog: 3 counted retries at ~60s spacing)")
+
+		// The final message aggregates the per-retry inventories: each
+		// counted retry is labeled, and the not-ready translator is named
+		// with its observed failure at each retry.
+		Expect(message).To(ContainSubstring("translator"),
+			"the Error message must name the translator component; got %q", message)
+		Expect(message).To(ContainSubstring("retry 1:"),
+			"the Error message must label the first counted retry; got %q", message)
+		Expect(message).To(ContainSubstring("retry 2:"),
+			"the Error message must label the second counted retry; got %q", message)
+		Expect(message).To(ContainSubstring("retry 3:"),
+			"the Error message must label the third counted retry; got %q", message)
+
+		// 2. The full-but-not-ready child set: provisioning completed
+		// (every owned child exists - the databases, the translator, the
+		// PPS, and the runner ServiceAccount), the databases (the green
+		// images) are healthy and probed ready, and the translator is stuck
+		// not-ready on the failing image pull.
+		states := observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID)
+		for _, state := range states {
+			Expect(state.state).To(Equal("present"),
+				"owned %s %s must exist: provisioning completed before the readiness failure", state.kind, state.name)
+		}
+		for _, suffix := range []string{"detaildb", "resultdb"} {
+			Eventually(func() int32 {
+				deployment := &appsv1.Deployment{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: redName + "-" + suffix}, deployment)).To(Succeed())
+				return deployment.Status.ReadyReplicas
+			}, 2*time.Minute, 5*time.Second).Should(BeNumerically(">=", 1),
+				"the %s Deployment (the green image) must be ready: the databases are healthy and probed", suffix)
+		}
+		translatorDep := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: redName + "-translator"}, translatorDep)).To(Succeed())
+		Expect(translatorDep.Status.ReadyReplicas).To(BeNumerically("<", 1),
+			"the translator Deployment must stay not-ready: its image pull fails on the nonexistent digest")
+
+		// 3. Stickiness: an annotation-triggered reconcile (the same
+		// trigger as the idempotent-metadata spec) parks on the Error phase
+		// and leaves the full child set untouched.
+		Expect(k8sClient.Get(ctx, redKey, red)).To(Succeed())
+		if red.Annotations == nil {
+			red.Annotations = map[string]string{}
+		}
+		red.Annotations["cbse.terministic.de/error-readiness-stickiness"] = time.Now().UTC().Format(time.RFC3339Nano)
+		Expect(k8sClient.Update(ctx, red)).To(Succeed())
+
+		Consistently(func(g Gomega) {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			g.Expect(experiment.Status.Phase).To(Equal("Error"),
+				"the Error phase regressed under a follow-up reconcile")
+			for _, state := range observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID) {
+				g.Expect(state.state).To(Equal("present"),
+					"owned %s %s disappeared across a follow-up reconcile; the full set must stay untouched", state.kind, state.name)
+			}
+		}, 30*time.Second, time.Second).Should(Succeed())
+
+		// 4. Diagnostics artifact: persist the terminal evidence (phase,
+		// message, the full-children inventory) under CBSE_ARTIFACT_DIR per
+		// the suite's triage discipline.
+		writeExperimentStatusArtifact("experiment-error-readiness-status.txt", fmt.Sprintf(
+			"experiment=%s\nphase=%s\nmessage=%s\nowned children:\n%s\n",
+			redName, phase, message, ownedChildrenText(states),
+		))
+
+		// 5. The GC cascade over the complete owned set: the user deletes
+		// the red experiment and every owned child disappears via the
+		// owner-reference cascade.
+		Expect(k8sClient.Delete(ctx, red)).To(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, redKey, &experimentalpha4.SimulationExperiment{})
+			if !apierrors.IsNotFound(err) {
+				return false
+			}
+			for _, state := range observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID) {
+				if state.state != "absent" {
+					return false
+				}
+			}
+			return true
+		}, 90*time.Second, 2*time.Second).Should(BeTrue(),
+			"the GC cascade did not remove the red experiment and its complete child set within 90 seconds")
+	})
+
 	// Verifies garbage collection: deleting the SimulationExperiment removes
 	// the owned translator Deployment via owner-reference cascade and cascades
 	// to the persisted database rows so the project and scenario_status tables
@@ -1050,6 +1179,15 @@ const errValImage = "registry.example.invalid/translator:v1"
 // valid 30000-32767 NodePort range keeps the API server's allocation
 // conflict deterministic.
 const errProvBlockerNodePort = int32(32700)
+
+// errReadyImage is the single red delta of the readiness-watchdog spec
+// (FEATURE.md D1, flavor 3): a well-formed OCI digest reference that does not
+// exist in any registry - syntactically valid name@sha256:<64 lowercase hex>
+// (so the operator's validation gate passes and provisioning completes),
+// unresolvable (so the translator image pull fails observably and the
+// readiness watchdog eventually drives the experiment to Error).
+const errReadyImage = "registry.example.invalid/translator@sha256:" +
+	"0000000000000000000000000000000000000000000000000000000000000000"
 
 // buildRedExperiment is the red-experiment builder (FEATURE.md design
 // pattern 1): it Gets the live green experiment, deep-copies the CR, renames

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	experimentalpha4 "github.com/D4NS3U/cbse/experiment-operator/api/alpha4"
@@ -93,6 +94,22 @@ type Alpha4SimulationExperimentReconciler struct {
 	// Events are discarded without panicking (mirroring the DBProbe
 	// nil-default pattern).
 	Recorder record.EventRecorder
+	// ReadinessRetryInterval is the minimum spacing between counted
+	// readiness watchdog retries (ruling R). Zero selects the production
+	// default of ~60s; tests inject shorter intervals (mirroring the
+	// DBProbe nil-default pattern).
+	ReadinessRetryInterval time.Duration
+	// ReadinessMaxRetries is the counted retry budget before a not-ready
+	// readiness evaluation transitions the experiment to Error with the
+	// aggregated per-retry message (ruling R). Zero selects the production
+	// default of 3.
+	ReadinessMaxRetries int
+	// readinessWatchdogMu guards readinessWatchdog.
+	readinessWatchdogMu sync.Mutex
+	// readinessWatchdog holds the in-memory bounded-retry watchdog state per
+	// experiment UID (ruling R). See readiness_watchdog.go for the
+	// lifecycle, restart semantics, and stale-entry hygiene.
+	readinessWatchdog map[types.UID]*readinessRetryState
 }
 
 // Reconcile moves an alpha4 SimulationExperiment through Pending, Provisioning,
@@ -104,6 +121,15 @@ func (r *Alpha4SimulationExperimentReconciler) Reconcile(ctx context.Context, re
 	instance := &experimentalpha4.SimulationExperiment{}
 	if err := r.Get(ctx, req.NamespacedName, instance); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if !instance.DeletionTimestamp.IsZero() {
+		// The experiment is being deleted: clear any watchdog state for it.
+		// The CRD carries no finalizer, so this is best-effort hygiene for
+		// the last watch delivery before the object is gone; the
+		// stale-entry prune bounds any residual entry (see
+		// readiness_watchdog.go).
+		r.clearReadinessWatchdog(instance.UID)
+		return ctrl.Result{}, nil
 	}
 
 	switch instance.Status.Phase {
@@ -156,14 +182,30 @@ func (r *Alpha4SimulationExperimentReconciler) startProvisioning(ctx context.Con
 	return ctrl.Result{RequeueAfter: alpha4RequeueAfter}, nil
 }
 
-// checkReadiness probes both database endpoints and the Translator Deployment
-// and moves the experiment to InProgress only when every check succeeds. A
-// database probe failure is a retryable dependency: the experiment stays
-// Provisioning and requeues without becoming Error and without performing
-// application database work.
+// checkReadiness evaluates every readiness-gate component - both database
+// availability probes, the Translator Deployment, and the PPS Deployment
+// (ruling G) - and moves the experiment to InProgress only when every check
+// succeeds, so "All components provisioned and ready" is true for the full
+// provisioned set. Every not-ready observation feeds the bounded-retry
+// watchdog (ruling R): the initial not-ready evaluation starts the watchdog
+// and requeues at the 5s cadence (fast polls keep the green path's readiness
+// latency unchanged), each counted retry (>= ReadinessRetryInterval after the
+// previous counted one) collects the not-ready component inventory, and the
+// third counted retry that still finds not-ready components transitions the
+// experiment to Error without further retry, the final message aggregating
+// the per-retry inventories. A database probe failure is a not-ready
+// observation (with its probe error as the observed failure); a missing or
+// unpopulated connection Secret is a transient early check that requeues
+// without consuming the watchdog budget.
 func (r *Alpha4SimulationExperimentReconciler) checkReadiness(ctx context.Context, instance *experimentalpha4.SimulationExperiment) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	uid := instance.UID
 
+	// Evaluate every gate component and collect the not-ready inventory: one
+	// entry per not-ready component with its observed failure (the probe
+	// error string, the absent-Deployment case, the ready/observed replica
+	// counts, and the Deployment status condition reason where available).
+	var notReady []string
 	for _, db := range []struct {
 		spec   experimentalpha4.DatabaseSpec
 		suffix string
@@ -173,35 +215,70 @@ func (r *Alpha4SimulationExperimentReconciler) checkReadiness(ctx context.Contex
 	} {
 		secret := &corev1.Secret{}
 		if err := r.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: instance.Name + "-" + db.suffix + "-sct"}, secret); err != nil {
+			// A Get failure is a client error, not a not-ready observation:
+			// requeue without touching the watchdog state.
 			log.V(1).Info("waiting for database connection Secret", "name", db.suffix, "err", err)
 			return ctrl.Result{RequeueAfter: alpha4RequeueAfter}, nil
 		}
 		ep, err := dbEndpointFromSecret(secret)
 		if err != nil {
+			// An unpopulated Secret is a transient early check (the
+			// connection keys populate within the first seconds): requeue at
+			// the 5s cadence without consuming the watchdog budget.
 			log.V(1).Info("database connection Secret not yet populated", "name", db.suffix, "err", err)
 			return ctrl.Result{RequeueAfter: alpha4RequeueAfter}, nil
 		}
 		if err := r.probeDB(ctx, ep); err != nil {
-			// A database availability failure is a retryable provisioning
-			// dependency, not an application-database or configuration error.
-			log.V(1).Info("database availability probe failed; requeueing", "name", db.suffix, "err", err)
-			return ctrl.Result{RequeueAfter: alpha4RequeueAfter}, nil
+			// A database availability failure is a not-ready observation
+			// with its probe error as the observed failure; the watchdog
+			// bounds how long the experiment may wait for it.
+			log.V(1).Info("database availability probe failed", "name", db.suffix, "err", err)
+			notReady = append(notReady, fmt.Sprintf("%s: availability probe failed (%v)", db.suffix, err))
+			continue
 		}
 	}
 
-	dep := &appsv1.Deployment{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: instance.Name + "-translator"}, dep); err != nil {
-		log.V(1).Info("waiting for Translator Deployment", "err", err)
-		return ctrl.Result{RequeueAfter: alpha4RequeueAfter}, nil
-	}
-	if dep.Status.ReadyReplicas < 1 {
-		return ctrl.Result{RequeueAfter: alpha4RequeueAfter}, nil
+	for _, suffix := range []string{"translator", "pps"} {
+		dep := &appsv1.Deployment{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: instance.Name + "-" + suffix}, dep); err != nil {
+			if !errors.IsNotFound(err) {
+				// A Get failure is a client error, not a not-ready
+				// observation: requeue without touching the watchdog state.
+				log.V(1).Info("waiting for component Deployment", "name", suffix, "err", err)
+				return ctrl.Result{RequeueAfter: alpha4RequeueAfter}, nil
+			}
+			notReady = append(notReady, suffix+": Deployment absent")
+			continue
+		}
+		if dep.Status.ReadyReplicas < 1 {
+			notReady = append(notReady, suffix+": "+deploymentNotReadyFailure(dep))
+			continue
+		}
 	}
 
-	if err := r.patchPhase(ctx, instance, alpha4PhaseInProgress, "All components provisioned and ready"); err != nil {
-		return ctrl.Result{}, err
+	if len(notReady) == 0 {
+		// All components ready: clear any watchdog state and transition.
+		r.clearReadinessWatchdog(uid)
+		if err := r.patchPhase(ctx, instance, alpha4PhaseInProgress, "All components provisioned and ready"); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
-	return ctrl.Result{}, nil
+
+	// Not ready: advance the bounded-retry watchdog. The 5s requeue cadence
+	// is unchanged; only the counting is time-gated to
+	// ReadinessRetryInterval (ruling R).
+	if message := r.readinessWatchdogTick(uid, strings.Join(notReady, "; ")); message != "" {
+		// The counted retry budget is exhausted: transition to Error without
+		// further retry, the final message aggregating the per-retry
+		// inventories.
+		if err := r.setErrorStatus(ctx, instance, message); err != nil {
+			return ctrl.Result{}, err
+		}
+		r.clearReadinessWatchdog(uid)
+		return ctrl.Result{}, nil
+	}
+	return ctrl.Result{RequeueAfter: alpha4RequeueAfter}, nil
 }
 
 // deriveTerminalPhase applies the D4/D6 terminal-phase derivation for an

@@ -233,12 +233,30 @@ func deleteRegistrySecret(t *testing.T) {
 
 // newReconciler builds an Alpha4SimulationExperimentReconciler against the
 // shared envtest client and scheme, injecting probe as the DB availability
-// probe (nil uses the default pgx probe).
+// probe (nil uses the default pgx probe). The watchdog knobs keep the
+// production defaults (zero values select ~60s spacing and 3 counted
+// retries), so the tests that use this constructor exercise the compiled-in
+// production behavior.
 func newReconciler(probe func(ctx context.Context, ep dbendpoint.Endpoint) error) *controller.Alpha4SimulationExperimentReconciler {
 	return &controller.Alpha4SimulationExperimentReconciler{
 		Client:  alpha4Client,
 		Scheme:  alpha4Scheme,
 		DBProbe: probe,
+	}
+}
+
+// newReconcilerWithWatchdog builds an Alpha4SimulationExperimentReconciler
+// against the shared envtest client and scheme, injecting probe as the DB
+// availability probe (nil uses the default pgx probe) and the bounded-retry
+// watchdog knobs (ruling R): envtest injects milliseconds so the counted
+// retries are observable within the drive loop's time budget.
+func newReconcilerWithWatchdog(probe func(ctx context.Context, ep dbendpoint.Endpoint) error, interval time.Duration, maxRetries int) *controller.Alpha4SimulationExperimentReconciler {
+	return &controller.Alpha4SimulationExperimentReconciler{
+		Client:                 alpha4Client,
+		Scheme:                 alpha4Scheme,
+		DBProbe:                probe,
+		ReadinessRetryInterval: interval,
+		ReadinessMaxRetries:    maxRetries,
 	}
 }
 
@@ -254,9 +272,11 @@ func createExperiment(t *testing.T, exp *experimentalpha4.SimulationExperiment) 
 }
 
 // drive repeatedly reconciles until the experiment reaches a terminal phase
-// (InProgress or Error). While Provisioning, it simulates Translator
-// Deployment readiness so the readiness check can progress. It returns the
-// final phase, or the last observed phase if maxIter is exhausted.
+// (InProgress or Error). While Provisioning, it simulates Translator and PPS
+// Deployment readiness so the readiness check can progress (the G-ruled gate
+// covers the PPS in addition to the databases and the translator). It
+// returns the final phase, or the last observed phase if maxIter is
+// exhausted.
 func drive(t *testing.T, r *controller.Alpha4SimulationExperimentReconciler, key types.NamespacedName, maxIter int) string {
 	t.Helper()
 	ctx := context.Background()
@@ -275,6 +295,7 @@ func drive(t *testing.T, r *controller.Alpha4SimulationExperimentReconciler, key
 		}
 		if last == "Provisioning" {
 			markTranslatorReady(t, key)
+			markPPSReady(t, key)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -303,6 +324,63 @@ func markTranslatorReady(t *testing.T, key types.NamespacedName) {
 	dep.Status.UpdatedReplicas = 1
 	if err := alpha4Client.Status().Update(ctx, dep); err != nil {
 		t.Fatalf("update translator deployment status: %v", err)
+	}
+}
+
+// markPPSReady flips the experiment's PPS Deployment status to one ready
+// replica so the G-ruled readiness gate can advance. It is a no-op if the
+// Deployment is absent or already ready.
+func markPPSReady(t *testing.T, key types.NamespacedName) {
+	t.Helper()
+	ctx := context.Background()
+	dep := &appsv1.Deployment{}
+	if err := alpha4Client.Get(ctx, types.NamespacedName{Name: key.Name + "-pps", Namespace: key.Namespace}, dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		t.Fatalf("get pps deployment: %v", err)
+	}
+	if dep.Status.ReadyReplicas >= 1 {
+		return
+	}
+	dep.Status.Replicas = 1
+	dep.Status.ReadyReplicas = 1
+	dep.Status.AvailableReplicas = 1
+	dep.Status.UpdatedReplicas = 1
+	if err := alpha4Client.Status().Update(ctx, dep); err != nil {
+		t.Fatalf("update pps deployment status: %v", err)
+	}
+}
+
+// keepDeploymentNotReady sets the named component Deployment's status to one
+// observed replica with zero ready replicas and an Available=False condition
+// carrying the given reason, simulating a component that cannot become
+// ready. It is a no-op if the Deployment is absent.
+func keepDeploymentNotReady(t *testing.T, name, reason string) {
+	t.Helper()
+	ctx := context.Background()
+	dep := &appsv1.Deployment{}
+	if err := alpha4Client.Get(ctx, types.NamespacedName{Name: name, Namespace: alpha4TestNamespace}, dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		t.Fatalf("get deployment %q: %v", name, err)
+	}
+	if dep.Status.ReadyReplicas >= 1 {
+		t.Fatalf("deployment %q already has %d ready replicas", name, dep.Status.ReadyReplicas)
+	}
+	dep.Status.Replicas = 1
+	dep.Status.ReadyReplicas = 0
+	dep.Status.AvailableReplicas = 0
+	dep.Status.UpdatedReplicas = 1
+	dep.Status.Conditions = []appsv1.DeploymentCondition{{
+		Type:    appsv1.DeploymentAvailable,
+		Status:  corev1.ConditionFalse,
+		Reason:  reason,
+		Message: "simulated not-ready condition for the readiness watchdog test",
+	}}
+	if err := alpha4Client.Status().Update(ctx, dep); err != nil {
+		t.Fatalf("update deployment %q status: %v", name, err)
 	}
 }
 
@@ -1042,5 +1120,201 @@ func TestAlpha4PPSIdempotentReconcile(t *testing.T) {
 	}
 	if env["PPS_CONSUMER"] != "pps-"+controller.RunnerUIDPrefix(inst.UID) {
 		t.Fatalf("pps PPS_CONSUMER after re-reconcile = %q", env["PPS_CONSUMER"])
+	}
+}
+
+// --- readiness watchdog (ruling R) + G-ruled PPS gate -----------------------
+
+// TestAlpha4ReadinessWatchdogErrorsAfterBudget verifies ruling R: a
+// not-ready component across the counted retry budget transitions the
+// experiment to Error without further retry, and the final message aggregates
+// the per-retry not-ready inventories (each retry labeled, the component named
+// with its observed failure at each retry). The PPS is marked ready so the
+// translator alone is the not-ready component; the watchdog knobs are injected
+// in milliseconds so the counted retries are observable in the drive loop.
+func TestAlpha4ReadinessWatchdogErrorsAfterBudget(t *testing.T) {
+	key := types.NamespacedName{Name: "exp-wd-budget", Namespace: alpha4TestNamespace}
+	ensureRegistrySecret(t, goodRegistrySecret())
+	key = createExperiment(t, validExperiment("exp-wd-budget"))
+	uid := getExperiment(t, key).UID
+
+	r := newReconcilerWithWatchdog(
+		func(_ context.Context, _ dbendpoint.Endpoint) error { return nil },
+		10*time.Millisecond, 3,
+	)
+	ctx := context.Background()
+	phase := ""
+	for i := 0; i < 30; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+		phase = getExperiment(t, key).Status.Phase
+		if phase == "Error" {
+			break
+		}
+		if phase == "InProgress" {
+			t.Fatalf("phase = InProgress: the translator is not ready; the gate must block")
+		}
+		markPPSReady(t, key)
+		keepDeploymentNotReady(t, "exp-wd-budget-translator", "MinimumReplicasUnavailable")
+		time.Sleep(20 * time.Millisecond)
+	}
+	if phase != "Error" {
+		t.Fatalf("phase = %q, want Error after the counted retry budget is exhausted", phase)
+	}
+	inst := getExperiment(t, key)
+	msg := inst.Status.Message
+	for _, label := range []string{"retry 1:", "retry 2:", "retry 3:"} {
+		if !strings.Contains(msg, label) {
+			t.Fatalf("aggregated message %q must label %q (one entry per counted retry)", msg, label)
+		}
+	}
+	if got := strings.Count(msg, "translator:"); got != 3 {
+		t.Fatalf("message names the translator %d times, want exactly once per counted retry (3): %q", got, msg)
+	}
+	if !strings.Contains(msg, "condition Available MinimumReplicasUnavailable") {
+		t.Fatalf("message %q must carry the translator's observed condition reason", msg)
+	}
+	if retries, exists := r.ReadinessWatchdogRetries(uid); exists || retries != 0 {
+		t.Fatalf("watchdog state after the Error write = (%d, %v), want cleared", retries, exists)
+	}
+}
+
+// TestAlpha4ReadinessWatchdogClearsWhenReadyMidBudget verifies ruling R: a
+// component that becomes ready mid-budget transitions the experiment to
+// InProgress with the watchdog state cleared and no false Error. The
+// translator stays not-ready until one counted retry has accumulated (so the
+// state is observably started and counting), then the gate passes.
+func TestAlpha4ReadinessWatchdogClearsWhenReadyMidBudget(t *testing.T) {
+	key := types.NamespacedName{Name: "exp-wd-clear", Namespace: alpha4TestNamespace}
+	ensureRegistrySecret(t, goodRegistrySecret())
+	key = createExperiment(t, validExperiment("exp-wd-clear"))
+	uid := getExperiment(t, key).UID
+
+	r := newReconcilerWithWatchdog(
+		func(_ context.Context, _ dbendpoint.Endpoint) error { return nil },
+		10*time.Millisecond, 3,
+	)
+	ctx := context.Background()
+
+	// Keep the translator not-ready until at least one counted retry has
+	// accumulated (the state is observably started).
+	for i := 0; i < 30; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+		if phase := getExperiment(t, key).Status.Phase; phase == "Error" {
+			t.Fatalf("phase = Error: a false Error before the component became ready mid-budget")
+		}
+		markPPSReady(t, key)
+		keepDeploymentNotReady(t, "exp-wd-clear-translator", "MinimumReplicasUnavailable")
+		if retries, exists := r.ReadinessWatchdogRetries(uid); exists && retries >= 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if retries, exists := r.ReadinessWatchdogRetries(uid); !exists || retries < 1 {
+		t.Fatalf("watchdog state before recovery = (%d, %v), want a started state with >= 1 counted retry", retries, exists)
+	}
+
+	// Mid-budget recovery: the translator becomes ready; the gate passes and
+	// the watchdog state clears on InProgress.
+	markTranslatorReady(t, key)
+	phase := ""
+	for i := 0; i < 10; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d after recovery: %v", i, err)
+		}
+		phase = getExperiment(t, key).Status.Phase
+		if phase == "InProgress" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if phase != "InProgress" {
+		t.Fatalf("phase = %q, want InProgress (the component became ready mid-budget)", phase)
+	}
+	if retries, exists := r.ReadinessWatchdogRetries(uid); exists {
+		t.Fatalf("watchdog state after InProgress = retries %d, want cleared on all-ready", retries)
+	}
+}
+
+// TestAlpha4ReadinessGateRequiresPPS verifies ruling G: a not-ready PPS
+// Deployment blocks InProgress (the gate covers the PPS in addition to the
+// databases and the translator) even when the translator is ready, and a
+// never-ready PPS drives the bounded-retry watchdog to Error with the PPS in
+// the per-retry inventory.
+func TestAlpha4ReadinessGateRequiresPPS(t *testing.T) {
+	key := types.NamespacedName{Name: "exp-wd-pps", Namespace: alpha4TestNamespace}
+	ensureRegistrySecret(t, goodRegistrySecret())
+	key = createExperiment(t, validExperiment("exp-wd-pps"))
+	uid := getExperiment(t, key).UID
+
+	r := newReconcilerWithWatchdog(
+		func(_ context.Context, _ dbendpoint.Endpoint) error { return nil },
+		10*time.Millisecond, 3,
+	)
+	ctx := context.Background()
+	phase := ""
+	gateBlockedWhileTranslatorReady := false
+	for i := 0; i < 30; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+		phase = getExperiment(t, key).Status.Phase
+		if phase == "InProgress" {
+			t.Fatalf("phase = InProgress: a not-ready PPS must block the gate (ruling G)")
+		}
+		if phase == "Error" {
+			break
+		}
+		// The translator is ready but the PPS is not: the gate must still
+		// block InProgress.
+		markTranslatorReady(t, key)
+		keepDeploymentNotReady(t, "exp-wd-pps-pps", "MinimumReplicasUnavailable")
+		gateBlockedWhileTranslatorReady = true
+		time.Sleep(20 * time.Millisecond)
+	}
+	if phase != "Error" {
+		t.Fatalf("phase = %q, want Error (the never-ready PPS exhausts the counted retry budget)", phase)
+	}
+	if !gateBlockedWhileTranslatorReady {
+		t.Fatalf("the gate never observed the translator-ready / PPS-not-ready state; cannot prove the G-ruled gate")
+	}
+	inst := getExperiment(t, key)
+	if !strings.Contains(inst.Status.Message, "pps:") {
+		t.Fatalf("aggregated message %q must name the PPS in the not-ready inventory", inst.Status.Message)
+	}
+	for _, label := range []string{"retry 1:", "retry 2:", "retry 3:"} {
+		if !strings.Contains(inst.Status.Message, label) {
+			t.Fatalf("aggregated message %q must label %q", inst.Status.Message, label)
+		}
+	}
+	if retries, exists := r.ReadinessWatchdogRetries(uid); exists {
+		t.Fatalf("watchdog state after the Error write = retries %d, want cleared", retries)
+	}
+}
+
+// TestAlpha4ReadinessWatchdogUnaffectedOnHealthyRollout verifies ruling R: a
+// healthy fast rollout reaches InProgress with the production watchdog
+// defaults (the zero knobs select ~60s spacing and 3 counted retries) and the
+// watchdog never fires - every readiness evaluation finds all components
+// ready, so no state is ever started.
+func TestAlpha4ReadinessWatchdogUnaffectedOnHealthyRollout(t *testing.T) {
+	key := types.NamespacedName{Name: "exp-wd-healthy", Namespace: alpha4TestNamespace}
+	ensureRegistrySecret(t, goodRegistrySecret())
+	key = createExperiment(t, validExperiment("exp-wd-healthy"))
+	uid := getExperiment(t, key).UID
+
+	r := newReconciler(func(_ context.Context, _ dbendpoint.Endpoint) error { return nil })
+	if phase := drive(t, r, key, 30); phase != "InProgress" {
+		t.Fatalf("phase = %q, want InProgress (the healthy rollout is unaffected by the watchdog)", phase)
+	}
+	inst := getExperiment(t, key)
+	if inst.Status.Message != "All components provisioned and ready" {
+		t.Fatalf("message = %q, want the all-ready message", inst.Status.Message)
+	}
+	if retries, exists := r.ReadinessWatchdogRetries(uid); exists || retries != 0 {
+		t.Fatalf("watchdog state = (%d, %v), want none (the watchdog never fires on the healthy path)", retries, exists)
 	}
 }
