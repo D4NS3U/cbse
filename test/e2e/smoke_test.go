@@ -43,6 +43,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -630,6 +631,259 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 
+	// Proves the pre-creation validation gate live (FEATURE.md D1, Error
+	// flavor 1): the builder deep-copies the live green experiment's CR and
+	// applies exactly one red delta - translator.image as a tag-form
+	// reference without a digest - so validateExperiment rejects the
+	// experiment before any component is created. The spec asserts the Error
+	// phase with the digest-form message, zero owned children (the full
+	// owned-suffix set enumerated the way the InProgress spec does),
+	// stickiness across an annotation-triggered reconcile (the parked Error
+	// phase never re-transitions and no child appears), and the CR's own
+	// removal on user deletion. The green experiment is read by the builder
+	// and never touched.
+	It("lands a tag-form translator.image in Error before any component exists", func() {
+		redName := project + "-errval"
+		redKey := types.NamespacedName{Namespace: namespace, Name: redName}
+
+		// Builder: deep-copy the live green experiment, rename, apply the
+		// single red delta (a tag without a digest on translator.image),
+		// create.
+		red := buildRedExperiment(ctx, k8sClient, types.NamespacedName{Namespace: namespace, Name: project}, redName)
+		red.Spec.Translator.Image = errValImage
+		Expect(k8sClient.Create(ctx, red)).To(Succeed())
+
+		// 1. The pre-creation gate: the phase is Error and the message names
+		// the image validation (the digest-form error). Phase and message
+		// land in one status patch, so both are read from the same observed
+		// object.
+		var phase, message string
+		Eventually(func(g Gomega) bool {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			if experiment.Status.Phase != "Error" {
+				return false
+			}
+			phase = experiment.Status.Phase
+			message = experiment.Status.Message
+			return true
+		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+			"the Validation-Error experiment did not reach Error within 2 minutes")
+
+		Expect(message).To(ContainSubstring("translator.image"),
+			"the Error message must name the translator.image validation; got %q", message)
+		Expect(message).To(ContainSubstring(errValImage),
+			"the Error message must name the offending reference; got %q", message)
+		Expect(message).To(ContainSubstring("must be an OCI digest reference in the exact form name@sha256:<64 lowercase hex>"),
+			"the Error message must carry the digest-form rejection; got %q", message)
+
+		// 2. Zero children: the validation failed before any component was
+		// created. Enumerate the owned-suffix set the way the InProgress
+		// spec does (per kind, per suffix) and assert every owned name -
+		// including the PPS Deployment and Service and the deterministic
+		// runner ServiceAccount - is absent.
+		states := observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID)
+		for _, state := range states {
+			Expect(state.state).To(Equal("absent"),
+				"owned %s %s must not exist: the validation gate failed before any component was created", state.kind, state.name)
+		}
+
+		// 3. Stickiness: an annotation-triggered reconcile (the same trigger
+		// as the idempotent-metadata spec) parks on the Error phase - the
+		// operator never re-transitions a parked phase - and no child
+		// appears.
+		Expect(k8sClient.Get(ctx, redKey, red)).To(Succeed())
+		if red.Annotations == nil {
+			red.Annotations = map[string]string{}
+		}
+		red.Annotations["cbse.terministic.de/error-validation-stickiness"] = time.Now().UTC().Format(time.RFC3339Nano)
+		Expect(k8sClient.Update(ctx, red)).To(Succeed())
+
+		Consistently(func(g Gomega) {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			g.Expect(experiment.Status.Phase).To(Equal("Error"),
+				"the Error phase regressed under a follow-up reconcile")
+			for _, state := range observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID) {
+				g.Expect(state.state).To(Equal("absent"),
+					"owned %s %s appeared under a follow-up reconcile", state.kind, state.name)
+			}
+		}, 30*time.Second, time.Second).Should(Succeed())
+
+		// 4. Diagnostics artifact: persist the terminal evidence (phase,
+		// message, the children inventory) under CBSE_ARTIFACT_DIR per the
+		// suite's triage discipline.
+		writeExperimentStatusArtifact("experiment-error-validation-status.txt", fmt.Sprintf(
+			"experiment=%s\nphase=%s\nmessage=%s\nowned children:\n%s\n",
+			redName, phase, message, ownedChildrenText(states),
+		))
+
+		// 5. Cleanup: the user deletes the red experiment and the CR goes
+		// away (there are no children to cascade - the gate failed before
+		// creation).
+		Expect(k8sClient.Delete(ctx, red)).To(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, redKey, &experimentalpha4.SimulationExperiment{})
+			return apierrors.IsNotFound(err)
+		}, 90*time.Second, 2*time.Second).Should(BeTrue(),
+			"the deleted Validation-Error experiment did not disappear within 90 seconds")
+	})
+
+	// Proves the mid-sequence provisioning failure live (FEATURE.md D1,
+	// Error flavor 2, creation variant): a spec-created blocker Service
+	// first holds a constant NodePort, then the builder deep-copies the live
+	// green experiment's CR with exactly one red delta -
+	// postProcessingService serviceType NodePort requesting that same port -
+	// so the API server hard-rejects the PPS Service creation mid-sequence
+	// ("provided port is already allocated") and reconcilePPS fails. The
+	// spec asserts the Error phase with the rejection named, the partial
+	// children persisting exactly per provisionComponents' order (detaildb
+	// -> resultdb -> translator -> PPS: everything before the failing PPS
+	// Service, report-only semantics with no auto-teardown), stickiness
+	// across a follow-up reconcile, the GC cascade over the partial set on
+	// user deletion, and the blocker fixture's own teardown. The green
+	// experiment is read by the builder and never touched.
+	It("lands a PPS NodePort conflict in Error with the partial child set persisting", func() {
+		redName := project + "-errprov"
+		redKey := types.NamespacedName{Namespace: namespace, Name: redName}
+
+		// Fixture: the blocker Service holds the constant NodePort before the
+		// red experiment requests it, so the conflict pre-exists the
+		// provisioning attempt (FEATURE.md design pattern 2).
+		blocker := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      redName + "-blocker",
+				Namespace: namespace,
+			},
+			Spec: corev1.ServiceSpec{
+				Type:     corev1.ServiceTypeNodePort,
+				Selector: map[string]string{"app": redName + "-blocker"},
+				Ports: []corev1.ServicePort{{
+					Name:     "blocker",
+					Protocol: corev1.ProtocolTCP,
+					Port:     8080,
+					NodePort: errProvBlockerNodePort,
+				}},
+			},
+		}
+		Expect(k8sClient.Create(ctx, blocker)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: blocker.Name}, blocker)).To(Succeed())
+		Expect(blocker.Spec.Ports).To(HaveLen(1))
+		Expect(blocker.Spec.Ports[0].NodePort).To(Equal(errProvBlockerNodePort),
+			"the blocker Service must hold the constant NodePort %d", errProvBlockerNodePort)
+
+		// Builder: deep-copy the live green experiment, rename, apply the
+		// single red delta (the PPS requests the blocker's NodePort), create.
+		red := buildRedExperiment(ctx, k8sClient, types.NamespacedName{Namespace: namespace, Name: project}, redName)
+		nodePort := errProvBlockerNodePort
+		red.Spec.PostProcessingService.ServiceType = experimentalpha4.ServiceTypeNodePort
+		red.Spec.PostProcessingService.NodePort = &nodePort
+		Expect(k8sClient.Create(ctx, red)).To(Succeed())
+
+		// The expected partial state: provisionComponents reconciles
+		// detaildb -> resultdb -> translator -> PPS -> runner
+		// ServiceAccount, and reconcilePPS creates the PPS Deployment before
+		// its Service - so everything before the failing PPS Service exists
+		// and everything after it was never created.
+		wantState := func(state ownedChildState) string {
+			if state.name == redName+"-pps-svc" || state.kind == "ServiceAccount" {
+				return "absent"
+			}
+			return "present"
+		}
+
+		// 1. The mid-sequence failure: the API server rejects the PPS
+		// Service creation and reconcilePPS fails, so the phase is Error
+		// with the rejection named.
+		var phase, message string
+		Eventually(func(g Gomega) bool {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			if experiment.Status.Phase != "Error" {
+				return false
+			}
+			phase = experiment.Status.Phase
+			message = experiment.Status.Message
+			return true
+		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
+			"the Provisioning-Error experiment did not reach Error within 2 minutes")
+
+		Expect(message).To(ContainSubstring("reconcile PPS Service"),
+			"the Error message must name the failing step; got %q", message)
+		Expect(message).To(ContainSubstring("provided port is already allocated"),
+			"the Error message must carry the API server's NodePort rejection; got %q", message)
+
+		// 2. The partial child set persists (report-only semantics: no
+		// auto-teardown): the two databases' Deployments, Services, and
+		// Secrets, the translator ConfigMap, Deployment, and Service, and
+		// the PPS Deployment all exist; the PPS Service and the runner
+		// ServiceAccount were never created.
+		states := observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID)
+		for _, state := range states {
+			Expect(state.state).To(Equal(wantState(state)),
+				"owned %s %s is %s, want %s: the partial set is everything before the failing PPS Service",
+				state.kind, state.name, state.state, wantState(state))
+		}
+
+		// 3. Stickiness: an annotation-triggered reconcile (the same trigger
+		// as the idempotent-metadata spec) parks on the Error phase and
+		// leaves the partial set untouched.
+		Expect(k8sClient.Get(ctx, redKey, red)).To(Succeed())
+		if red.Annotations == nil {
+			red.Annotations = map[string]string{}
+		}
+		red.Annotations["cbse.terministic.de/error-provisioning-stickiness"] = time.Now().UTC().Format(time.RFC3339Nano)
+		Expect(k8sClient.Update(ctx, red)).To(Succeed())
+
+		Consistently(func(g Gomega) {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			g.Expect(experiment.Status.Phase).To(Equal("Error"),
+				"the Error phase regressed under a follow-up reconcile")
+			for _, state := range observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID) {
+				g.Expect(state.state).To(Equal(wantState(state)),
+					"owned %s %s changed to %s across a follow-up reconcile; the partial set must stay untouched",
+					state.kind, state.name, state.state)
+			}
+		}, 30*time.Second, time.Second).Should(Succeed())
+
+		// 4. Diagnostics artifact: persist the terminal evidence (phase,
+		// message, the partial-children inventory) under CBSE_ARTIFACT_DIR
+		// per the suite's triage discipline.
+		writeExperimentStatusArtifact("experiment-error-provisioning-status.txt", fmt.Sprintf(
+			"experiment=%s\nphase=%s\nmessage=%s\nowned children:\n%s\n",
+			redName, phase, message, ownedChildrenText(states),
+		))
+
+		// 5. The GC cascade over the partial set: the user deletes the red
+		// experiment and every owned child - the partial set included -
+		// disappears via the owner-reference cascade.
+		Expect(k8sClient.Delete(ctx, red)).To(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, redKey, &experimentalpha4.SimulationExperiment{})
+			if !apierrors.IsNotFound(err) {
+				return false
+			}
+			for _, state := range observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID) {
+				if state.state != "absent" {
+					return false
+				}
+			}
+			return true
+		}, 90*time.Second, 2*time.Second).Should(BeTrue(),
+			"the GC cascade did not remove the red experiment and its partial child set within 90 seconds")
+
+		// 6. Teardown the blocker Service: the spec's own fixture, never an
+		// owned child - the cascade above must not have touched it.
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: blocker.Name}, blocker)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, blocker)).To(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: blocker.Name}, &corev1.Service{})
+			return apierrors.IsNotFound(err)
+		}, 90*time.Second, 2*time.Second).Should(BeTrue(),
+			"the blocker Service fixture did not disappear within 90 seconds")
+	})
+
 	// Verifies garbage collection: deleting the SimulationExperiment removes
 	// the owned translator Deployment via owner-reference cascade and cascades
 	// to the persisted database rows so the project and scenario_status tables
@@ -781,4 +1035,128 @@ func writeExperimentStatusArtifact(name, contents string) {
 	}
 	Expect(os.MkdirAll(directory, 0o755)).To(Succeed())
 	Expect(os.WriteFile(filepath.Join(directory, name), []byte(contents+"\n"), 0o644)).To(Succeed())
+}
+
+// errValImage is the single red delta of the Validation-Error spec: a
+// tag-form image reference without a digest, which the operator's
+// validateExperiment rejects at the pre-creation gate (FEATURE.md D1,
+// flavor 1). The unresolvable host keeps the reference unmistakably
+// tag-form without needing a live registry.
+const errValImage = "registry.example.invalid/translator:v1"
+
+// errProvBlockerNodePort is the constant NodePort the Provisioning-Error
+// spec's blocker Service holds before the red experiment requests the same
+// port (FEATURE.md D1, flavor 2, creation variant). A fixed value in the
+// valid 30000-32767 NodePort range keeps the API server's allocation
+// conflict deterministic.
+const errProvBlockerNodePort = int32(32700)
+
+// buildRedExperiment is the red-experiment builder (FEATURE.md design
+// pattern 1): it Gets the live green experiment, deep-copies the CR, renames
+// the copy to name, and strips the live object's identity and status so the
+// copy is a fresh CR. The caller applies exactly one red delta to the
+// returned spec. The copy keeps the green databases, translator, and PPS
+// contracts verbatim, so the delta alone drives the failure and the specs
+// never hand-write a CR apart from the live profile. The name must satisfy
+// the operator's lowercase DNS-label rule (<= 63 chars), which the red names
+// inherit from the green name the cluster already admitted.
+func buildRedExperiment(ctx context.Context, k8sClient client.Client, greenKey types.NamespacedName, name string) *experimentalpha4.SimulationExperiment {
+	Expect(len(name)).To(BeNumerically("<=", 63),
+		"the red experiment name %q must satisfy the operator's lowercase DNS-label rule (<= 63 chars)", name)
+	green := &experimentalpha4.SimulationExperiment{}
+	Expect(k8sClient.Get(ctx, greenKey, green)).To(Succeed())
+	red := green.DeepCopy()
+	red.Name = name
+	red.ResourceVersion = ""
+	red.UID = ""
+	red.CreationTimestamp = metav1.Time{}
+	red.Status = experimentalpha4.SimulationExperimentStatus{}
+	return red
+}
+
+// ownedChild pairs one operator-owned resource kind with the name it carries
+// for an experiment.
+type ownedChild struct {
+	kind string
+	obj  client.Object
+	name string
+}
+
+// ownedChildren enumerates every owned resource name the operator provisions
+// for an experiment named name, in provisionComponents order (detaildb ->
+// resultdb -> translator -> PPS): the four component Deployments, the four
+// Services, the two database connection Secrets, and the translator
+// ConfigMap. The runner ServiceAccount is named from the experiment UID
+// rather than the experiment name and is appended by observeOwnedChildren
+// through runnerServiceAccountName.
+func ownedChildren(name string) []ownedChild {
+	return []ownedChild{
+		{kind: "Deployment", obj: &appsv1.Deployment{}, name: name + "-detaildb"},
+		{kind: "Service", obj: &corev1.Service{}, name: name + "-detaildb-svc"},
+		{kind: "Secret", obj: &corev1.Secret{}, name: name + "-detaildb-sct"},
+		{kind: "Deployment", obj: &appsv1.Deployment{}, name: name + "-resultdb"},
+		{kind: "Service", obj: &corev1.Service{}, name: name + "-resultdb-svc"},
+		{kind: "Secret", obj: &corev1.Secret{}, name: name + "-resultdb-sct"},
+		{kind: "ConfigMap", obj: &corev1.ConfigMap{}, name: name + "-translator-cfg"},
+		{kind: "Deployment", obj: &appsv1.Deployment{}, name: name + "-translator"},
+		{kind: "Service", obj: &corev1.Service{}, name: name + "-translator-svc"},
+		{kind: "Deployment", obj: &appsv1.Deployment{}, name: name + "-pps"},
+		{kind: "Service", obj: &corev1.Service{}, name: name + "-pps-svc"},
+	}
+}
+
+// runnerServiceAccountName derives the deterministic runner ServiceAccount
+// name simrunner-<12-char-UID-prefix> the operator provisions last in
+// provisionComponents: the lowercased UID with hyphens stripped, truncated
+// to 12 characters. The operator and the Scenario Manager derive the same
+// name from the experiment UID by contract.
+func runnerServiceAccountName(uid types.UID) string {
+	prefix := strings.ToLower(strings.ReplaceAll(string(uid), "-", ""))
+	if len(prefix) > 12 {
+		prefix = prefix[:12]
+	}
+	return "simrunner-" + prefix
+}
+
+// ownedChildState is one owned child's observed state in the namespace.
+type ownedChildState struct {
+	kind  string
+	name  string
+	state string // "present", "absent", or "error: ..."
+}
+
+// observeOwnedChildren Gets every owned child of the experiment named name -
+// the provisionComponents set (detaildb, resultdb, translator, PPS) plus the
+// deterministic runner ServiceAccount, in that order - and reports each
+// child's observed state. An unexpected Get failure is reported as
+// "error: ..." rather than "absent" so the inventory never hides a client
+// error behind an absence.
+func observeOwnedChildren(ctx context.Context, k8sClient client.Client, namespace, name string, uid types.UID) []ownedChildState {
+	children := ownedChildren(name)
+	children = append(children, ownedChild{kind: "ServiceAccount", obj: &corev1.ServiceAccount{}, name: runnerServiceAccountName(uid)})
+	states := make([]ownedChildState, 0, len(children))
+	for _, child := range children {
+		state := "present"
+		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: child.name}, child.obj)
+		switch {
+		case err == nil:
+		case apierrors.IsNotFound(err):
+			state = "absent"
+		default:
+			state = "error: " + err.Error()
+		}
+		states = append(states, ownedChildState{kind: child.kind, name: child.name, state: state})
+	}
+	return states
+}
+
+// ownedChildrenText renders the observed inventory as one
+// "<kind> <name>=<state>" line per owned child: the children-inventory
+// evidence the Error-flavor specs persist to the artifact directory.
+func ownedChildrenText(states []ownedChildState) string {
+	lines := make([]string, 0, len(states))
+	for _, state := range states {
+		lines = append(lines, state.kind+" "+state.name+"="+state.state)
+	}
+	return strings.Join(lines, "\n")
 }
