@@ -21,6 +21,10 @@ Every implementer attested `ai.forge/qwen3.8-27b-nvfp4`; every reviewer attested
 - **Consolidated settlement gate:** `make test-smoke` (run `20260930154245-59c483`, full image build + push): **7/7 specs green** on the cluster, including the new live Finished-chain spec. The harness removed its namespace; the cluster is clean.
 - The review lane caught one live-cluster-critical defect (P2 round 1: the verdict write targeted the main resource instead of the status subresource — silently discarded by the API server; envtest-proven) and it was fixed and re-approved. One dispatch died on a provider 400 pre-work and was replaced per the kill protocol.
 
-## Merge decision — for the user
+## Merge decision — LANDED
+
+**User-approved and merged 2026-09-30:** branch `D4NS3U/experiment-phase-aggregation` (tip `02c15cb`) merged into local `main` as `c993078` (28 files, +1666/-48 — exactly the reviewed net diff); post-merge `make test-fast` rc=0; pushed to `origin/main`; the feature worktree removed; the branch deleted after the merge. The settlement evidence (run `20260930154245-59c483` artifacts: junit, terminal-status capture, build logs; plus all worker reports and review reports) is preserved under the main checkout's `artifacts/` (untracked per the repository's artifacts policy).
+
+## The original merge-decision section (superseded by the landing above)
 
 The branch `D4NS3U/experiment-phase-aggregation` (worktree `experiment-phase-aggregation`, tip `02c15cb`) holds the complete reviewed feature: 6 commits of implementation (P1, P2, P2-fix, P3, P4, plus docs merges). Per the branch-isolation ruling and the protected paths in the diff (the regenerated CRD manifest; the stack.yaml Role), the merge to `main` is a single user-approved event. On approval, the manager applies MANAGER.md's merge gate (approve receipts at the reported HEADs, green recipes, scope match, hygiene) and lands the branch on local `main`; the worktree is removed afterwards.
