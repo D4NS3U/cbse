@@ -28,7 +28,11 @@ Plus one mid-implementation design correction: the F-crash trigger's result-sink
 - **The consolidated settlement gate: 11/11 specs green** (run `20261001124216-a59a4a`, SKIP_BUILD with the settlement digests; the registry's CrowdSec block hit the runner-base push mid-run — the four rebuilt images including the watchdog operator pushed before it; the cluster pulls via its own path). The live artifacts: the red experiments' terminal statuses, the scenario rows, the events, and the F-crash chain's `Failed` capture (`phase=Failed`, `scenarioManagerVerdict=Failed`, all four scenarios `Failed`, the jobs removed by the terminal action).
 - The cluster is clean (no leaked namespaces).
 
-## Merge decision — for the user
+## Merge decision — LANDED
+
+**User-approved and merged 2026-10-01:** branch `D4NS3U/experiment-terminal-e2e` (tip `1d2c8ee`, via the branch's synced merge `8d81fbc`) fast-forwarded into local `main`; post-merge `make test-fast` rc=0; pushed to `origin/main`; the feature worktree removed; the branch deleted. The settlement evidence (run `20261001124216-a59a4a`: junit, the red experiments' terminal-status captures, cluster-state, events, the SM/operator logs; plus all worker and review reports) is preserved under the main checkout's `artifacts/` (untracked per the repository's artifacts policy).
+
+## The original merge-decision section (superseded by the landing above)
 
 Branch `D4NS3U/experiment-terminal-e2e` (tip `1d2c8ee`) holds the complete reviewed feature. On your approval, the manager applies the merge gate and lands it on `main` as one reviewed merge; the worktree is removed afterwards.
 
