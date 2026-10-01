@@ -38,7 +38,9 @@ The operator's `Error` is written by exactly two writers, and they are behaviora
 
 Scenario-level response deadlines remain absent (the E2 exception is scoped to the experiment phase level).
 
-## 2. The Failed routes (user ruling 2026-10-01: BOTH routes are tested)
+## 2. The Failed route (user ruling 2026-10-01, revised the same day: ONE route — F-crash)
+
+*The earlier both-routes ruling (F-crash + F1) was superseded by the phase-transition-only scope: the spec's subject is the Failed phase transition; how a scenario fails is not relevant, so a single deterministic route suffices. F1 (the `stop_unmet` route via the `MaxReplications` CR wiring) is dropped from the feature; the cap wiring's platform merit (the CR as the user surface of the PPS's "user-defined maximum") is recorded to the backlog as its own potential feature.*
 
 The SM has exactly **four** writers of scenario-`Failed`, and they split into two per-experiment triggerable routes plus two unreachable ones:
 
