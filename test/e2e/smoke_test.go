@@ -1193,11 +1193,14 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 				"owned %s %s must exist before deletion: the full owned set is provisioned", state.kind, state.name)
 		}
 
-		// 7. The observed failure on the wire: at least one simrun-* runner
-		// Job of the red project carries the JobFailed condition - the
-		// DeadlineExceeded failure the state machine consumed. Captured as
-		// triage evidence.
-		var jobFailure string
+		// 7. The terminal action's cleanup: once the experiment went Failed,
+		// the SM's terminal action removes the red project's runner Jobs (the
+		// Error/Failed cancellation semantics - the completed action for Finished
+		// is a documented no-op, which is why the green experiment's Jobs persist
+		// while the red ones must vanish). The DeadlineExceeded failure the
+		// observation consumed is recorded in the SM's operation log and the
+		// harness diagnostics; the Job object itself is deliberately
+		// short-lived past the transition.
 		Eventually(func(g Gomega) bool {
 			jobs := &batchv1.JobList{}
 			g.Expect(k8sClient.List(ctx, jobs,
@@ -1205,25 +1208,19 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 				client.MatchingLabels{"experiment.cbse.terministic.de/project": redName},
 			)).To(Succeed())
 			for i := range jobs.Items {
-				job := &jobs.Items[i]
-				if !strings.HasPrefix(job.Name, "simrun-") {
-					continue
-				}
-				for _, cond := range job.Status.Conditions {
-					if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
-						jobFailure = fmt.Sprintf("job=%s reason=%s message=%s", job.Name, cond.Reason, cond.Message)
-						return true
-					}
+				if strings.HasPrefix(jobs.Items[i].Name, "simrun-") {
+					return false
 				}
 			}
-			return false
+			return true
 		}, 2*time.Minute, 2*time.Second).Should(BeTrue(),
-			"no simrun-* runner Job of the red project carried the JobFailed condition within 2 minutes")
+			"the red project's simrun-* runner Jobs persisted after the Failed transition (the terminal action's cleanup did not run)")
 
 		// 8. Diagnostics artifact: persist the terminal evidence (phase,
-		// message, verdict, the scenario states via the suite's Core DB
-		// query helper, and the runner Job's failure condition) under
-		// CBSE_ARTIFACT_DIR per the suite's triage discipline.
+		// message, verdict, and the scenario states via the suite's Core DB
+		// query helper) under CBSE_ARTIFACT_DIR per the suite's triage
+		// discipline; the runner Jobs' DeadlineExceeded failure is already
+		// recorded in the SM's operation log captured by the harness.
 		var scenarioRows string
 		Eventually(func(g Gomega) string {
 			scenarioRows = queryDatabase(fmt.Sprintf(
@@ -1235,8 +1232,8 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}, 2*time.Minute, 2*time.Second).ShouldNot(BeEmpty(),
 			"the red project's scenario rows did not appear in the Core DB within 2 minutes")
 		writeExperimentStatusArtifact("experiment-failed-status.txt", fmt.Sprintf(
-			"experiment=%s\nphase=%s\nmessage=%s\nscenarioManagerVerdict=%s\nscenario states:\n%s\nrunner job failure:\n%s\n",
-			redName, terminal.Status.Phase, terminal.Status.Message, terminal.Status.ScenarioManagerVerdict, scenarioRows, jobFailure,
+			"experiment=%s\nphase=%s\nmessage=%s\nscenarioManagerVerdict=%s\nscenario states:\n%s\nrunner jobs: removed by the terminal action (Error/Failed cancellation semantics)\n",
+			redName, terminal.Status.Phase, terminal.Status.Message, terminal.Status.ScenarioManagerVerdict, scenarioRows,
 		))
 
 		// 9. The GC cascade over the complete owned set: the user deletes
