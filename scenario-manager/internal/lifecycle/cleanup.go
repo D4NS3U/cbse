@@ -165,7 +165,7 @@ func GateClosedForDeletion(exp *experimentalpha4.SimulationExperiment) bool {
 // DispatchAction selects the action for an accepted informer event. When the
 // current object has a DeletionTimestamp it queues only deletion cleanup; an
 // Error or Failed phase without deletion queues the terminal action; a
-// Completed phase without deletion queues the completed (gate-close) action.
+// Finished phase without deletion queues the completed (gate-close) action.
 // Any other phase returns nil (no action).
 func DispatchAction(exp *experimentalpha4.SimulationExperiment) ActionKind {
 	if exp == nil {
@@ -177,7 +177,7 @@ func DispatchAction(exp *experimentalpha4.SimulationExperiment) ActionKind {
 	switch exp.Status.Phase {
 	case PhaseError, PhaseFailed:
 		return ActionTerminal
-	case PhaseCompleted:
+	case PhaseFinished:
 		return ActionCompleted
 	default:
 		return ActionNone

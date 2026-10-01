@@ -279,15 +279,15 @@ func TestHandleUpdateErrorDispatchesTerminal(t *testing.T) {
 	}
 }
 
-func TestHandleUpdateCompletedIsNoOp(t *testing.T) {
-	exp := experiment("ns", "proj", "uid-1", lifecycle.PhaseCompleted, true, false)
+func TestHandleUpdateFinishedIsNoOp(t *testing.T) {
+	exp := experiment("ns", "proj", "uid-1", lifecycle.PhaseFinished, true, false)
 	k8s := fakeK8s(t, exp)
 	store := &recordingStore{projectID: 5}
 	msg := &recordingMsg{}
 	d := newDispatcher(t, k8s, store, msg, nil)
 
 	d.HandleUpdate(nil, exp)
-	// Completed closes the gate only: no terminal bulk update, no consumer
+	// Finished closes the gate only: no terminal bulk update, no consumer
 	// deletion, no purge, no finalizer removal.
 	if !waitUntil(200*time.Millisecond, func() bool {
 		store.mu.Lock()

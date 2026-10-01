@@ -32,7 +32,7 @@ const (
 	// caller may publish a Translator request or perform domain processing.
 	Admit
 	// AdmitTerminal means the experiment is permanently inactive for messaging
-	// (Error, Failed, Completed, or deletion). For availability the caller
+	// (Error, Failed, Finished, or deletion). For availability the caller
 	// returns status=error without a batch subject; for a JetStream delivery
 	// the caller ACKs and discards without database mutation, attempt
 	// consumption, or Job creation.
@@ -55,7 +55,7 @@ func (d AdmitDecision) String() string {
 
 // AdmitExperiment applies the canonical lifecycle gate to a fetched experiment.
 // It returns Admit only when the object is non-nil, has no DeletionTimestamp,
-// and has phase InProgress. Terminal phases (Error, Failed, Completed) and a
+// and has phase InProgress. Terminal phases (Error, Failed, Finished) and a
 // present DeletionTimestamp map to AdmitTerminal; a non-terminal phase is
 // terminal when deletion has begun. Pending, Provisioning, and an empty phase
 // map to AdmitUnavailable.
@@ -75,7 +75,7 @@ func AdmitExperiment(exp *experimentalpha4.SimulationExperiment) AdmitDecision {
 	switch exp.Status.Phase {
 	case PhaseInProgress:
 		return Admit
-	case PhaseError, PhaseFailed, PhaseCompleted:
+	case PhaseError, PhaseFailed, PhaseFinished:
 		return AdmitTerminal
 	case PhasePending, PhaseProvisioning, "":
 		return AdmitUnavailable

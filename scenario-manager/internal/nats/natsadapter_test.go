@@ -325,7 +325,7 @@ func TestTranslatorReadyAdmittedRetryNAKs(t *testing.T) {
 }
 
 func TestTranslatorReadyTerminalACKDiscardNoHandler(t *testing.T) {
-	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseCompleted))
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseFinished))
 	a, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewTranslatorReadyConsumer(a)
 
@@ -495,7 +495,7 @@ func TestPPSEvaluationAdmittedRetryNAKs(t *testing.T) {
 }
 
 func TestPPSEvaluationTerminalACKDiscardNoHandler(t *testing.T) {
-	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseCompleted))
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseFinished))
 	a, er := testEvalAdapters(t, k8s, communication.PPSEvaluationHandled)
 	c := NewPPSEvaluationConsumer(a)
 	handler := communication.PPSEvaluationHandler(func(ctx context.Context, m communication.PPSEvaluationMessage) communication.PPSEvaluationHandlingResult {

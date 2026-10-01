@@ -214,7 +214,7 @@ func (s *Scheduler) reconcile(ctx context.Context, d dispatch) workerResult {
 		return workerResult{scenarioID: d.scenarioID, action: actRemove}
 
 	case scheduler.RunnerStartExperimentTerminal:
-		// Error, Failed, Completed, or deleting experiment: no state
+		// Error, Failed, Finished, or deleting experiment: no state
 		// transition and no Job create. The experiment phase action owns
 		// cancellation and any bulk scenario update. No observability record.
 		return workerResult{scenarioID: d.scenarioID, action: actRemove}

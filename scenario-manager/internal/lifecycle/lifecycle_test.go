@@ -179,7 +179,7 @@ func TestAdmitExperiment(t *testing.T) {
 		{"", false, AdmitUnavailable},
 		{PhaseError, false, AdmitTerminal},
 		{PhaseFailed, false, AdmitTerminal},
-		{PhaseCompleted, false, AdmitTerminal},
+		{PhaseFinished, false, AdmitTerminal},
 		{PhaseInProgress, true, AdmitTerminal},
 		{PhasePending, true, AdmitTerminal},
 		{"unknown-phase", false, AdmitTerminal},

@@ -368,7 +368,7 @@ func TestStartNotFoundExperimentIsPermanent(t *testing.T) {
 }
 
 func TestStartTerminalExperimentIsNoOp(t *testing.T) {
-	for _, phase := range []string{"Error", "Failed", "Completed"} {
+	for _, phase := range []string{"Error", "Failed", "Finished"} {
 		f := happyFake()
 		f.exp = newExperiment(phase)
 		a := NewAdapter(f)
@@ -682,7 +682,7 @@ func TestObserveForbiddenOnGetExperiment(t *testing.T) {
 }
 
 func TestObserveTerminalExperimentIsRetry(t *testing.T) {
-	for _, phase := range []string{"Error", "Failed", "Completed"} {
+	for _, phase := range []string{"Error", "Failed", "Finished"} {
 		f := happyFake()
 		f.exp = newExperiment(phase)
 		a := NewAdapter(f)

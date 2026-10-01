@@ -206,11 +206,11 @@ func TestDispatchAction(t *testing.T) {
 	}{
 		{PhaseError, false, ActionTerminal},
 		{PhaseFailed, false, ActionTerminal},
-		{PhaseCompleted, false, ActionCompleted},
+		{PhaseFinished, false, ActionCompleted},
 		{PhaseInProgress, false, ActionNone},
 		{PhasePending, false, ActionNone},
 		{PhaseInProgress, true, ActionDeletionCleanup},
-		{PhaseCompleted, true, ActionDeletionCleanup},
+		{PhaseFinished, true, ActionDeletionCleanup},
 	}
 	for _, c := range cases {
 		exp := newExperiment("ns", "proj", "uid-1", c.phase, true, c.deleting)

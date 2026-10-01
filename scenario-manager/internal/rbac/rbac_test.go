@@ -64,6 +64,7 @@ func TestRequiredChecksCoversExactContract(t *testing.T) {
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "list"},
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "watch"},
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "patch"},
+		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "patch", Subresource: "status"},
 		{Group: "batch", Resource: "jobs", Verb: "create"},
 		{Group: "batch", Resource: "jobs", Verb: "delete"},
 		{Group: "batch", Resource: "jobs", Verb: "get"},
@@ -125,6 +126,30 @@ func TestVerifyDeniedExperimentPatchIsFatal(t *testing.T) {
 	})
 	if _, err := Verify(context.Background(), cs); err == nil {
 		t.Fatal("expected fatal error when experiment patch is denied")
+	}
+}
+
+func TestVerifyDeniedExperimentStatusPatchIsFatal(t *testing.T) {
+	cs := policyClient(func(c Check) (bool, string) {
+		if c.Group == Alpha4ExperimentGroup && c.Verb == "patch" && c.Subresource == "status" {
+			return false, "no experiment status patch"
+		}
+		return true, "ok"
+	})
+	_, err := Verify(context.Background(), cs)
+	if err == nil {
+		t.Fatal("expected fatal error when the experiment status patch is denied")
+	}
+	var sae *StartupAuthorizationError
+	if !errors.As(err, &sae) {
+		t.Fatalf("error type %T, want *StartupAuthorizationError", err)
+	}
+	if len(sae.Failures) != 1 {
+		t.Fatalf("failures = %d, want 1", len(sae.Failures))
+	}
+	f := sae.Failures[0]
+	if f.Check.Verb != "patch" || f.Check.Subresource != "status" {
+		t.Fatalf("failed check = %+v, want simulationexperiments/status patch", f.Check)
 	}
 }
 
@@ -191,14 +216,14 @@ func TestVerifyReviewCallErrorIsFatal(t *testing.T) {
 func TestVerifyEvaluatesEveryRequiredCheck(t *testing.T) {
 	seen := map[Check]bool{}
 	cs := policyClient(func(c Check) (bool, string) {
-		seen[Check{Group: c.Group, Resource: c.Resource, Verb: c.Verb, Name: c.Name}] = true
+		seen[Check{Group: c.Group, Resource: c.Resource, Verb: c.Verb, Name: c.Name, Subresource: c.Subresource}] = true
 		return true, "ok"
 	})
 	if _, err := Verify(context.Background(), cs); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	for _, c := range RequiredChecks() {
-		key := Check{Group: c.Group, Resource: c.Resource, Verb: c.Verb, Name: c.Name}
+		key := Check{Group: c.Group, Resource: c.Resource, Verb: c.Verb, Name: c.Name, Subresource: c.Subresource}
 		if !seen[key] {
 			t.Fatalf("check not evaluated: %+v", c)
 		}

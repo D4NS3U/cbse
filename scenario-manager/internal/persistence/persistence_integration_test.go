@@ -963,3 +963,61 @@ func TestRoundClaimAndEvaluationGuards(t *testing.T) {
 		t.Fatalf("claim missing row: attempt=%d ok=%v err=%v; want 0/false/nil", attempt, ok, err)
 	}
 }
+
+func TestScenarioStateCountsByProject(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	if err := EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	if _, err := RegisterProject(ctx, db, "aggns", "aggproj"); err != nil {
+		t.Fatalf("register project: %v", err)
+	}
+	pid, err := ProjectIDByNamespaceAndName(ctx, db, "aggns", "aggproj")
+	if err != nil || pid <= 0 {
+		t.Fatalf("lookup project: id=%d err=%v", pid, err)
+	}
+
+	mustSetState := func(id int, state string) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, fmt.Sprintf(`UPDATE %s SET state = $2 WHERE id = $1`, ScenarioStatusTable()), id, state); err != nil {
+			t.Fatalf("set state %s for row %d: %v", state, id, err)
+		}
+	}
+
+	id1, err := insertScenario(ctx, db, pid, ScenarioStateCreated, `{"k":"v"}`)
+	if err != nil {
+		t.Fatalf("insert scenario: %v", err)
+	}
+	id2, err := insertScenario(ctx, db, pid, ScenarioStateCreated, `{"k":"v"}`)
+	if err != nil {
+		t.Fatalf("insert scenario: %v", err)
+	}
+	id3, err := insertScenario(ctx, db, pid, ScenarioStateCreated, `{"k":"v"}`)
+	if err != nil {
+		t.Fatalf("insert scenario: %v", err)
+	}
+
+	// Nothing terminal yet: the total alone is non-zero.
+	if c, err := ScenarioStateCountsByProject(ctx, db, pid); err != nil || c.Total != 3 || c.Finished != 0 || c.Failed != 0 {
+		t.Fatalf("initial counts = %+v err=%v; want {3 0 0}", c, err)
+	}
+
+	// Every scenario finishes: the all-Finished aggregation input.
+	mustSetState(id1, ScenarioStateFinished)
+	mustSetState(id2, ScenarioStateFinished)
+	mustSetState(id3, ScenarioStateFinished)
+	if c, err := ScenarioStateCountsByProject(ctx, db, pid); err != nil || c.Total != 3 || c.Finished != 3 || c.Failed != 0 {
+		t.Fatalf("all-finished counts = %+v err=%v; want {3 3 0}", c, err)
+	}
+
+	// A further scenario fails: the fail-fast aggregation input.
+	id4, err := insertScenario(ctx, db, pid, ScenarioStateCreated, `{"k":"v"}`)
+	if err != nil {
+		t.Fatalf("insert scenario: %v", err)
+	}
+	mustSetState(id4, ScenarioStateFailed)
+	if c, err := ScenarioStateCountsByProject(ctx, db, pid); err != nil || c.Total != 4 || c.Finished != 3 || c.Failed != 1 {
+		t.Fatalf("fail-fast counts = %+v err=%v; want {4 3 1}", c, err)
+	}
+}
