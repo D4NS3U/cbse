@@ -70,6 +70,7 @@ var alpha4ExperimentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=services;secrets;configmaps;serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=services/finalizers;secrets/finalizers;configmaps/finalizers;serviceaccounts/finalizers,verbs=update
 
 // Alpha4SimulationExperimentReconciler reconciles an alpha4 SimulationExperiment
