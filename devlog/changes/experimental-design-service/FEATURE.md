@@ -16,7 +16,7 @@ The **Experimental Design Service (EDS)** becomes what the CR already declares i
 
 ## 2. Scope
 
-- **In scope:** (a) the reference EDS component (`component-templates/experimental-design-service/` — a Go module in the PPS's architectural tradition: minimal dependencies, `nats.go` + `pgx` + `net/http`, `USER 1000:1000`, digest-pinned, licensed Makefile lines, go.work member); (b) the operator's `reconcileEDS` — the Deployment + Service from the existing CR field, the env contract, the Detail DB connection mount, the image validation, and the readiness-gate membership; (c) the harness/e2e integration (the image set grows 7→8; the smoke's EDS flow per ruling R1); (d) the documentation (`COMPONENT_DESIGN_GOALS.md`: the EDS contract section, the architecture diagram's "EDS (installed by the installation)" line becomes per-experiment).
+- **In scope:** (a) the reference EDS component (`component-templates/experimental-design-service/` — a Go module in the PPS's architectural tradition: minimal dependencies, `nats.go` + `pgx` + `net/http`, `USER 1000:1000`, digest-pinned, licensed Makefile lines, go.work member); (b) the operator's `reconcileEDS` — the Deployment + Service from the existing CR field, the env contract, the Detail DB connection mount, the image validation, and the readiness-gate membership; (c) the harness/e2e integration (the image set grows 7→8; the smoke's EDS flow per ruling R1); (d) the documentation (`COMPONENT_DESIGN_GOALS.md`: the EDS contract section, the architecture diagram's "EDS (installed by the installation)" line becomes per-experiment), and the human-interactive acceptance CR (Appendix A).
 - **Out of scope:** authentication/authorization on the UI (the EDS serves a ClusterIP Service inside the experiment's namespace by default; NodePort exposure is the user's explicit choice — the UI trusts the cluster boundary, recorded as a deliberate boundary); multi-user concurrency control (a single experimenter per experiment is the model); changing the seeded reference recipes' values.
 - **Breaking changes / compatibility:** none to the API (the field exists; `reconcileEDS` honors it). The Detail DB's reference seed is **reworked by the ruled R2**: the per-parameter entry tables + the `recipes` locator table + the `simulation_parameters` view replace the single seeded table; the lookup contract (the query text, the `parameterset_id` key, the four-value projection) is unchanged; the seeded baseline generalizes to **ids 1–4 read-only in all five tables**; the reference image is re-pinned in E3 (the image set still grows by exactly one: the EDS).
 
@@ -56,7 +56,7 @@ The **Experimental Design Service (EDS)** becomes what the CR already declares i
 |---|---|---|---|
 | **E1 — the reference EDS module** | The Go module: `config`/`wire` (the golden-tested protocol types), `recipestore` (the design-layer writer: the entry CRUD + the recipe locator rows under the model's constraints, ids 1–4 refused), `server` (the API + the embedded UI), `publisher` (the handshake + publish with the mock's retry semantics), the module tests, the Dockerfile, go.work + Makefile wiring | — | `make test-fast` |
 | **E2 — the operator's `reconcileEDS`** | The Deployment + Service from the existing CR field (image, command, args, port, serviceType, nodePort), the env contract (D2), the detaildb Secret mount, the image validation (D6), the readiness-gate membership (D5), envtest (the provisioning contract, the gate, the ownership) | E1 (the env contract it injects) | `make test-fast` + the settlement smoke |
-| **E3 — the harness/e2e integration** | The image build/lock (the set 7→8 with the EDS; the Detail DB reference image re-pinned with the ruled R2 seed rework — the entry tables, `recipes`, the view, the baseline rows; the `sqldoc` lockstep test updated in the same slice; the lock pairs, the loader keys, the self-test truths), the smoke's EDS flow per R1, the green specs' EDS-driving setup, the red specs' terminal inventories re-baselined to the new provisioning sequence (the EDS step; the gate membership per R5), the e2e assertions (the entries + recipes in the Detail DB, the view's projection, the batch intake, the full chain through the real component) | E1, E2 | `make test-fast` + the settlement smoke |
+| **E3 — the harness/e2e integration** | The image build/lock (the set 7→8 with the EDS; the Detail DB reference image re-pinned with the ruled R2 seed rework — the entry tables, `recipes`, the view, the baseline rows; the `sqldoc` lockstep test updated in the same slice; the lock pairs, the loader keys, the self-test truths), the smoke's EDS flow per R1, the Appendix A acceptance CR checked in at `devlog/changes/experimental-design-service/acceptance/simulationexperiment-manual.yaml` (kept in sync with the spec's appendix), the green specs' EDS-driving setup, the red specs' terminal inventories re-baselined to the new provisioning sequence (the EDS step; the gate membership per R5), the e2e assertions (the entries + recipes in the Detail DB, the view's projection, the batch intake, the full chain through the real component) | E1, E2 | `make test-fast` + the settlement smoke |
 | **E4 — the documentation** | `COMPONENT_DESIGN_GOALS.md`: the EDS reference-component section (the build, the API, the DB-write, the publish contracts), the architecture diagram update (per-experiment EDS), the reference-image README | E1–E3 | `make test-fast` |
 
 Wave plan: serialized single workers (W1 = [E1]; W2 = [E2]; W3 = [E3]; W4 = [E4] — E4 may fold into E3's wave), each with the independent glm review lane; the consolidated settlement smoke after the final wave; the merge to `main` is one user-approved event.
@@ -72,9 +72,75 @@ State vocabulary per slice: `complete` / `incomplete` / `verification-blocked`, 
 
 ## Rulings record (open)
 
-- ~~**R1 — the smoke's EDS flow**~~ **Answered (2026-10-02, user ruling):** **(a)** — the smoke's EDS is the **reference component**, driven by the e2e through its **JSON API** (the `server` package's `net/http` endpoints, JSON payloads; the embedded UI page is a thin client over the same contract — the Facade row). The mock-EDS is **retired from the smoke** (the stack-level `eds-mock` Deployment and the `launchEdsMockOneShot` fixture leave); it remains for the unit/integration tiers (D9). **Two client modes on one contract (ruled):** the **non-interactive mode** — the automated smoke (CI): the harness port-forwards the EDS Service and drives the API scripted (design → Save → assert the DB → Start → assert the intake), fully unattended per the `AGENTS.md` harness contract; and the **interactive mode** — a human in the browser (the embedded UI issues the same API calls; `kubectl port-forward` per D7, or NodePort as the user's explicit choice): no harness involved, the human clicks Save/Start. The interactive flow is human validation (optionally a manual acceptance step at settlement — the retained stack or the dev cluster plus **one fresh experiment CR**; the human port-forwards its EDS and drives the full flow in the UI while the experiment is `InProgress`, optionally re-arming mid-run; the smoke's own green experiment stays fully automated — a `Finished` experiment cannot be re-started: the SM's `ready` reply is `InProgress`-only and terminal phases are sticky), **not a harness spec**: the suite remains fully non-interactive. The green specs' batch step becomes the API-driven setup; the red F-crash spec's batch goes through the same helper, its delta staying in the CR. |
+- ~~**R1 — the smoke's EDS flow**~~ **Answered (2026-10-02, user ruling):** **(a)** — the smoke's EDS is the **reference component**, driven by the e2e through its **JSON API** (the `server` package's `net/http` endpoints, JSON payloads; the embedded UI page is a thin client over the same contract — the Facade row). The mock-EDS is **retired from the smoke** (the stack-level `eds-mock` Deployment and the `launchEdsMockOneShot` fixture leave); it remains for the unit/integration tiers (D9). **Two client modes on one contract (ruled):** the **non-interactive mode** — the automated smoke (CI): the harness port-forwards the EDS Service and drives the API scripted (design → Save → assert the DB → Start → assert the intake), fully unattended per the `AGENTS.md` harness contract; and the **interactive mode** — a human in the browser (the embedded UI issues the same API calls; `kubectl port-forward` per D7, or NodePort as the user's explicit choice): no harness involved, the human clicks Save/Start. The interactive flow is human validation (optionally a manual acceptance step at settlement — the retained stack or the dev cluster plus **one fresh experiment CR, the well-defined `SimulationExperiment` of Appendix A**; the human port-forwards its EDS and drives the full flow in the UI while the experiment is `InProgress`, optionally re-arming mid-run; the smoke's own green experiment stays fully automated — a `Finished` experiment cannot be re-started: the SM's `ready` reply is `InProgress`-only and terminal phases are sticky), **not a harness spec**: the suite remains fully non-interactive. The green specs' batch step becomes the API-driven setup; the red F-crash spec's batch goes through the same helper, its delta staying in the CR. |
 - ~~**R2 — the design-to-storage flow**~~ **Answered (2026-10-02, user ruling, approved as drafted):** the three-step GUI flow — **(1) Design** (the parameter entries of the simulation's four varyable parameters + the scenarios with their recipes, the explicit compositions); **(2) "Save Experiment"** (an explicit user action; one transaction into the Detail DB: the entries into the per-parameter tables `arrival_rate`, `service_rate`, `run_duration`, `seed_policy`, the recipes into the `recipes` table keyed by `parameterset_id`, EDS-assigned ids ≥ 5); **(3) "Start Experiment"** (the pre-flight: every batch-referenced `parameterset_id` must resolve, else a clean UI-visible refusal — preventing the silent `RecipeError` stall; then the established handshake + the batch publish). **Storage (ruled):** per-variable entry tables (the user's literal names); `recipes` = the locator table ("where to find each parameter", one FK per parameter); `public.simulation_parameters` = a **view** over `recipes ⋈ the four entry tables` — the Translator's landed lookup (`detaildb.go:83`, view-transparent), the batch schema, the mock, and the e2e assertions are unchanged by construction. **Semantics (ruled):** recipes are live locators — a saved design's resolved values track its entries until the next save (the single-experimenter model owns mid-run edits as the user's explicit action; reproducibility holds for unchanged designs via the `seed_policy` derivation). **Baseline (ruled, the former sub-point):** ids 1–4 read-only in all five tables — the seeded rows 1–4 remain the reference baseline, the EDS's id-space starts at 5 in every table. **Scope note (ruled):** this feature's write surface is exactly the entries and the recipes in the Detail DB; additional Detail DB write capabilities are a recorded future increment, not built.
 - **R3 — the fresh-DB schema:** the EDS self-provisions the six objects of the ruled R2 schema (the four entry tables, `recipes`, the `simulation_parameters` view) on a user's host-based DB vs requiring the schema to exist. *Recommendation: self-provision — `CREATE TABLE IF NOT EXISTS` / `CREATE VIEW IF NOT EXISTS`, the DDL mirroring the reference seed SQL, uniform on the reference image and a fresh host DB; the host-based form must work without a manual DB step.*
 - **R4 — the EDS image validation:** `ValidateDigestImage` like the translator/PPS. *Recommendation: yes (the immutable-digest discipline).*
 - **R5 — the readiness gate:** the EDS joins the gate (D5). *Recommendation: yes — completing the G ruling; the watchdog converts the zero-scenario idle into a bounded, diagnosed `Error`.*
 - **R6 — the UI's field scope:** per-scenario `priority`, `number_of_reps`, `confidence_metric`, and the recipe assignment are configurable; the KPI stays fixed to `mean_wait_time` (D8); the recipe fields are the four `simulation_parameters` columns. *Confirm or extend.*
+
+## Appendix A — the human-interactive acceptance CR (ruled R1, 2026-10-02)
+
+The well-defined `SimulationExperiment` the user applies to the cluster to exercise the **human-driven (interactive) client mode**: the reference EDS provisioned from this CR is driven by a person in the browser, never by the harness. E3 checks it in at `devlog/changes/experimental-design-service/acceptance/simulationexperiment-manual.yaml` and keeps it in sync with this appendix.
+
+**Prerequisites** (a retained smoke namespace, or a dev cluster):
+
+- the shared stack running in the namespace (the Scenario Manager, `sm-eds-nats`, the experiment operator, `core-db` — a retained smoke run leaves them; `make test-e2e-retained`); a finished green experiment from the same run coexists harmlessly (a distinct project; per-project subjects);
+- the namespace-local `cbse-registry-auth` Docker-config Secret (the harness creates it in smoke namespaces; on a dev cluster the user creates it);
+- the reference EDS image built and pushed — its digest taken from the image lock / `artifacts/test/<run-id>/images.env` (immutable digests, environment-provided registry, per `AGENTS.md`).
+
+```yaml
+apiVersion: experiment.cbse.terministic.de/alpha4
+kind: SimulationExperiment
+metadata:
+  name: manual-acceptance      # the project name - the subjects' key; unique cluster-wide
+  namespace: <namespace>       # e.g. cbse-e2e-<run-id> (retained) or a dev namespace
+spec:
+  defaultServiceType: ClusterIP
+  detailDatabase:
+    image: <registry>/scenario-detail-database@sha256:<digest>   # re-pinned by the ruled R2 seed rework (E3)
+    dbname: simulation_db
+    user: <user>
+    password: <password>
+    port: 5432
+    serviceType: ClusterIP
+  resultDatabase:
+    image: <registry>/postgres@sha256:<digest>
+    dbname: result_db
+    user: <user>
+    password: <password>
+    port: 5432
+    serviceType: ClusterIP
+  translator:
+    image: <registry>/translator@sha256:<digest>
+    repository: <runner-repository-url>
+    baseimage: <registry>/runner-base@sha256:<digest>
+    builderImage: <registry>/buildkit-builder@sha256:<digest>
+    registryAuthSecretRef:
+      name: cbse-registry-auth
+    port: 8080
+    serviceType: ClusterIP
+  postProcessingService:
+    image: <registry>/post-processing-service@sha256:<digest>
+    port: 8081
+    serviceType: ClusterIP
+    args: ["-max-runners-per-round", "30"]
+  experimentalDesignService:
+    design: "human-interactive design (manual acceptance pass)"
+    image: <registry>/experimental-design-service@sha256:<digest>   # the reference EDS - not the mock
+    port: 8082
+    serviceType: ClusterIP
+```
+
+The field shape mirrors the smoke's green experiment (`test/e2e/manifests/experiment.yaml`) — the same required fields, ports, service types, and the PPS wave-cap arg — with exactly two deltas: `experimentalDesignService.image` is the **reference EDS** (not the harness's mock), and the images are digest-pinned placeholders filled from the lock. `runner` is omitted (the controller's default Job template applies).
+
+**The pass** (every step is a human action — no harness):
+
+1. `kubectl apply -f simulationexperiment-manual.yaml`.
+2. Watch the phase: `Pending → Provisioning → InProgress` (`kubectl get simulationexperiment manual-acceptance -w`); the `InProgress` message "All components provisioned and ready" — after R5 — includes the EDS being Ready. The experiment now idles `InProgress` with zero scenarios: the open-ended interactive window.
+3. `kubectl port-forward svc/<the operator-named EDS Service> 8082` (the name follows the operator's per-component convention — E2 defines it; `kubectl get svc`) and open `http://localhost:8082`.
+4. **Design:** the parameter entries (values of the four varyable parameters) and the scenarios (each with `priority`, `number_of_reps`, `confidence_metric`, and its recipe composition).
+5. **Save Experiment** — then verify the Detail DB rows (port-forward the detail DB: the entry tables, `recipes`, the `simulation_parameters` view).
+6. **Start Experiment** — the pre-flight passes, the handshake completes, the batch publishes; the scenarios appear and run (runner Jobs, PPS evaluation) and the experiment lands **`Finished`** (sticky).
+7. Optional: **re-arm mid-run** — design further scenarios, Save, Start; the SM accepts the second batch into the same `InProgress` experiment.
+8. Cleanup: `kubectl delete simulationexperiment manual-acceptance` (the GC cascade removes the children); a retained smoke namespace is removed with `make test-clean RUN_ID=<run-id>` per `AGENTS.md`.
