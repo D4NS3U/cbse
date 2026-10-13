@@ -24,11 +24,19 @@ Protocol flow:
     1. Connect to NATS.
     2. For each batch:
        a. Send an availability request to the Scenario Manager on the
-          configured request/reply subject.
-       b. Parse the reply and extract the target batch subject.
+          configured request/reply subject, declaring
+          experiment_type "standard" (the SBO capability handshake).
+       b. Parse the reply, verify the Scenario Manager echoes
+          experiment_type verbatim (a missing or mismatched echo is a
+          loud, immediate failure - an incompatible SM must not be
+          silently tolerated), and extract the target batch subject.
        c. Publish a scenario batch payload to JetStream on that subject.
-    3. Flush the connection and optionally stay alive so operators can inspect
-       logs and pod state.
+    3. If `EDS_FINALIZE` is true (the default), publish the
+       finalization batch (scenarios: [], final: true) to the same
+       batch subject - the Scenario Manager's Finished verdict
+       requires it (the SBO finalization protocol).
+    4. Flush the connection and optionally stay alive so operators can
+       inspect logs and pod state.
 
 Why this exists:
     - Replaces one-off shell/Job publishers with a reusable container image.
@@ -60,6 +68,12 @@ Environment variables:
     `STARTUP_DELAY_SECONDS`:
         Initial delay before any NATS activity, helpful while dependent pods
         are still starting.
+    `EDS_FINALIZE`:
+        If true (the default), publish the finalization batch
+        (scenarios: [], final: true) after all standard batches, matching
+        the Scenario Manager's finalization-aware verdict rule. If false,
+        the legacy non-final behavior is restored for tests that pin the
+        pre-finalization state.
     `EDS_KEEP_ALIVE`:
         If true, keep the process alive after publishing, waiting for SIGINT or
         SIGTERM. If false, exit after publishing completes.
@@ -97,6 +111,7 @@ class Config:
     retry_delay_seconds: float
     request_timeout_seconds: float
     startup_delay_seconds: float
+    finalize: bool
     keep_alive: bool
 
 
@@ -171,8 +186,19 @@ def load_config() -> Config:
         retry_delay_seconds=env_float("RETRY_DELAY_SECONDS", 2.0),
         request_timeout_seconds=env_float("REQUEST_TIMEOUT_SECONDS", 5.0),
         startup_delay_seconds=env_float("STARTUP_DELAY_SECONDS", 3.0),
+        finalize=env_bool("EDS_FINALIZE", True),
         keep_alive=env_bool("EDS_KEEP_ALIVE", True),
     )
+
+
+class UnusableReplyError(RuntimeError):
+    """The Scenario Manager reply violated the SBO capability handshake.
+
+    A missing or mismatched experiment_type echo means the Scenario
+    Manager predates the finalization protocol; retrying cannot fix an
+    incompatible SM, so the failure is loud and immediate instead of being
+    masked by the bounded retry loop.
+    """
 
 
 async def connect_with_retries(cfg: Config) -> NATS:
@@ -256,13 +282,40 @@ def build_batch_payload(
     return {"batch_id": batch_id, "project": project, "scenarios": scenarios}
 
 
+def build_finalization_payload(batch_id: str, project: str) -> dict[str, Any]:
+    """Construct the finalization batch payload (the SBO closed design).
+
+    Payload schema (the FEATURE.md section 5 wire pin):
+        {
+          "batch_id": "...",
+          "project": "...",
+          "scenarios": [],
+          "final": true
+        }
+
+    The empty scenarios array is always present (never a missing key);
+    final: true marks the batch as the experiment's finalization - no
+    further scenarios will be generated, and the Scenario Manager's
+    Finished verdict requires it.
+    """
+
+    return {"batch_id": batch_id, "project": project, "scenarios": [], "final": True}
+
+
 async def resolve_batch_subject(nc: NATS, cfg: Config, batch_id: str) -> str:
     """Perform availability handshake and return SM-provided batch subject.
 
     The request/reply contract is:
         request subject: `cfg.availability_subject`
-        request payload: {"batch_id","project","scenario_count"}
-        expected response: {"status":"ready","batch_subject":"..."}
+        request payload: {"batch_id","project","scenario_count",
+                          "experiment_type"}
+        expected response: {"status":"ready","batch_subject":"...",
+                            "experiment_type":"standard"}
+
+    The availability request declares experiment_type "standard" (the SBO
+    capability handshake). The reply must echo it verbatim,
+    status-independently; a missing or mismatched echo raises
+    UnusableReplyError immediately (a loud failure that does not retry).
 
     Retries are applied for both timeouts and transient transport/protocol
     errors.
@@ -272,6 +325,7 @@ async def resolve_batch_subject(nc: NATS, cfg: Config, batch_id: str) -> str:
         "batch_id": batch_id,
         "project": cfg.project_name,
         "scenario_count": cfg.scenarios_per_batch,
+        "experiment_type": "standard",
     }
     payload = json.dumps(availability_payload).encode("utf-8")
 
@@ -291,6 +345,13 @@ async def resolve_batch_subject(nc: NATS, cfg: Config, batch_id: str) -> str:
                 raise RuntimeError(f"scenario manager rejected availability: {reason or status}")
             if not batch_subject:
                 raise RuntimeError("scenario manager response did not include batch_subject")
+            echoed = response.get("experiment_type", "")
+            if echoed != "standard":
+                raise UnusableReplyError(
+                    "scenario manager did not echo the declared "
+                    f"experiment_type 'standard' (got {echoed!r}); the SM "
+                    "predates the SBO finalization protocol"
+                )
 
             print(
                 f"[EDS] Availability accepted for batch={batch_id}; batch_subject={batch_subject}"
@@ -303,6 +364,10 @@ async def resolve_batch_subject(nc: NATS, cfg: Config, batch_id: str) -> str:
                 f"[EDS] Availability request attempt {attempt} timed out; retrying in {cfg.retry_delay_seconds}s"
             )
             await asyncio.sleep(cfg.retry_delay_seconds)
+        except UnusableReplyError:
+            # A handshake violation cannot be fixed by retrying: fail loud
+            # and immediate instead of burning the retry budget.
+            raise
         except Exception as exc:  # noqa: BLE001
             if attempt == cfg.request_retries:
                 raise RuntimeError("failed to resolve batch subject") from exc
@@ -319,7 +384,10 @@ async def publish_batches(nc: NATS, cfg: Config) -> None:
 
     For each batch we resolve the target subject dynamically using the
     availability handshake. This mirrors the intended production handshake
-    where SM can control per-project subject routing.
+    where SM can control per-project subject routing. When `cfg.finalize`
+    is set, the finalization batch (scenarios: [], final: true) follows all
+    standard batches on the same subject, so the Scenario Manager's
+    finalization-aware verdict can land Finished.
     """
 
     js = nc.jetstream()
@@ -337,6 +405,16 @@ async def publish_batches(nc: NATS, cfg: Config) -> None:
         print(
             f"[EDS] Published batch={batch_id} scenarios={cfg.scenarios_per_batch} stream={ack.stream} seq={ack.seq}"
         )
+
+    if cfg.finalize:
+        final_batch_id = f"{cfg.batch_id_prefix}-final"
+        final_subject = await resolve_batch_subject(nc, cfg, final_batch_id)
+        final_payload = build_finalization_payload(final_batch_id, cfg.project_name)
+        ack = await js.publish(final_subject, json.dumps(final_payload).encode("utf-8"))
+        print(
+            f"[EDS] Published finalization batch={final_batch_id} stream={ack.stream} seq={ack.seq}"
+        )
+        print("[EDS] Experiment finalized: no further scenarios will be generated.")
 
     await nc.flush()
     print(
