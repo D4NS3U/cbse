@@ -130,8 +130,10 @@ const shaA = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // validExperiment builds a SimulationExperiment fixture in the test namespace
 // with a digest-pinned image-based detail DB, a host-based result DB, a fully
-// specified translator that passes provisioning validation, and a fully
-// specified post-processing service that passes provisioning validation.
+// specified translator that passes provisioning validation, a fully
+// specified post-processing service that passes provisioning validation, and
+// a fully specified experimental-design service that passes provisioning
+// validation.
 func validExperiment(name string) *experimentalpha4.SimulationExperiment {
 	return &experimentalpha4.SimulationExperiment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: alpha4TestNamespace},
@@ -164,6 +166,14 @@ func validExperiment(name string) *experimentalpha4.SimulationExperiment {
 				Port:        8081,
 				Command:     []string{"/usr/local/bin/pps"},
 				Args:        []string{"--evaluate"},
+			},
+			ExperimentalDesignService: experimentalpha4.ExperimentalDesignServiceSpec{
+				Design:      "reference alpha4 design",
+				Image:       "registry.unibw.de/i31bdase/cbse-test/eds@sha256:" + shaA,
+				ServiceType: experimentalpha4.ServiceTypeClusterIP,
+				Port:        8082,
+				Command:     []string{"/usr/local/bin/eds"},
+				Args:        []string{"--serve"},
 			},
 		},
 	}
@@ -272,11 +282,11 @@ func createExperiment(t *testing.T, exp *experimentalpha4.SimulationExperiment) 
 }
 
 // drive repeatedly reconciles until the experiment reaches a terminal phase
-// (InProgress or Error). While Provisioning, it simulates Translator and PPS
-// Deployment readiness so the readiness check can progress (the G-ruled gate
-// covers the PPS in addition to the databases and the translator). It
-// returns the final phase, or the last observed phase if maxIter is
-// exhausted.
+// (InProgress or Error). While Provisioning, it simulates Translator, PPS,
+// and EDS Deployment readiness so the readiness check can progress (the gate
+// covers the PPS per ruling G and the EDS per ruling R5 in addition to the
+// databases and the translator). It returns the final phase, or the last
+// observed phase if maxIter is exhausted.
 func drive(t *testing.T, r *controller.Alpha4SimulationExperimentReconciler, key types.NamespacedName, maxIter int) string {
 	t.Helper()
 	ctx := context.Background()
@@ -296,6 +306,7 @@ func drive(t *testing.T, r *controller.Alpha4SimulationExperimentReconciler, key
 		if last == "Provisioning" {
 			markTranslatorReady(t, key)
 			markPPSReady(t, key)
+			markEDSReady(t, key)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -349,6 +360,31 @@ func markPPSReady(t *testing.T, key types.NamespacedName) {
 	dep.Status.UpdatedReplicas = 1
 	if err := alpha4Client.Status().Update(ctx, dep); err != nil {
 		t.Fatalf("update pps deployment status: %v", err)
+	}
+}
+
+// markEDSReady flips the experiment's EDS Deployment status to one ready
+// replica so the R5-ruled readiness gate can advance. It is a no-op if the
+// Deployment is absent or already ready.
+func markEDSReady(t *testing.T, key types.NamespacedName) {
+	t.Helper()
+	ctx := context.Background()
+	dep := &appsv1.Deployment{}
+	if err := alpha4Client.Get(ctx, types.NamespacedName{Name: key.Name + "-eds", Namespace: key.Namespace}, dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		t.Fatalf("get eds deployment: %v", err)
+	}
+	if dep.Status.ReadyReplicas >= 1 {
+		return
+	}
+	dep.Status.Replicas = 1
+	dep.Status.ReadyReplicas = 1
+	dep.Status.AvailableReplicas = 1
+	dep.Status.UpdatedReplicas = 1
+	if err := alpha4Client.Status().Update(ctx, dep); err != nil {
+		t.Fatalf("update eds deployment status: %v", err)
 	}
 }
 
@@ -1129,9 +1165,10 @@ func TestAlpha4PPSIdempotentReconcile(t *testing.T) {
 // not-ready component across the counted retry budget transitions the
 // experiment to Error without further retry, and the final message aggregates
 // the per-retry not-ready inventories (each retry labeled, the component named
-// with its observed failure at each retry). The PPS is marked ready so the
-// translator alone is the not-ready component; the watchdog knobs are injected
-// in milliseconds so the counted retries are observable in the drive loop.
+// with its observed failure at each retry). The PPS and EDS are marked ready
+// so the translator alone is the not-ready component; the watchdog knobs are
+// injected in milliseconds so the counted retries are observable in the drive
+// loop.
 func TestAlpha4ReadinessWatchdogErrorsAfterBudget(t *testing.T) {
 	key := types.NamespacedName{Name: "exp-wd-budget", Namespace: alpha4TestNamespace}
 	ensureRegistrySecret(t, goodRegistrySecret())
@@ -1156,6 +1193,7 @@ func TestAlpha4ReadinessWatchdogErrorsAfterBudget(t *testing.T) {
 			t.Fatalf("phase = InProgress: the translator is not ready; the gate must block")
 		}
 		markPPSReady(t, key)
+		markEDSReady(t, key)
 		keepDeploymentNotReady(t, "exp-wd-budget-translator", "MinimumReplicasUnavailable")
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -1207,6 +1245,7 @@ func TestAlpha4ReadinessWatchdogClearsWhenReadyMidBudget(t *testing.T) {
 			t.Fatalf("phase = Error: a false Error before the component became ready mid-budget")
 		}
 		markPPSReady(t, key)
+		markEDSReady(t, key)
 		keepDeploymentNotReady(t, "exp-wd-clear-translator", "MinimumReplicasUnavailable")
 		if retries, exists := r.ReadinessWatchdogRetries(uid); exists && retries >= 1 {
 			break
@@ -1241,9 +1280,9 @@ func TestAlpha4ReadinessWatchdogClearsWhenReadyMidBudget(t *testing.T) {
 
 // TestAlpha4ReadinessGateRequiresPPS verifies ruling G: a not-ready PPS
 // Deployment blocks InProgress (the gate covers the PPS in addition to the
-// databases and the translator) even when the translator is ready, and a
-// never-ready PPS drives the bounded-retry watchdog to Error with the PPS in
-// the per-retry inventory.
+// databases and the translator) even when the translator and the EDS are
+// ready, and a never-ready PPS drives the bounded-retry watchdog to Error
+// with the PPS in the per-retry inventory.
 func TestAlpha4ReadinessGateRequiresPPS(t *testing.T) {
 	key := types.NamespacedName{Name: "exp-wd-pps", Namespace: alpha4TestNamespace}
 	ensureRegistrySecret(t, goodRegistrySecret())
@@ -1268,9 +1307,10 @@ func TestAlpha4ReadinessGateRequiresPPS(t *testing.T) {
 		if phase == "Error" {
 			break
 		}
-		// The translator is ready but the PPS is not: the gate must still
-		// block InProgress.
+		// The translator and the EDS are ready but the PPS is not: the gate
+		// must still block InProgress.
 		markTranslatorReady(t, key)
+		markEDSReady(t, key)
 		keepDeploymentNotReady(t, "exp-wd-pps-pps", "MinimumReplicasUnavailable")
 		gateBlockedWhileTranslatorReady = true
 		time.Sleep(20 * time.Millisecond)
@@ -1292,6 +1332,262 @@ func TestAlpha4ReadinessGateRequiresPPS(t *testing.T) {
 	}
 	if retries, exists := r.ReadinessWatchdogRetries(uid); exists {
 		t.Fatalf("watchdog state after the Error write = retries %d, want cleared", retries)
+	}
+}
+
+// --- EDS provisioning (reconcileEDS: D2, D6, rulings R4/R5) ----------------
+
+// TestAlpha4EDSProvisioningContract verifies the EDS provisioning contract:
+// the <exp>-eds Deployment exists with the spec's verbatim image, command,
+// args, and port, the exact five-var env contract (echoing the exact
+// EDS_AVAILABILITY_SUBJECT string for the fixed experiment name/namespace),
+// the detaildb connection Secret mounted read-only at /detaildb-connection,
+// the restricted security profile, and the controller owner reference; and
+// the <exp>-eds-svc Service fronts it as ClusterIP on the spec port, owned by
+// the experiment.
+func TestAlpha4EDSProvisioningContract(t *testing.T) {
+	key := types.NamespacedName{Name: "exp-eds-contract", Namespace: alpha4TestNamespace}
+	ensureRegistrySecret(t, goodRegistrySecret())
+	key = createExperiment(t, validExperiment("exp-eds-contract"))
+
+	r := newReconciler(func(_ context.Context, _ dbendpoint.Endpoint) error { return nil })
+	if phase := drive(t, r, key, 30); phase != "InProgress" {
+		t.Fatalf("phase = %q, want InProgress", phase)
+	}
+
+	dep := &appsv1.Deployment{}
+	mustExist(t, dep, "exp-eds-contract-eds")
+	if len(dep.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("eds Deployment has %d containers, want 1", len(dep.Spec.Template.Spec.Containers))
+	}
+	edsInst := getExperiment(t, key)
+	for k, want := range map[string]string{
+		"app":                                    "exp-eds-contract-eds",
+		"experiment.cbse.terministic.de/project": "exp-eds-contract",
+		"experiment.cbse.terministic.de/experiment-uid": string(edsInst.UID),
+	} {
+		if dep.Labels[k] != want {
+			t.Fatalf("eds Deployment label %s = %q, want %q", k, dep.Labels[k], want)
+		}
+		if dep.Spec.Template.Labels[k] != want {
+			t.Fatalf("eds Pod template label %s = %q, want %q", k, dep.Spec.Template.Labels[k], want)
+		}
+		if dep.Spec.Selector.MatchLabels[k] != want {
+			t.Fatalf("eds selector label %s = %q, want %q", k, dep.Spec.Selector.MatchLabels[k], want)
+		}
+	}
+	// Owner reference to the owning experiment.
+	if len(dep.OwnerReferences) != 1 {
+		t.Fatalf("eds Deployment ownerReferences = %#v, want exactly one", dep.OwnerReferences)
+	}
+	or := dep.OwnerReferences[0]
+	if or.Kind != "SimulationExperiment" || or.Name != "exp-eds-contract" || or.UID != edsInst.UID || or.Controller == nil || !*or.Controller {
+		t.Fatalf("eds Deployment ownerReference = %#v, want controller reference to the experiment", or)
+	}
+
+	ctr := containerByName(t, dep, "eds")
+	// Verbatim image/port/command/args pass-through from
+	// spec.experimentalDesignService.
+	if got := ctr.Image; got != "registry.unibw.de/i31bdase/cbse-test/eds@sha256:"+shaA {
+		t.Fatalf("eds image = %q", got)
+	}
+	if len(ctr.Ports) != 1 || ctr.Ports[0].ContainerPort != 8082 {
+		t.Fatalf("eds container ports = %#v, want [{8082}]", ctr.Ports)
+	}
+	if got := ctr.Command; len(got) != 1 || got[0] != "/usr/local/bin/eds" {
+		t.Fatalf("eds command = %#v, want [/usr/local/bin/eds]", got)
+	}
+	if got := ctr.Args; len(got) != 1 || got[0] != "--serve" {
+		t.Fatalf("eds args = %#v, want [--serve]", got)
+	}
+	// Restricted security profile: UID/GID 1000, non-root, no escalation,
+	// runtime-default seccomp, all capabilities dropped.
+	sc := ctr.SecurityContext
+	if sc == nil || sc.RunAsUser == nil || *sc.RunAsUser != 1000 ||
+		sc.RunAsGroup == nil || *sc.RunAsGroup != 1000 ||
+		sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot ||
+		sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation ||
+		sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault ||
+		sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("eds security context = %#v, want the restricted profile (UID/GID 1000, non-root, no escalation, runtime-default seccomp, drop ALL)", sc)
+	}
+	// The detaildb connection Secret is the only volume, mounted read-only at
+	// /detaildb-connection. No registry-auth surface: the EDS pulls nothing.
+	if len(dep.Spec.Template.Spec.Volumes) != 1 {
+		t.Fatalf("eds Deployment volumes = %#v, want exactly [detaildb-connection]", dep.Spec.Template.Spec.Volumes)
+	}
+	v := dep.Spec.Template.Spec.Volumes[0]
+	if v.Name != "detaildb-connection" || v.Secret == nil || v.Secret.SecretName != "exp-eds-contract-detaildb-sct" || len(v.Secret.Items) != 0 {
+		t.Fatalf("eds volume = %#v, want detaildb-connection secret exp-eds-contract-detaildb-sct without items", v)
+	}
+	if len(ctr.VolumeMounts) != 1 || ctr.VolumeMounts[0].Name != "detaildb-connection" || ctr.VolumeMounts[0].MountPath != "/detaildb-connection" || !ctr.VolumeMounts[0].ReadOnly {
+		t.Fatalf("eds mounts = %#v, want exactly [detaildb-connection at /detaildb-connection, read-only]", ctr.VolumeMounts)
+	}
+	if len(dep.Spec.Template.Spec.ImagePullSecrets) != 0 {
+		t.Fatalf("eds imagePullSecrets = %#v, want none (the EDS pulls nothing)", dep.Spec.Template.Spec.ImagePullSecrets)
+	}
+	// The exact alpha4 EDS env contract: two fixed values plus the three
+	// downward-API identity vars, nothing else.
+	if len(ctr.Env) != 5 {
+		t.Fatalf("eds env vars = %d, want 5", len(ctr.Env))
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range ctr.Env {
+		env[e.Name] = e
+	}
+	for name, want := range map[string]string{
+		"NATS_URL":                 "nats://sm-eds-nats:4222",
+		"EDS_AVAILABILITY_SUBJECT": "cbse." + alpha4TestNamespace + ".exp-eds-contract.eds.scenarios.available",
+	} {
+		got, ok := env[name]
+		if !ok || got.Value != want {
+			t.Fatalf("eds env %s = %#v, want value %q", name, got, want)
+		}
+	}
+	for name, fieldPath := range map[string]string{
+		"SIMULATIONPROJECTNAMESPACE": "metadata.namespace",
+		"SIMULATIONPROJECTNAME":      "metadata.labels['experiment.cbse.terministic.de/project']",
+		"SIMULATIONEXPERIMENTUID":    "metadata.labels['experiment.cbse.terministic.de/experiment-uid']",
+	} {
+		got, ok := env[name]
+		if !ok || got.ValueFrom == nil || got.ValueFrom.FieldRef == nil || got.ValueFrom.FieldRef.FieldPath != fieldPath {
+			t.Fatalf("eds env %s = %#v, want downward-API field ref %q", name, got, fieldPath)
+		}
+	}
+
+	// EDS Service: default ClusterIP on the spec port selecting the eds app
+	// label, owned by the experiment.
+	svc := &corev1.Service{}
+	mustExist(t, svc, "exp-eds-contract-eds-svc")
+	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Fatalf("eds Service type = %q, want ClusterIP (the default)", svc.Spec.Type)
+	}
+	if svc.Spec.Selector["app"] != "exp-eds-contract-eds" {
+		t.Fatalf("eds Service selector = %#v, want app=exp-eds-contract-eds", svc.Spec.Selector)
+	}
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 8082 || svc.Spec.Ports[0].TargetPort.IntValue() != 8082 {
+		t.Fatalf("eds Service ports = %#v, want [{port: 8082, targetPort: 8082}]", svc.Spec.Ports)
+	}
+	if len(svc.OwnerReferences) != 1 || svc.OwnerReferences[0].Kind != "SimulationExperiment" || svc.OwnerReferences[0].Name != "exp-eds-contract" {
+		t.Fatalf("eds Service ownerReferences = %#v, want the owning experiment", svc.OwnerReferences)
+	}
+}
+
+// TestAlpha4EDSServiceNodePort verifies the EDS Service's NodePort path (D7):
+// serviceType NodePort plus nodePort renders the nodePort on the single
+// service port alongside the spec port.
+func TestAlpha4EDSServiceNodePort(t *testing.T) {
+	key := types.NamespacedName{Name: "exp-eds-nodeport", Namespace: alpha4TestNamespace}
+	ensureRegistrySecret(t, goodRegistrySecret())
+	exp := validExperiment("exp-eds-nodeport")
+	nodePort := int32(31082)
+	exp.Spec.ExperimentalDesignService.ServiceType = experimentalpha4.ServiceTypeNodePort
+	exp.Spec.ExperimentalDesignService.NodePort = &nodePort
+	key = createExperiment(t, exp)
+
+	r := newReconciler(func(_ context.Context, _ dbendpoint.Endpoint) error { return nil })
+	if phase := drive(t, r, key, 30); phase != "InProgress" {
+		t.Fatalf("phase = %q, want InProgress", phase)
+	}
+	svc := &corev1.Service{}
+	mustExist(t, svc, "exp-eds-nodeport-eds-svc")
+	if svc.Spec.Type != corev1.ServiceTypeNodePort {
+		t.Fatalf("eds Service type = %q, want NodePort", svc.Spec.Type)
+	}
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].NodePort != 31082 {
+		t.Fatalf("eds Service ports = %#v, want nodePort 31082 on the single port", svc.Spec.Ports)
+	}
+	if svc.Spec.Ports[0].Port != 8082 || svc.Spec.Ports[0].TargetPort.IntValue() != 8082 {
+		t.Fatalf("eds Service ports = %#v, want port/targetPort 8082 alongside the nodePort", svc.Spec.Ports)
+	}
+}
+
+// TestAlpha4EDSImageValidationRejected verifies ruling R4: a non-digest EDS
+// image is refused by the Operator's validation path with a descriptive Error
+// before any component is created.
+func TestAlpha4EDSImageValidationRejected(t *testing.T) {
+	key := types.NamespacedName{Name: "exp-eds-badimg", Namespace: alpha4TestNamespace}
+	ensureRegistrySecret(t, goodRegistrySecret())
+	exp := validExperiment("exp-eds-badimg")
+	exp.Spec.ExperimentalDesignService.Image = "registry.unibw.de/i31bdase/cbse-test/eds:v1" // tagged, not digested
+	key = createExperiment(t, exp)
+
+	r := newReconciler(func(_ context.Context, _ dbendpoint.Endpoint) error { return nil })
+	if phase := drive(t, r, key, 10); phase != "Error" {
+		t.Fatalf("phase = %q, want Error", phase)
+	}
+	inst := getExperiment(t, key)
+	if !strings.Contains(inst.Status.Message, "experimentalDesignService.image") {
+		t.Fatalf("error message %q must name the EDS image field", inst.Status.Message)
+	}
+	mustNotExist(t, &appsv1.Deployment{}, "exp-eds-badimg-eds")
+	mustNotExist(t, &corev1.Service{}, "exp-eds-badimg-eds-svc")
+	mustNotExist(t, &appsv1.Deployment{}, "exp-eds-badimg-translator")
+	mustNotExist(t, &appsv1.Deployment{}, "exp-eds-badimg-pps")
+	mustNotExist(t, &corev1.Secret{}, "exp-eds-badimg-detaildb-sct")
+}
+
+// TestAlpha4ReadinessGateRequiresEDS verifies ruling R5: a not-ready EDS
+// Deployment blocks InProgress even when the sibling gate components
+// (databases, translator, PPS) are ready, and the gate passes once the EDS is
+// ready - "All components provisioned and ready" is true only with the EDS
+// Ready, completing the coverage the G ruling gave the PPS.
+func TestAlpha4ReadinessGateRequiresEDS(t *testing.T) {
+	key := types.NamespacedName{Name: "exp-eds-gate", Namespace: alpha4TestNamespace}
+	ensureRegistrySecret(t, goodRegistrySecret())
+	key = createExperiment(t, validExperiment("exp-eds-gate"))
+	uid := getExperiment(t, key).UID
+
+	r := newReconciler(func(_ context.Context, _ dbendpoint.Endpoint) error { return nil })
+	ctx := context.Background()
+
+	// Siblings ready, EDS not ready: the gate must block InProgress and
+	// requeue (no component is failing, so no Error within the loop's
+	// production-default watchdog budget).
+	observedBlock := false
+	for i := 0; i < 25; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+		phase := getExperiment(t, key).Status.Phase
+		if phase == "InProgress" {
+			t.Fatalf("phase = InProgress: a not-ready EDS must block the gate (ruling R5)")
+		}
+		if phase == "Error" {
+			t.Fatalf("phase = Error: no component is failing; the not-ready gate must requeue")
+		}
+		markTranslatorReady(t, key)
+		markPPSReady(t, key)
+		keepDeploymentNotReady(t, "exp-eds-gate-eds", "MinimumReplicasUnavailable")
+		observedBlock = true
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !observedBlock {
+		t.Fatalf("the gate never observed the siblings-ready / EDS-not-ready state; cannot prove the R5-ruled gate")
+	}
+
+	// The EDS becomes ready: the gate passes and the watchdog state clears.
+	markEDSReady(t, key)
+	phase := ""
+	for i := 0; i < 10; i++ {
+		if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("reconcile %d after EDS recovery: %v", i, err)
+		}
+		phase = getExperiment(t, key).Status.Phase
+		if phase == "InProgress" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if phase != "InProgress" {
+		t.Fatalf("phase = %q, want InProgress (the EDS became ready)", phase)
+	}
+	inst := getExperiment(t, key)
+	if inst.Status.Message != "All components provisioned and ready" {
+		t.Fatalf("message = %q, want the all-ready message", inst.Status.Message)
+	}
+	if retries, exists := r.ReadinessWatchdogRetries(uid); exists || retries != 0 {
+		t.Fatalf("watchdog state after InProgress = (%d, %v), want cleared", retries, exists)
 	}
 }
 

@@ -60,10 +60,10 @@ var alpha4ExperimentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 // RBAC markers for the alpha4 reconciler. They generate the operator's
 // manager-role ClusterRole and cover every resource the reconciler creates,
 // updates, watches, and finalizes: the alpha4 SimulationExperiment and its
-// status/finalizers, the image-based database Deployments and the Translator
-// and PPS Deployments and Services, the database connection and registry-auth
-// Secrets, the Translator ConfigMap, and the deterministic runner
-// ServiceAccount.
+// status/finalizers, the image-based database Deployments and the Translator,
+// PPS, and EDS Deployments and Services, the database connection and
+// registry-auth Secrets, the Translator ConfigMap, and the deterministic
+// runner ServiceAccount.
 // +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=experiment.cbse.terministic.de,resources=simulationexperiments/finalizers,verbs=update
@@ -78,8 +78,9 @@ var alpha4ExperimentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 // components: image- and host-based database connection Secrets, image-based
 // database Deployments with exactly one cbse-registry-auth pull-Secret, the
 // two-container rootless BuildKit Translator Deployment and Service, the
-// single-container PPS Deployment and Service, the Translator ConfigMap, and
-// the deterministic runner ServiceAccount.
+// single-container PPS Deployment and Service, the single-container
+// Experimental Design Service Deployment and Service, the Translator
+// ConfigMap, and the deterministic runner ServiceAccount.
 //
 // This is the only reconciler registered by the operator's controller-manager;
 // alpha2 and alpha3 are not served or reconciled.
@@ -184,10 +185,10 @@ func (r *Alpha4SimulationExperimentReconciler) startProvisioning(ctx context.Con
 }
 
 // checkReadiness evaluates every readiness-gate component - both database
-// availability probes, the Translator Deployment, and the PPS Deployment
-// (ruling G) - and moves the experiment to InProgress only when every check
-// succeeds, so "All components provisioned and ready" is true for the full
-// provisioned set. Every not-ready observation feeds the bounded-retry
+// availability probes, the Translator Deployment, the PPS Deployment
+// (ruling G), and the EDS Deployment (ruling R5) - and moves the experiment to
+// InProgress only when every check succeeds, so "All components provisioned
+// and ready" is true for the full provisioned set. Every not-ready observation feeds the bounded-retry
 // watchdog (ruling R): the initial not-ready evaluation starts the watchdog
 // and requeues at the 5s cadence (fast polls keep the green path's readiness
 // latency unchanged), each counted retry (>= ReadinessRetryInterval after the
@@ -239,7 +240,7 @@ func (r *Alpha4SimulationExperimentReconciler) checkReadiness(ctx context.Contex
 		}
 	}
 
-	for _, suffix := range []string{"translator", "pps"} {
+	for _, suffix := range []string{"translator", "pps", "eds"} {
 		dep := &appsv1.Deployment{}
 		if err := r.Get(ctx, client.ObjectKey{Namespace: instance.Namespace, Name: instance.Name + "-" + suffix}, dep); err != nil {
 			if !errors.IsNotFound(err) {
@@ -372,6 +373,11 @@ func (r *Alpha4SimulationExperimentReconciler) validateExperiment(ctx context.Co
 		return fmt.Errorf("postProcessingService.image: %w", err)
 	}
 
+	eds := instance.Spec.ExperimentalDesignService
+	if err := ValidateDigestImage(eds.Image); err != nil {
+		return fmt.Errorf("experimentalDesignService.image: %w", err)
+	}
+
 	if _, err := EffectiveBuilderResources(t.BuilderResources); err != nil {
 		return fmt.Errorf("translator.builderResources: %w", err)
 	}
@@ -474,6 +480,9 @@ func (r *Alpha4SimulationExperimentReconciler) provisionComponents(ctx context.C
 		return err
 	}
 	if err := r.reconcilePPS(ctx, instance); err != nil {
+		return err
+	}
+	if err := r.reconcileEDS(ctx, instance); err != nil {
 		return err
 	}
 	if err := r.reconcileRunnerServiceAccount(ctx, instance); err != nil {
@@ -762,6 +771,68 @@ func (r *Alpha4SimulationExperimentReconciler) reconcilePPS(ctx context.Context,
 	return nil
 }
 
+// reconcileEDS reconciles the single-container experimental-design service
+// Deployment and the EDS Service from spec.experimentalDesignService, finally
+// honoring the previously required-but-inert CRD field. The EDS mirrors the
+// landed PPS provisioning: one container under the restricted profile so the
+// USER 1000:1000 image runs, the detaildb connection Secret (the existing
+// five-field endpoint contract) mounted read-only as the only volume, and the
+// EDS env contract in place of the PPS env. Image, port, command, and args
+// pass through verbatim from the spec; there is no builderImage or
+// registry-auth surface - the EDS pulls nothing.
+func (r *Alpha4SimulationExperimentReconciler) reconcileEDS(ctx context.Context, instance *experimentalpha4.SimulationExperiment) error {
+	eds := instance.Spec.ExperimentalDesignService
+
+	dep := &appsv1.Deployment{ObjectMeta: metav1ObjectName(instance, instance.Name+"-eds")}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
+		if err := controllerutil.SetControllerReference(instance, dep, r.Scheme); err != nil {
+			return err
+		}
+		labels := workloadLabels(instance.Name+"-eds", instance.Name, string(instance.UID))
+		dep.Labels = labels
+		dep.Spec.Selector = metav1Selector(labels)
+		dep.Spec.Template.ObjectMeta.Labels = labels
+		dep.Spec.Template.Spec.Volumes = []corev1.Volume{{
+			Name: "detaildb-connection",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName: instance.Name + "-detaildb-sct",
+			}},
+		}}
+		ctr := corev1.Container{
+			Name:  "eds",
+			Image: eds.Image,
+			Ports: []corev1.ContainerPort{{ContainerPort: eds.Port}},
+			Env:   edsEnvVars(instance),
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "detaildb-connection", MountPath: "/detaildb-connection", ReadOnly: true},
+			},
+			SecurityContext: restrictedSecurityContext(),
+		}
+		if len(eds.Command) > 0 {
+			ctr.Command = eds.Command
+		}
+		if len(eds.Args) > 0 {
+			ctr.Args = eds.Args
+		}
+		dep.Spec.Template.Spec.Containers = []corev1.Container{ctr}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reconcile EDS Deployment: %w", err)
+	}
+
+	svc := &corev1.Service{ObjectMeta: metav1ObjectName(instance, instance.Name+"-eds-svc")}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		if err := controllerutil.SetControllerReference(instance, svc, r.Scheme); err != nil {
+			return err
+		}
+		applyServiceSpec(svc, eds.ServiceType, eds.Port, eds.NodePort, instance.Name+"-eds")
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reconcile EDS Service: %w", err)
+	}
+	return nil
+}
+
 // reconcileRunnerServiceAccount reconciles the deterministic runner
 // ServiceAccount. It grants no workload permissions and disables service
 // account token automount. The ServiceAccount name is the deterministic
@@ -832,6 +903,27 @@ func ppsEnvVars(instance *experimentalpha4.SimulationExperiment) []corev1.EnvVar
 		{Name: "PPS_REQUEST_SUBJECT", Value: ppsRequestSubject(instance.Namespace, instance.Name)},
 		{Name: "PPS_EVALUATION_SUBJECT_TEMPLATE", Value: ppsEvaluationSubjectTemplate(instance.Namespace, instance.Name)},
 		{Name: "PPS_CONSUMER", Value: "pps-" + RunnerUIDPrefix(instance.UID)},
+		simulationProjectNamespaceEnvVar(),
+		simulationProjectEnvVar(),
+		simulationExperimentUIDEnvVar(),
+	}
+}
+
+// edsEnvVars returns the full alpha4 env var set injected into the EDS
+// container, mirroring ppsEnvVars: NATS_URL carries the same value the
+// Translator and PPS get, and EDS_AVAILABILITY_SUBJECT is the derived
+// per-experiment availability subject (the Scenario Manager's landed
+// availability subject). The batch subject is never baked - it arrives from
+// the SM's availability reply at runtime. The Detail DB connection arrives as
+// the mounted detaildb-connection Secret, not env. SIMULATIONPROJECTNAMESPACE,
+// SIMULATIONPROJECTNAME, and SIMULATIONEXPERIMENTUID are the downward-API
+// identity vars. The reference EDS validates every value at startup, so a
+// missing or inconsistent injection fails fast with a descriptive
+// configuration error rather than a runtime crash.
+func edsEnvVars(instance *experimentalpha4.SimulationExperiment) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "NATS_URL", Value: translatorNATSURL},
+		{Name: "EDS_AVAILABILITY_SUBJECT", Value: edsAvailabilitySubject(instance.Namespace, instance.Name)},
 		simulationProjectNamespaceEnvVar(),
 		simulationProjectEnvVar(),
 		simulationExperimentUIDEnvVar(),

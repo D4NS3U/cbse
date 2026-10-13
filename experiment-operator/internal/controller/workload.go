@@ -81,6 +81,17 @@ func ppsEvaluationSubjectTemplate(namespace, project string) string {
 	return fmt.Sprintf("cbse.%s.%s.pps.%%s.evaluation", namespace, project)
 }
 
+// edsAvailabilitySubject builds the canonical alpha4 EDS availability subject
+// cbse.<namespace>.<project>.eds.scenarios.available from the owning
+// experiment's namespace and name, mirroring ppsRequestSubject. The namespace
+// and project tokens are already validated DNS labels by the CRD admission
+// rule. It is the Scenario Manager's landed per-project availability subject:
+// the EDS sends its availability request to it, and the batch subject arrives
+// from the reply at runtime (never baked into the env contract).
+func edsAvailabilitySubject(namespace, project string) string {
+	return fmt.Sprintf("cbse.%s.%s.eds.scenarios.available", namespace, project)
+}
+
 // simulationProjectEnvVar returns the downward-API env var that surfaces the
 // reserved project label to workload containers as SIMULATIONPROJECTNAME.
 func simulationProjectEnvVar() corev1.EnvVar {
