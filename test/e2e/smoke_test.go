@@ -28,7 +28,11 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,10 +84,13 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 	})
 
 	// Verifies the experiment reaches InProgress and that the operator
-	// reconciled the complete owned resource set: the detaildb, resultdb, and
-	// translator Deployments carry owner references and the project label, and
-	// their matching Services, DB credential Secrets, and translator ConfigMap
-	// all exist.
+	// reconciled the complete owned resource set: the detaildb, resultdb,
+	// translator, and eds Deployments carry owner references and the project
+	// label, and their matching Services, DB credential Secrets, and
+	// translator ConfigMap all exist. The InProgress message asserts the
+	// full provisioned set (ruling R5: the EDS joins the readiness gate, so
+	// "All components provisioned and ready" is true only with the EDS
+	// Ready).
 	It("reaches InProgress with the complete owned resource set", func() {
 		key := types.NamespacedName{Namespace: namespace, Name: project}
 		Eventually(func(g Gomega) string {
@@ -93,14 +100,20 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			return experiment.Status.Phase
 		}, 4*time.Minute, 2*time.Second).Should(Equal("InProgress"))
 
-		for _, suffix := range []string{"detaildb", "resultdb", "translator"} {
+		// The R5 gate's message: the EDS Deployment is Ready because it joins
+		// the gate, so the InProgress message covers the full set.
+		ready := &experimentalpha4.SimulationExperiment{}
+		Expect(k8sClient.Get(ctx, key, ready)).To(Succeed())
+		Expect(ready.Status.Message).To(Equal("All components provisioned and ready"))
+
+		for _, suffix := range []string{"detaildb", "resultdb", "translator", "eds"} {
 			deployment := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-" + suffix}, deployment)).To(Succeed())
 			Expect(deployment.OwnerReferences).NotTo(BeEmpty())
 			Expect(deployment.Spec.Template.Labels).To(HaveKeyWithValue("experiment.cbse.terministic.de/project", project))
 		}
 
-		for _, suffix := range []string{"detaildb-svc", "resultdb-svc", "translator-svc"} {
+		for _, suffix := range []string{"detaildb-svc", "resultdb-svc", "translator-svc", "eds-svc"} {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-" + suffix}, &corev1.Service{})).To(Succeed())
 		}
 		for _, suffix := range []string{"detaildb-sct", "resultdb-sct"} {
@@ -109,12 +122,106 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: project + "-translator-cfg"}, &corev1.ConfigMap{})).To(Succeed())
 	})
 
-	// Verifies EDS intake persisted exactly one project and four deterministic
-	// scenario_status rows in Created state, each carrying the parameterset_id
-	// recipe_info the reference Translator's Detail DB lookup resolves. The full
-	// Created -> PostProcessing chain is asserted by the reference end-to-end
-	// spec below; this spec writes the persisted rows to the artifact directory
-	// for triage.
+	// Drives the reference EDS's JSON API (the non-interactive client mode,
+	// ruling R1) through the first three flow actions: Design, Save
+	// Experiment, and Start Experiment (batch 1). The design is fixed and
+	// deterministic: two entries per parameter (the EDS assigns ids 5 and 6
+	// in each entry table - the baseline ids 1-4 stay read-only), two
+	// recipes (parameterset_ids 5 and 6), and two scenarios per batch across
+	// two batches. Recipe 5 (arrival_rate 4, service_rate 8, run_duration
+	// 100, seed_policy 1005) carries the met-path scenarios (priority 1,
+	// 40 reps - the met verdict lands single-wave); recipe 6 (arrival_rate
+	// 5, service_rate 9, run_duration 120, seed_policy 1006) carries the
+	// loop-path scenarios (priority 2, 1 rep - deterministically not-met on
+	// wave 1 via the degenerate n<2 rule, topped up by the PPS). No scenario
+	// references the seeded baseline rows 1-4.
+	It("designs, saves, and starts the experiment through the reference EDS API", func() {
+		base, done := portForwardEDS(ctx, k8sClient, project, edsGreenLocalPort)
+		defer done()
+
+		// 1. Design: the two entries per parameter (ids 5 and 6 in every
+		// entry table), then the two recipes (parameterset_ids 5 and 6).
+		ids5, ids6 := map[string]int{}, map[string]int{}
+		for _, pair := range []struct {
+			parameter string
+			value     int
+		}{
+			{"arrival_rate", 4}, {"service_rate", 8}, {"run_duration", 100}, {"seed_policy", 1005},
+		} {
+			ids5[pair.parameter] = edsAddEntry(base, pair.parameter, pair.value)
+			Expect(ids5[pair.parameter]).To(Equal(5), "the first %s entry must take id 5", pair.parameter)
+		}
+		for _, pair := range []struct {
+			parameter string
+			value     int
+		}{
+			{"arrival_rate", 5}, {"service_rate", 9}, {"run_duration", 120}, {"seed_policy", 1006},
+		} {
+			ids6[pair.parameter] = edsAddEntry(base, pair.parameter, pair.value)
+			Expect(ids6[pair.parameter]).To(Equal(6), "the second %s entry must take id 6", pair.parameter)
+		}
+		recipe5 := edsAddRecipe(base, ids5["arrival_rate"], ids5["service_rate"], ids5["run_duration"], ids5["seed_policy"])
+		Expect(recipe5).To(Equal(5))
+		recipe6 := edsAddRecipe(base, ids6["arrival_rate"], ids6["service_rate"], ids6["run_duration"], ids6["seed_policy"])
+		Expect(recipe6).To(Equal(6))
+		// The two batch-1 scenarios: the met-path and the loop-path shapes.
+		edsAddScenario(base, 1, 40, 0.91, recipe5)
+		edsAddScenario(base, 2, 1, 0.92, recipe6)
+
+		// 2. Save Experiment: one transaction into the Detail DB (the eight
+		// entries and the two recipe locator rows).
+		savedEntries, savedRecipes := edsSave(base)
+		Expect(savedEntries).To(Equal(8))
+		Expect(savedRecipes).To(Equal(2))
+
+		// 3. Assert the Detail DB: the entry rows (ids 5-6 in every table),
+		// the recipes locator rows, the view's projection for the new ids,
+		// and the baseline rows 1-4 still present (the read-only baseline
+		// coexisting with the EDS rows).
+		Expect(queryDetailDatabase("SELECT id, value FROM public.arrival_rate ORDER BY id")).To(Equal("1|2\n2|3\n3|4\n4|5\n5|4\n6|5"))
+		Expect(queryDetailDatabase("SELECT id, value FROM public.service_rate ORDER BY id")).To(Equal("1|4\n2|5\n3|7\n4|8\n5|8\n6|9"))
+		Expect(queryDetailDatabase("SELECT id, value FROM public.run_duration ORDER BY id")).To(Equal("1|100\n2|120\n3|150\n4|180\n5|100\n6|120"))
+		Expect(queryDetailDatabase("SELECT id, value FROM public.seed_policy ORDER BY id")).To(Equal("1|1001\n2|1002\n3|1003\n4|1004\n5|1005\n6|1006"))
+		Expect(queryDetailDatabase("SELECT parameterset_id, arrival_rate_id, service_rate_id, run_duration_id, seed_policy_id FROM public.recipes ORDER BY parameterset_id")).To(Equal("1|1|1|1|1\n2|2|2|2|2\n3|3|3|3|3\n4|4|4|4|4\n5|5|5|5|5\n6|6|6|6|6"))
+		Expect(queryDetailDatabase("SELECT parameterset_id, arrival_rate, service_rate, run_duration, seed_policy FROM public.simulation_parameters ORDER BY parameterset_id")).To(Equal("1|2|4|100|1001\n2|3|5|120|1002\n3|4|7|150|1003\n4|5|8|180|1004\n5|4|8|100|1005\n6|5|9|120|1006"))
+
+		// 4. Start Experiment (batch 1): the pre-flight passes, the
+		// availability handshake completes, and the two scenarios publish.
+		batchID, published := edsStart(base)
+		Expect(published).To(Equal(2), "batch 1 must publish exactly the two designed scenarios")
+		Expect(batchID).NotTo(BeEmpty())
+
+		// 5. Assert the Core DB intake: the project registered and the two
+		// scenarios persisted with their design (priority, number_of_reps)
+		// and the parameterset_id recipe_info the Translator resolves through
+		// the view.
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf(
+				"SELECT COUNT(*) FROM project WHERE project_name='%s'",
+				project,
+			))
+		}, 2*time.Minute, 2*time.Second).Should(Equal("1"))
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf(
+				"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.recipe_info ? 'parameterset_id') FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
+				project,
+			))
+		}, 3*time.Minute, 2*time.Second).Should(Equal("2|2"))
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf(
+				"SELECT ss.priority, ss.number_of_reps FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' ORDER BY ss.priority, ss.id",
+				project,
+			))
+		}, 3*time.Minute, 2*time.Second).Should(Equal("1|40\n2|1"))
+	})
+
+	// Verifies the API-driven EDS intake (the two Start actions across the
+	// two batches) persisted exactly one project and four deterministic
+	// scenario_status rows, each carrying the parameterset_id recipe_info
+	// the reference Translator's Detail DB lookup resolves through the
+	// view. The full Created -> PostProcessing chain is asserted by the
+	// reference end-to-end spec below; this spec writes the persisted rows
+	// to the artifact directory for triage.
 	It("persists one project and four deterministic Created scenarios", func() {
 		Eventually(func() string {
 			return queryDatabase(fmt.Sprintf(
@@ -282,8 +389,11 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}, 2*time.Minute, 2*time.Second).Should(Equal(strconv.Itoa(numberOfReps)),
 			"number_of_computed_reps != number_of_reps (%d) for scenario %s", numberOfReps, scenarioID)
 
-		// 5. Query the Detail DB for the fixed row the translator looked up,
-		// so the result assertions below verify the exact lookup parameters.
+		// 5. Query the Detail DB (the simulation_parameters view) for the
+		// recipe row the translator looked up: the e2e's API-created
+		// parameterset (ids >= 5 - no assertion may depend on the seeded
+		// baseline rows 1-4), so the result assertions below verify the
+		// exact API-driven lookup parameters.
 		detailRow := queryDetailDatabase(fmt.Sprintf(
 			"SELECT arrival_rate, service_rate, run_duration, seed_policy FROM public.simulation_parameters WHERE parameterset_id=%s",
 			parametersetID,
@@ -336,6 +446,47 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}
 		Expect(effectiveSeeds).To(HaveLen(numberOfReps),
 			"expected %d distinct effective seeds, got %d", numberOfReps, len(effectiveSeeds))
+	})
+
+	// Re-arms the reference EDS API mid-run (D4: one Start = one handshake +
+	// one batch publish, and the Scenario Manager accepts multiple batches
+	// over time on the same InProgress experiment): two more scenarios with
+	// the same met-path/loop-path shapes on the same recipes, the explicit
+	// Save (the idempotent upsert of the already-saved entries and recipes),
+	// and the second Start - the delta publish: only the not-yet-published
+	// scenarios leave the EDS (an empty delta would be refused).
+	It("re-arms the reference EDS API with the second scenario batch", func() {
+		base, done := portForwardEDS(ctx, k8sClient, project, edsGreenLocalPort)
+		defer done()
+
+		// The two batch-2 scenarios: the same met-path and loop-path shapes,
+		// bound to the same recipes (parameterset_ids 5 and 6).
+		edsAddScenario(base, 1, 40, 0.93, 5)
+		edsAddScenario(base, 2, 1, 0.94, 6)
+
+		// Save (the design's entries and recipes are unchanged; the save is
+		// the single-transaction idempotent upsert) and Start (the delta).
+		savedEntries, savedRecipes := edsSave(base)
+		Expect(savedEntries).To(Equal(8))
+		Expect(savedRecipes).To(Equal(2))
+		batchID, published := edsStart(base)
+		Expect(published).To(Equal(2), "batch 2 must publish exactly the two new scenarios (the delta)")
+		Expect(batchID).NotTo(BeEmpty())
+
+		// The Core DB now carries all four scenarios across the two batches,
+		// each with its design and the parameterset_id recipe_info.
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf(
+				"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.recipe_info ? 'parameterset_id') FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
+				project,
+			))
+		}, 3*time.Minute, 2*time.Second).Should(Equal("4|4"))
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf(
+				"SELECT ss.priority, ss.number_of_reps FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' ORDER BY ss.priority, ss.id",
+				project,
+			))
+		}, 3*time.Minute, 2*time.Second).Should(Equal("1|40\n1|40\n2|1\n2|1"))
 	})
 
 	// Convergence spec for the live smoke profile (ruling Q6: determinism
@@ -528,6 +679,40 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}
 	})
 
+	// Proves the SBO finalization protocol's InProgress diagnostic (E3):
+	// with all four scenarios terminally verified and the finalization batch
+	// still outstanding, the Scenario Manager's aggregate pass merge-patches
+	// status.message to "awaiting EDS finalization" (never the phase, never
+	// the verdict - the operator's terminal derivation overwrites the message
+	// only at the phase transition). The experiment idles InProgress, awaiting
+	// the explicit Finish; the message lands on the next aggregate tick, so
+	// it is observed with Eventually.
+	It("holds the experiment InProgress with the awaiting-EDS-finalization diagnostic", func() {
+		key := types.NamespacedName{Namespace: namespace, Name: project}
+		Eventually(func() string {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			Expect(k8sClient.Get(ctx, key, experiment)).To(Succeed())
+			if experiment.Status.Phase != "InProgress" {
+				return experiment.Status.Phase + ": " + experiment.Status.Message
+			}
+			return experiment.Status.Message
+		}, 2*time.Minute, 2*time.Second).Should(Equal("awaiting EDS finalization"),
+			"the aggregate pass's awaiting-EDS-finalization diagnostic did not land while InProgress within 2 minutes")
+	})
+
+	// Drives the fourth flow action (the SBO ruling): Finish Experiment
+	// publishes the finalization batch (scenarios [], final: true) through
+	// the reference EDS API. Finalization is irrevocable (a second Finish or
+	// any later Start is refused), and the Finished verdict asserted next
+	// required it (the finalization-aware rule: all scenarios terminally
+	// verified AND final received).
+	It("finishes the experiment through the reference EDS API", func() {
+		base, done := portForwardEDS(ctx, k8sClient, project, edsGreenLocalPort)
+		defer done()
+		finalBatchID := edsFinish(base)
+		Expect(finalBatchID).NotTo(BeEmpty(), "the finalization batch must carry a batch id")
+	})
+
 	// Proves the live Finished chain end-to-end (D10): after the convergence
 	// spec above has driven all four scenarios to the terminal Finished
 	// state, the Scenario Manager's aggregation pass reports
@@ -611,7 +796,8 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 
 	// Verifies a metadata-only update (an annotation timestamp) is reconciled
 	// idempotently: the operator does not create duplicate owned Deployments,
-	// so the project-labeled Deployment count stays at four.
+	// so the project-labeled Deployment count stays at five (detaildb,
+	// resultdb, translator, PPS, and EDS).
 	It("reconciles an idempotent metadata update without duplicating children", func() {
 		key := types.NamespacedName{Namespace: namespace, Name: project}
 		experiment := &experimentalpha4.SimulationExperiment{}
@@ -627,7 +813,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			g.Expect(k8sClient.List(ctx, deployments, client.InNamespace(namespace), client.MatchingLabels{
 				"experiment.cbse.terministic.de/project": project,
 			})).To(Succeed())
-			g.Expect(deployments.Items).To(HaveLen(4))
+			g.Expect(deployments.Items).To(HaveLen(5))
 		}, 10*time.Second, time.Second).Should(Succeed())
 	})
 
@@ -781,12 +967,15 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		Expect(k8sClient.Create(ctx, red)).To(Succeed())
 
 		// The expected partial state: provisionComponents reconciles
-		// detaildb -> resultdb -> translator -> PPS -> runner
+		// detaildb -> resultdb -> translator -> PPS -> EDS -> runner
 		// ServiceAccount, and reconcilePPS creates the PPS Deployment before
 		// its Service - so everything before the failing PPS Service exists
-		// and everything after it was never created.
+		// and everything after it (the EDS Deployment and Service, the runner
+		// ServiceAccount) was never created.
 		wantState := func(state ownedChildState) string {
-			if state.name == redName+"-pps-svc" || state.kind == "ServiceAccount" {
+			if state.name == redName+"-pps-svc" ||
+				state.name == redName+"-eds" || state.name == redName+"-eds-svc" ||
+				state.kind == "ServiceAccount" {
 				return "absent"
 			}
 			return "present"
@@ -944,9 +1133,9 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 
 		// 2. The full-but-not-ready child set: provisioning completed
 		// (every owned child exists - the databases, the translator, the
-		// PPS, and the runner ServiceAccount), the databases (the green
-		// images) are healthy and probed ready, and the translator is stuck
-		// not-ready on the failing image pull.
+		// PPS, the EDS, and the runner ServiceAccount), the databases (the
+		// green images) are healthy and probed ready, and the translator is
+		// stuck not-ready on the failing image pull.
 		states := observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID)
 		for _, state := range states {
 			Expect(state.state).To(Equal("present"),
@@ -1019,12 +1208,11 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 	// deltas - the name and a runner jobTemplate carrying
 	// activeDeadlineSeconds 1 (the JobTemplate policy's allow-listed Job-level
 	// field, validated > 0; the SM's effective-Job builder passes it through
-	// to every created runner Job). The one-shot eds-mock (the green CR's
-	// experimentalDesignService.image, launched with the installation's env
-	// contract, PROJECT_NAME = the red project, and EDS_KEEP_ALIVE disabled
-	// so it publishes the standard batch and exits) serves the red batch;
-	// the mock's own bounded retry covers the window before the red
-	// experiment reaches InProgress. Every runner Job is killed one second
+	// to every created runner Job). The reference EDS the red CR inherits
+	// from the green clone serves the red batch through the same API helper
+	// the green spec drives (design -> Save -> Start; never finishing - the
+	// fail-fast invariant: Failed never awaits final). Every runner Job is
+	// killed one second
 	// after it becomes active, so the Job's own Failed condition
 	// (DeadlineExceeded) is the observed failure the state machine consumes:
 	// ObservationFailed -> the guarded InProcessing -> Failed -> the
@@ -1040,8 +1228,6 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 	It("drives a deadline-exceeded runner Job through the live Failed chain", func() {
 		redName := project + "-fcrash"
 		redKey := types.NamespacedName{Namespace: namespace, Name: redName}
-		mockPodName := redName + "-eds-mock"
-		mockPodKey := types.NamespacedName{Namespace: namespace, Name: mockPodName}
 
 		// Builder: deep-copy the live green experiment, rename, apply the
 		// single red delta - a runner jobTemplate with activeDeadlineSeconds
@@ -1066,17 +1252,44 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}
 		Expect(k8sClient.Create(ctx, red)).To(Succeed())
 
-		// Batch: launch the unchanged eds-mock one-shot for the red project
-		// with the installation's env contract (test/e2e/manifests/base/
-		// stack.yaml): the stack's NATS_URL, the red project's canonical
-		// availability subject (cbse.<ns>.<project>.eds.scenarios.available),
-		// PROJECT_NAME = the red project, and the green profile's two-batch
-		// shape - with EDS_KEEP_ALIVE disabled so the mock publishes the
-		// standard batch and exits instead of the installation's keep-alive
-		// loop. The mock's own bounded retry (availability requests every
-		// ~2s) covers the window before the red experiment reaches
-		// InProgress.
-		launchEdsMockOneShot(red.Spec.ExperimentalDesignService.Image, namespace, redName)
+		// Batch: drive the red experiment's reference EDS through the same
+		// API helper the green spec uses (the red CR inherits the reference
+		// EDS from the green clone): the same fixed design (two entries per
+		// parameter, the two recipes, two scenarios), Save, and Start. The
+		// experiment is InProgress by the time the handshake runs, so the
+		// batch publishes on the first attempt.
+		base, done := portForwardEDS(ctx, k8sClient, redName, edsRedLocalPort)
+		defer done()
+		ids5, ids6 := map[string]int{}, map[string]int{}
+		for _, pair := range []struct {
+			parameter string
+			value     int
+		}{
+			{"arrival_rate", 4}, {"service_rate", 8}, {"run_duration", 100}, {"seed_policy", 1005},
+		} {
+			ids5[pair.parameter] = edsAddEntry(base, pair.parameter, pair.value)
+			Expect(ids5[pair.parameter]).To(Equal(5))
+		}
+		for _, pair := range []struct {
+			parameter string
+			value     int
+		}{
+			{"arrival_rate", 5}, {"service_rate", 9}, {"run_duration", 120}, {"seed_policy", 1006},
+		} {
+			ids6[pair.parameter] = edsAddEntry(base, pair.parameter, pair.value)
+			Expect(ids6[pair.parameter]).To(Equal(6))
+		}
+		recipe5 := edsAddRecipe(base, ids5["arrival_rate"], ids5["service_rate"], ids5["run_duration"], ids5["seed_policy"])
+		recipe6 := edsAddRecipe(base, ids6["arrival_rate"], ids6["service_rate"], ids6["run_duration"], ids6["seed_policy"])
+		Expect(recipe5).To(Equal(5))
+		Expect(recipe6).To(Equal(6))
+		edsAddScenario(base, 1, 40, 0.91, recipe5)
+		edsAddScenario(base, 2, 1, 0.92, recipe6)
+		savedEntries, savedRecipes := edsSave(base)
+		Expect(savedEntries).To(Equal(8))
+		Expect(savedRecipes).To(Equal(2))
+		_, published := edsStart(base)
+		Expect(published).To(Equal(2))
 
 		// 1. The readiness gate passes (the standard image-form profile):
 		// the experiment reaches InProgress, so its scenarios are admitted
@@ -1088,24 +1301,32 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}, 4*time.Minute, 2*time.Second).Should(Equal("InProgress"),
 			"the Failed-chain experiment did not reach InProgress within 4 minutes")
 
-		// 2. The one-shot mock fixture published both standard batches and
-		// exited: the red project's batch intake is in.
-		Eventually(func(g Gomega) corev1.PodPhase {
-			pod := &corev1.Pod{}
-			g.Expect(k8sClient.Get(ctx, mockPodKey, pod)).To(Succeed())
-			return pod.Status.Phase
-		}, 5*time.Minute, 2*time.Second).Should(Equal(corev1.PodSucceeded),
-			"the eds-mock one-shot did not publish the standard batch and exit within 5 minutes")
+		// 2. The red project's batch intake is in: the two scenarios are
+		// persisted with their design and the parameterset_id recipe_info.
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf(
+				"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.recipe_info ? 'parameterset_id') FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
+				redName,
+			))
+		}, 3*time.Minute, 2*time.Second).Should(Equal("2|2"))
+		Eventually(func() string {
+			return queryDatabase(fmt.Sprintf(
+				"SELECT ss.priority, ss.number_of_reps FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s' ORDER BY ss.priority, ss.id",
+				redName,
+			))
+		}, 3*time.Minute, 2*time.Second).Should(Equal("1|40\n2|1"))
 
 		// 3. The chain. Every runner Job is killed one second after it
 		// becomes active (the jobTemplate's activeDeadlineSeconds 1), so the
 		// Job's own Failed condition (DeadlineExceeded) is the observed
 		// failure the state machine consumes: ObservationFailed -> the
 		// guarded InProcessing -> Failed -> the scenario-aggregate verdict
-		// Failed (fail-fast: any scenario Failed) -> the operator derives the
-		// absorbing terminal phase. The bound covers provisioning (~1 min) +
-		// the batch + the Translator build/push + the deadline kill + the
-		// observation and aggregation ticks; 10 minutes is generous. Both
+		// Failed (fail-fast: any scenario Failed - no final required, and
+		// none was published: the fail-fast invariant) -> the operator
+		// derives the absorbing terminal phase. The bound covers provisioning
+		// (~1 min) + the batch + the Translator build/push + the deadline
+		// kill + the observation and aggregation ticks; 10 minutes is
+		// generous. Both
 		// values are observed in this single poll loop (the Finished-chain
 		// spec's ordering idiom): the poll on which the verdict first reads
 		// "Failed" is recorded, likewise for the phase, so the
@@ -1126,7 +1347,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			}
 			return verdictSeenAtPoll != 0 && phaseSeenAtPoll != 0
 		}, 10*time.Minute, 5*time.Second).Should(BeTrue(),
-			"the scenario-aggregate verdict and the derived terminal phase did not both read Failed within 10 minutes (inspect the runner Jobs, the SM/PPS logs, and the mock Pod)")
+			"the scenario-aggregate verdict and the derived terminal phase did not both read Failed within 10 minutes (inspect the runner Jobs and the SM/PPS logs)")
 
 		Expect(verdictSeenAtPoll).To(BeNumerically("<=", phaseSeenAtPoll),
 			"the scenarioManagerVerdict report (first observed at poll %d) must appear at or before the derived phase (poll %d): the report precedes the derivation",
@@ -1184,9 +1405,9 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		// 6. The complete owned set is present before deletion (the
 		// image-form profile owns everything: the two databases'
 		// Deployments/Services/Secrets, the translator ConfigMap/Deployment/
-		// Service, the PPS Deployment/Service, and the deterministic runner
-		// ServiceAccount) - so the GC cascade below has the full set to
-		// cascade over.
+		// Service, the PPS Deployment/Service, the EDS Deployment/Service, and
+		// the deterministic runner ServiceAccount) - so the GC cascade below
+		// has the full set to cascade over.
 		states := observeOwnedChildren(ctx, k8sClient, namespace, redName, red.UID)
 		for _, state := range states {
 			Expect(state.state).To(Equal("present"),
@@ -1272,15 +1493,6 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 			"SELECT COUNT(*) FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
 			redName,
 		))).To(Equal("0"), "the red project's scenario rows must be cascade-deleted with the project row")
-
-		// 10. Teardown the one-shot mock fixture: the spec's own Pod, never
-		// an owned child - it is completed (Succeeded) and simply removed.
-		Expect(k8sClient.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: mockPodName, Namespace: namespace}})).To(Succeed())
-		Eventually(func() bool {
-			err := k8sClient.Get(ctx, mockPodKey, &corev1.Pod{})
-			return apierrors.IsNotFound(err)
-		}, 90*time.Second, 2*time.Second).Should(BeTrue(),
-			"the eds-mock one-shot fixture did not disappear within 90 seconds")
 	})
 
 	// Verifies garbage collection: deleting the SimulationExperiment removes
@@ -1436,6 +1648,182 @@ func writeExperimentStatusArtifact(name, contents string) {
 	Expect(os.WriteFile(filepath.Join(directory, name), []byte(contents+"\n"), 0o644)).To(Succeed())
 }
 
+// ---- reference EDS API driver (the non-interactive client mode, ruling R1) ----
+//
+// The API-driven specs port-forward the experiment's EDS Service and issue
+// the same JSON calls the embedded UI page is a thin Facade over (the green
+// experiment's flow: design -> Save -> Start -> re-arm -> Finish; the red
+// fcrash experiment's batch: the same helper, Save + Start, never finishing).
+// Every request body matches the EDS server package's API byte-for-byte;
+// every response is decoded into a typed shape with a strict status
+// assertion. Per W1 settlement erratum 1 the specs assert the Detail DB
+// rows, the Core DB scenario rows, and the CR state - never an ack payload
+// on the wire (the e2e publishes without a reply subject).
+
+// edsGreenLocalPort and edsRedLocalPort are the fixed deterministic local
+// ports the API-driven specs bind for the green and the red experiment's
+// EDS Service respectively. The Ordered container runs the specs
+// sequentially and each defers its own port-forward kill, so the two fixed
+// ports never collide.
+const (
+	edsGreenLocalPort = 18082
+	edsRedLocalPort   = 18083
+)
+
+// portForwardEDS backgrounds `kubectl port-forward svc/<exp>-eds-svc
+// <localPort>:<crPort>` (the CR's spec.experimentalDesignService.port, 8082
+// in the smoke profile), waits until the local endpoint accepts TCP
+// connections, and returns the local base URL plus a cleanup func the
+// caller defers (the port-forward kill). On failure it persists the
+// port-forward output to the artifact directory before failing the spec.
+func portForwardEDS(ctx context.Context, k8sClient client.Client, expName string, localPort int) (string, func()) {
+	namespace := requiredEnv("CBSE_TEST_NAMESPACE")
+	experiment := &experimentalpha4.SimulationExperiment{}
+	Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: expName}, experiment)).To(Succeed())
+	crPort := int(experiment.Spec.ExperimentalDesignService.Port)
+	cmd := exec.Command(
+		requiredEnv("KUBECTL"),
+		"--kubeconfig", requiredEnv("KUBECONFIG"),
+		"port-forward", "-n", namespace,
+		fmt.Sprintf("svc/%s-eds-svc", expName),
+		fmt.Sprintf("%d:%d", localPort, crPort),
+	)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf
+	Expect(cmd.Start()).To(Succeed(), "kubectl port-forward for %s-eds-svc failed to start", expName)
+	cleanup := func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", localPort), time.Second)
+		if err == nil {
+			_ = conn.Close()
+			return fmt.Sprintf("http://127.0.0.1:%d", localPort), cleanup
+		}
+		if time.Now().After(deadline) {
+			cleanup()
+			writeExperimentStatusArtifact(fmt.Sprintf("eds-port-forward-%s.txt", expName), buf.String())
+			Fail(fmt.Sprintf("kubectl port-forward for %s-eds-svc did not accept connections within 90 seconds: %s", expName, buf.String()))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// edsDo runs one request against the EDS API base URL and returns the
+// response status and body; it is the single transport seam for the
+// API-driven specs.
+func edsDo(base, method, path string, payload any) (int, []byte) {
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		Expect(err).NotTo(HaveOccurred())
+		body = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequest(method, base+path, body)
+	Expect(err).NotTo(HaveOccurred())
+	resp, err := http.DefaultClient.Do(req)
+	Expect(err).NotTo(HaveOccurred(), "the EDS API %s %s did not transport", method, path)
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	Expect(err).NotTo(HaveOccurred())
+	return resp.StatusCode, data
+}
+
+// edsAddEntry posts POST /api/entries and returns the EDS-assigned entry id
+// (>= 5; the baseline ids 1-4 are refused as read-only).
+func edsAddEntry(base, parameter string, value int) int {
+	code, data := edsDo(base, http.MethodPost, "/api/entries", map[string]any{"parameter": parameter, "value": value})
+	Expect(code).To(Equal(http.StatusOK), "POST /api/entries (%s=%d) refused (HTTP %d): %s", parameter, value, code, data)
+	var out struct {
+		ID int `json:"id"`
+	}
+	Expect(json.Unmarshal(data, &out)).To(Succeed())
+	Expect(out.ID).To(BeNumerically(">=", 5), "the EDS must assign ids >= 5 (the baseline 1-4 is read-only); got %d", out.ID)
+	return out.ID
+}
+
+// edsAddRecipe posts POST /api/recipes and returns the EDS-assigned
+// parameterset_id (>= 5).
+func edsAddRecipe(base string, arrivalRateID, serviceRateID, runDurationID, seedPolicyID int) int {
+	code, data := edsDo(base, http.MethodPost, "/api/recipes", map[string]any{
+		"arrival_rate_id": arrivalRateID,
+		"service_rate_id": serviceRateID,
+		"run_duration_id": runDurationID,
+		"seed_policy_id":  seedPolicyID,
+	})
+	Expect(code).To(Equal(http.StatusOK), "POST /api/recipes (%d,%d,%d,%d) refused (HTTP %d): %s", arrivalRateID, serviceRateID, runDurationID, seedPolicyID, code, data)
+	var out struct {
+		ParametersetID int `json:"parameterset_id"`
+	}
+	Expect(json.Unmarshal(data, &out)).To(Succeed())
+	Expect(out.ParametersetID).To(BeNumerically(">=", 5))
+	return out.ParametersetID
+}
+
+// edsAddScenario posts POST /api/scenarios and returns the scenario's
+// in-process index.
+func edsAddScenario(base string, priority, numberOfReps int, confidenceMetric float64, parametersetID int) int {
+	code, data := edsDo(base, http.MethodPost, "/api/scenarios", map[string]any{
+		"priority":          priority,
+		"number_of_reps":    numberOfReps,
+		"confidence_metric": confidenceMetric,
+		"parameterset_id":   parametersetID,
+	})
+	Expect(code).To(Equal(http.StatusOK), "POST /api/scenarios (priority=%d, parameterset_id=%d) refused (HTTP %d): %s", priority, parametersetID, code, data)
+	var out struct {
+		Index int `json:"index"`
+	}
+	Expect(json.Unmarshal(data, &out)).To(Succeed())
+	return out.Index
+}
+
+// edsSave posts POST /api/save (the Save Experiment action) and returns the
+// persisted entry and recipe counts.
+func edsSave(base string) (int, int) {
+	code, data := edsDo(base, http.MethodPost, "/api/save", nil)
+	Expect(code).To(Equal(http.StatusOK), "POST /api/save refused (HTTP %d): %s", code, data)
+	var out struct {
+		SavedEntries int `json:"saved_entries"`
+		SavedRecipes int `json:"saved_recipes"`
+	}
+	Expect(json.Unmarshal(data, &out)).To(Succeed())
+	return out.SavedEntries, out.SavedRecipes
+}
+
+// edsStart posts POST /api/start (the Start Experiment action) and returns
+// the batch id and the number of published scenarios (the delta).
+func edsStart(base string) (string, int) {
+	code, data := edsDo(base, http.MethodPost, "/api/start", nil)
+	Expect(code).To(Equal(http.StatusOK), "POST /api/start refused (HTTP %d): %s", code, data)
+	var out struct {
+		BatchID   string `json:"batch_id"`
+		Status    string `json:"status"`
+		Published int    `json:"published"`
+	}
+	Expect(json.Unmarshal(data, &out)).To(Succeed())
+	Expect(out.Status).To(Equal("inserted"), "the Start publish must report inserted; got %q", out.Status)
+	Expect(out.BatchID).NotTo(BeEmpty())
+	return out.BatchID, out.Published
+}
+
+// edsFinish posts POST /api/finish (the Finish Experiment action - the
+// finalization batch, irrevocable) and returns the finalization batch id.
+func edsFinish(base string) string {
+	code, data := edsDo(base, http.MethodPost, "/api/finish", nil)
+	Expect(code).To(Equal(http.StatusOK), "POST /api/finish refused (HTTP %d): %s", code, data)
+	var out struct {
+		BatchID string `json:"batch_id"`
+		Status  string `json:"status"`
+	}
+	Expect(json.Unmarshal(data, &out)).To(Succeed())
+	Expect(out.Status).To(Equal("inserted"), "the Finish publish must report inserted; got %q", out.Status)
+	Expect(out.BatchID).NotTo(BeEmpty())
+	return out.BatchID
+}
+
 // errValImage is the single red delta of the Validation-Error spec: a
 // tag-form image reference without a digest, which the operator's
 // validateExperiment rejects at the pre-creation gate (FEATURE.md D1,
@@ -1492,8 +1880,8 @@ type ownedChild struct {
 
 // ownedChildren enumerates every owned resource name the operator provisions
 // for an experiment named name, in provisionComponents order (detaildb ->
-// resultdb -> translator -> PPS): the four component Deployments, the four
-// Services, the two database connection Secrets, and the translator
+// resultdb -> translator -> PPS -> EDS): the five component Deployments, the
+// five Services, the two database connection Secrets, and the translator
 // ConfigMap. The runner ServiceAccount is named from the experiment UID
 // rather than the experiment name and is appended by observeOwnedChildren
 // through runnerServiceAccountName.
@@ -1510,6 +1898,8 @@ func ownedChildren(name string) []ownedChild {
 		{kind: "Service", obj: &corev1.Service{}, name: name + "-translator-svc"},
 		{kind: "Deployment", obj: &appsv1.Deployment{}, name: name + "-pps"},
 		{kind: "Service", obj: &corev1.Service{}, name: name + "-pps-svc"},
+		{kind: "Deployment", obj: &appsv1.Deployment{}, name: name + "-eds"},
+		{kind: "Service", obj: &corev1.Service{}, name: name + "-eds-svc"},
 	}
 }
 
@@ -1567,37 +1957,4 @@ func ownedChildrenText(states []ownedChildState) string {
 		lines = append(lines, state.kind+" "+state.name+"="+state.state)
 	}
 	return strings.Join(lines, "\n")
-}
-
-// launchEdsMockOneShot launches the green experiment's eds-mock image as a
-// one-shot Pod named <redName>-eds-mock in the smoke namespace, replicating
-// the installation's eds-mock env contract (test/e2e/manifests/base/
-// stack.yaml) for the red project: the stack's NATS_URL, the red project's
-// canonical availability subject (cbse.<ns>.<project>.eds.scenarios.available),
-// PROJECT_NAME = the red project, and the green profile's two-batch shape -
-// with EDS_KEEP_ALIVE disabled so the mock publishes the standard batch and
-// exits instead of the installation's keep-alive loop. It follows the suite's
-// kubectl pattern (requiredEnv KUBECTL/KUBECONFIG, the smoke namespace).
-func launchEdsMockOneShot(image, namespace, redName string) {
-	kubectl := requiredEnv("KUBECTL")
-	cmd := exec.Command(
-		kubectl,
-		"--kubeconfig", requiredEnv("KUBECONFIG"),
-		"run", redName+"-eds-mock",
-		"--namespace", namespace,
-		"--image", image,
-		"--restart=Never",
-		"--env", "NATS_URL=nats://sm-eds-nats:4222",
-		"--env", "AVAILABILITY_SUBJECT="+fmt.Sprintf("cbse.%s.%s.eds.scenarios.available", namespace, redName),
-		"--env", "PROJECT_NAME="+redName,
-		"--env", "TOTAL_BATCHES=2",
-		"--env", "SCENARIOS_PER_BATCH=2",
-		"--env", "EDS_KEEP_ALIVE=false",
-	)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	Expect(cmd.Run()).To(Succeed(),
-		"the eds-mock one-shot launch failed: stdout=%q stderr=%q", strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 }

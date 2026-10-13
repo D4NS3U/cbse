@@ -1,10 +1,13 @@
 # CBSE full-stack smoke test
 
 This suite deploys the current Experiment Operator and Scenario Manager with real
-PostgreSQL and NATS/JetStream dependencies. An EDS support image supplies two
-deterministic batches and acts as a keep-alive mock for components that are not
-implemented yet. The alpha4 reference Translator, runner base, and Scenario
-Detail Database are built from `component-templates/`.
+PostgreSQL and NATS/JetStream dependencies. The per-experiment reference
+Experimental Design Service (the EDS) is driven by the suite through its JSON
+API (design -> Save Experiment -> Start Experiment -> re-arm -> Finish
+Experiment); the EDS mock remains a built image for the unit/integration
+tiers only (it is no longer part of the smoke stack). The alpha4 reference
+Translator, runner base, Scenario Detail Database, and reference Post
+Processing Service are built from `component-templates/`.
 
 ## Prerequisites
 
@@ -19,11 +22,12 @@ Detail Database are built from `component-templates/`.
 - Access to the K3s API server at `https://192.168.101.245:6443`.
 - Access to the University Harbor repository prefix
   `registry.unibw.de/i31bdase/cbse-test` from both the agent and the K3s node.
-  All six component images use the **nested** layout, one dedicated repository
+  All eight component images use the **nested** layout, one dedicated repository
   per component below the prefix
   (`${CBSE_REGISTRY}/<component>:<version>`), including the reference
   Scenario Detail Database
-  (`${CBSE_REGISTRY}/scenario-detail-database:<version>`). Generated runner
+  (`${CBSE_REGISTRY}/scenario-detail-database:<version>`).
+  Generated runner
   images are published to a separate `${CBSE_REGISTRY}/cbse-test-runner`
   repository.
 - The checked-in source-image lock `test/e2e/images.lock.env` (four locked
@@ -44,15 +48,16 @@ make test-smoke \
   CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
 ```
 
-A smoke build builds the exact mandatory component set
-(`exop,sm,eds-mock,translator,runner-base,scenario-detail-database`); a subset
-or superset is rejected before any build or registry mutation. `build-images.sh`
+A smoke build builds the default alpha4 reference set
+(`exop,sm,eds-mock,eds,translator,runner-base,scenario-detail-database,pps`);
+`build-images.sh`
 publishes each component in the nested layout with a canonical tag
 (`${CBSE_REGISTRY}/<component>:<version>`) and an immutable provenance tag.
 The pushed digests are
-recorded in `images.env` (`OPERATOR_IMAGE`, `SM_IMAGE`, `EDS_IMAGE`,
-`TRANS_IMAGE`, `RUNNER_BASE_IMAGE`, `DETAIL_DB_IMAGE`); the digest is the
-immutable reference.
+recorded in
+`images.env` (`OPERATOR_IMAGE`, `SM_IMAGE`, `EDS_IMAGE`, `EDS_REFERENCE_IMAGE`,
+`TRANS_IMAGE`, `RUNNER_BASE_IMAGE`, `DETAIL_DB_IMAGE`, `PPS_IMAGE`); the
+digest is the immutable reference.
 
 An authorized administrator provisions the dedicated Docker configuration and the shared Kubernetes Secret outside this repository. Do not use a credential helper for the configuration and do not commit it.
 
@@ -63,14 +68,16 @@ SKIP_BUILD=1 \
 OPERATOR_IMAGE=registry.unibw.de/i31bdase/cbse-test/exop@sha256:... \
 SM_IMAGE=registry.unibw.de/i31bdase/cbse-test/sm@sha256:... \
 EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test/eds-mock@sha256:... \
+EDS_REFERENCE_IMAGE=registry.unibw.de/i31bdase/cbse-test/eds@sha256:... \
 TRANS_IMAGE=registry.unibw.de/i31bdase/cbse-test/translator@sha256:... \
 RUNNER_BASE_IMAGE=registry.unibw.de/i31bdase/cbse-test/runner-base@sha256:... \
 DETAIL_DB_IMAGE=registry.unibw.de/i31bdase/cbse-test/scenario-detail-database@sha256:... \
+PPS_IMAGE=registry.unibw.de/i31bdase/cbse-test/pps@sha256:... \
 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config> \
 make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
 ```
 
-The six `*_IMAGE` variables are all required when `SKIP_BUILD=1`; a mutable
+The eight `*_IMAGE` variables are all required when `SKIP_BUILD=1`; a mutable
 (floating-tag) reference is rejected. Every component image uses the nested
 digest form (`${CBSE_REGISTRY}/<component>@sha256:<hex>`), including the
 Detail Database (`${CBSE_REGISTRY}/scenario-detail-database@sha256:<hex>`).
@@ -92,6 +99,41 @@ make test-e2e-retained KUBECONFIG=/path/to/config
 ```
 
 This intentionally skips only the final garbage-collection assertion. The preceding provisioning, persistence, and idempotence assertions still run. Clean the retained run with `make test-clean RUN_ID=<id> KUBECONFIG=/path/to/config`.
+
+## The experiment flow (the API-driven EDS)
+
+The green experiment provisions the **reference EDS** (not the mock) from
+`spec.experimentalDesignService`. Once the experiment is `InProgress` (the
+readiness gate includes the EDS), the suite port-forwards the EDS Service
+(`svc/<project>-eds-svc`, port 8082) and drives the four-step flow through the
+EDS's JSON API - the same contract the embedded UI page issues:
+
+1. **Design:** fixed deterministic entries (ids >= 5; the baseline ids 1-4
+   stay read-only) and two recipes, then two scenarios (the met-path shape
+   `priority 1, number_of_reps 40` and the loop-path shape `priority 2,
+   number_of_reps 1`).
+2. **Save Experiment:** one transaction into the Scenario Detail Database;
+   the suite asserts the entry rows, the `recipes` locator rows, the
+   `simulation_parameters` view's projection, and the coexisting baseline
+   rows 1-4.
+3. **Start Experiment:** the availability handshake plus the first batch
+   publish; the suite asserts the Core DB intake.
+4. **Re-arm:** two more scenarios, Save, Start - the delta publish (only the
+   not-yet-published scenarios leave the EDS).
+5. **Finish Experiment:** after all four scenarios are terminally verified
+   and the CR carries the `InProgress` message
+   "awaiting EDS finalization", the suite publishes the finalization batch
+   (`scenarios: []`, `final: true`) and asserts the terminal `Finished`
+   phase (the finalization-aware verdict required the final).
+
+The red `fcrash` spec delivers its batch through the same API helper against
+its own reference EDS (Save + Start, never finishing - `Failed` is fail-fast
+and never awaits `final`). The EDS mock (`test/mocks/eds/eds_mock.py`) is no
+longer part of the smoke stack; it stays for the unit/integration tiers, now
+with the finalization step (its availability request declares
+`experiment_type: "standard"` and it verifies the SM's verbatim echo; after
+its standard batches it publishes the finalization batch, gated by
+`EDS_FINALIZE`, default `true`).
 
 ## Version validation
 

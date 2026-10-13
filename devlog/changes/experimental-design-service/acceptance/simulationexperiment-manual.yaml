@@ -1,0 +1,53 @@
+# Appendix A acceptance CR (ruling R1 / B2 Option C) - kept in sync with
+# devlog/changes/experimental-design-service/FEATURE.md, Appendix A.
+#
+# Apply this SimulationExperiment to a cluster with the shared stack running
+# (a retained smoke namespace or a dev cluster) and drive the full flow
+# interactively in the browser: the reference EDS is provisioned from this
+# CR and is driven by a person, never by the harness.
+#
+# Every image placeholder is digest-pinned: fill <registry> and the
+# <digest> values from the image lock (test/e2e/images.lock.env) or the run's
+# artifacts/test/<run-id>/images.env. The registry is environment-provided
+# (per the repository AGENTS.md) - no private registry value is ever written
+# into this file.
+apiVersion: experiment.cbse.terministic.de/alpha4
+kind: SimulationExperiment
+metadata:
+  name: manual-acceptance      # the project name - the subjects' key; unique cluster-wide
+  namespace: <namespace>       # e.g. cbse-e2e-<run-id> (retained) or a dev namespace
+spec:
+  defaultServiceType: ClusterIP
+  detailDatabase:
+    image: <registry>/scenario-detail-database@sha256:<digest>   # re-pinned by the ruled R2 seed rework (E4)
+    dbname: simulation_db
+    user: <user>
+    password: <password>
+    port: 5432
+    serviceType: ClusterIP
+  resultDatabase:
+    image: <registry>/postgres@sha256:<digest>
+    dbname: result_db
+    user: <user>
+    password: <password>
+    port: 5432
+    serviceType: ClusterIP
+  translator:
+    image: <registry>/translator@sha256:<digest>
+    repository: <runner-repository-url>
+    baseimage: <registry>/runner-base@sha256:<digest>
+    builderImage: <registry>/buildkit-builder@sha256:<digest>
+    registryAuthSecretRef:
+      name: cbse-registry-auth
+    port: 8080
+    serviceType: ClusterIP
+  postProcessingService:
+    image: <registry>/post-processing-service@sha256:<digest>
+    port: 8081
+    serviceType: ClusterIP
+    args: ["-max-runners-per-round", "30"]
+  experimentalDesignService:
+    design: "human-interactive design (manual acceptance pass)"
+    image: <registry>/experimental-design-service@sha256:<digest>   # the reference EDS - not the mock
+    port: 8082
+    serviceType: ClusterIP
