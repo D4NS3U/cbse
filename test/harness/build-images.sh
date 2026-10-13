@@ -16,8 +16,9 @@
 # build-images.sh — build and push the CBSE component test images.
 #
 # Builds the selected components (default alpha4 reference set: experiment
-# operator, scenario manager, EDS mock, real translator, runner base, the
-# scenario detail database, and the reference Post Processing Service) and
+# operator, scenario manager, EDS mock, the reference Experimental Design
+# Service, real translator, runner base, the scenario detail database, and
+# the reference Post Processing Service) and
 # pushes each to the NESTED repository layout
 # <CBSE_REGISTRY>/<component>:<version> with a date-versioned canonical tag plus
 # an immutable provenance tag. It then writes a digest-pinned images.env that
@@ -35,7 +36,7 @@
 #   CBSE_REGISTRY_AUTH_FILE (optional) dedicated Docker config.json for push
 #              credentials; copied into an isolated DOCKER_CONFIG so the host
 #              Docker contexts/builders/plugins are preserved.
-#   CBSE_IMAGE_COMPONENTS (default exop,sm,eds-mock,translator,runner-base,
+#   CBSE_IMAGE_COMPONENTS (default exop,sm,eds-mock,eds,translator,runner-base,
 #              scenario-detail-database,pps) comma-separated component selection.
 #
 # Exit codes:
@@ -57,7 +58,7 @@ version="${TEST_IMAGE_VERSION:-$(date -u +%-y.%-m.%-d)}"
 run_id="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)-$(openssl rand -hex 3)}"
 artifact_dir="${CBSE_IMAGE_ARTIFACT_DIR:-${root}/artifacts/test-images/${version}/${run_id}}"
 auth_file="${CBSE_REGISTRY_AUTH_FILE:-}"
-components="${CBSE_IMAGE_COMPONENTS:-exop,sm,eds-mock,translator,runner-base,scenario-detail-database,pps}"
+components="${CBSE_IMAGE_COMPONENTS:-exop,sm,eds-mock,eds,translator,runner-base,scenario-detail-database,pps}"
 lock_file="${root}/test/e2e/images.lock.env"
 
 [[ "${registry}" != */ ]] || registry="${registry%/}"
@@ -81,7 +82,7 @@ load_image_lock "${lock_file}"
 # --- Component selection -----------------------------------------------------
 # validate_components parses CBSE_IMAGE_COMPONENTS as a comma list and rejects
 # empty input, unknown tokens, and duplicates. Only the supported component
-# names (exop, sm, eds-mock, trans-mock, translator, runner-base,
+# names (exop, sm, eds-mock, eds, trans-mock, translator, runner-base,
 # scenario-detail-database, pps) are accepted; trans-mock is the synthetic
 # mock kept for harness self-tests while the default alpha4 set builds the
 # real translator.
@@ -94,7 +95,7 @@ validate_components() {
   for t in "${tokens[@]}"; do
     [[ -n "${t}" ]] || { echo "empty component token in CBSE_IMAGE_COMPONENTS" >&2; return 1; }
     case "${t}" in
-      exop|sm|eds-mock|trans-mock|translator|runner-base|scenario-detail-database|pps) ;;
+      exop|sm|eds-mock|eds|trans-mock|translator|runner-base|scenario-detail-database|pps) ;;
       *) echo "unknown component token: ${t}" >&2; return 1 ;;
     esac
     for s in ${seen[@]+"${seen[@]}"}; do
@@ -185,6 +186,7 @@ _build() {
 component_enabled exop && build_nested exop OPERATOR_IMAGE "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator" "CBSE Experiment Operator"
 component_enabled sm && build_nested sm SM_IMAGE "${root}/scenario-manager/Dockerfile" "${root}" "CBSE Scenario Manager"
 component_enabled eds-mock && build_nested eds-mock EDS_IMAGE "${root}/test/mocks/eds/Dockerfile" "${root}" "CBSE EDS Mock"
+component_enabled eds && build_nested eds EDS_REFERENCE_IMAGE "${root}/component-templates/experimental-design-service/Dockerfile" "${root}" "CBSE Experimental Design Service (reference)" --build-arg "EDS_GO_BUILDER_IMAGE=${PPS_GO_BUILDER_IMAGE}"
 component_enabled trans-mock && build_nested trans-mock TRANS_IMAGE "${root}/test/mocks/translator/Dockerfile" "${root}" "CBSE Translator Mock"
 component_enabled translator && build_nested translator TRANS_IMAGE "${root}/component-templates/translator/Dockerfile" "${root}/component-templates/translator" "CBSE Translator" --build-arg "TRANSLATOR_GO_BUILDER_IMAGE=${TRANSLATOR_GO_BUILDER_IMAGE}"
 component_enabled runner-base && build_nested runner-base RUNNER_BASE_IMAGE "${root}/component-templates/translator/runner-base/Dockerfile" "${root}/component-templates/translator/runner-base" "CBSE Runner Base" --build-arg "PYTHON_BASE_IMAGE=${PYTHON_BASE_IMAGE}"

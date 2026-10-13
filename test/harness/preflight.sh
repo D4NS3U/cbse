@@ -182,9 +182,9 @@ if [[ "${SKIP_BUILD:-0}" != "1" ]]; then
   # (defaulting to the alpha4 reference set: real Translator, runner base,
   # Detail Database, and reference Post Processing Service). The alpha4
   # reference build is the default; the harness self-tests validate the full
-  # seven-component set.
+  # eight-component set.
 else
-  for variable in OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE; do
+  for variable in OPERATOR_IMAGE SM_IMAGE EDS_IMAGE EDS_REFERENCE_IMAGE TRANS_IMAGE; do
     value="${!variable:-}"
     [[ "${value}" == *@sha256:* ]] || {
       echo "${variable} must be an immutable digest reference when SKIP_BUILD=1" >&2
