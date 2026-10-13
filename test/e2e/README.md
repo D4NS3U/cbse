@@ -68,11 +68,11 @@ SKIP_BUILD=1 \
 OPERATOR_IMAGE=registry.unibw.de/i31bdase/cbse-test/exop@sha256:... \
 SM_IMAGE=registry.unibw.de/i31bdase/cbse-test/sm@sha256:... \
 EDS_IMAGE=registry.unibw.de/i31bdase/cbse-test/eds-mock@sha256:... \
-EDS_REFERENCE_IMAGE=registry.unibw.de/i31bdase/cbse-test/eds@sha256:... \
+EDS_REFERENCE_IMAGE=<registry>/eds@sha256:<digest> \
 TRANS_IMAGE=registry.unibw.de/i31bdase/cbse-test/translator@sha256:... \
 RUNNER_BASE_IMAGE=registry.unibw.de/i31bdase/cbse-test/runner-base@sha256:... \
 DETAIL_DB_IMAGE=registry.unibw.de/i31bdase/cbse-test/scenario-detail-database@sha256:... \
-PPS_IMAGE=registry.unibw.de/i31bdase/cbse-test/pps@sha256:... \
+PPS_IMAGE=<registry>/pps@sha256:<digest> \
 CBSE_REGISTRY_AUTH_FILE=<protected-docker-config> \
 make test-smoke KUBECONFIG=/home/d4ns3u/.kube/config
 ```

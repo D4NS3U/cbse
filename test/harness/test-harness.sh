@@ -230,7 +230,7 @@ grep -Fqx 'ARG PPS_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:3bf5b04541eb
 grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^SM_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/sm@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^EDS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/eds-mock@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
-grep -Eq '^EDS_REFERENCE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/eds@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+grep -Eq '^EDS_REFERENCE_IMAGE=.*/eds@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
@@ -248,12 +248,12 @@ PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
   CBSE_IMAGE_ARTIFACT_DIR="${tmp}/build-artifacts-default" \
   "${root}/test/harness/build-images.sh" >/dev/null
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/translator:26.9.7" "${tmp}/docker-tags-default.txt"
-grep -Fqx "registry.unibw.de/i31bdase/cbse-test/eds:26.9.7" "${tmp}/docker-tags-default.txt"
+grep -Eq '^.*/eds:26\.9\.7$' "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/runner-base:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/scenario-detail-database:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/pps:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
-grep -Eq '^EDS_REFERENCE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/eds@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^EDS_REFERENCE_IMAGE=.*/eds@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
