@@ -65,18 +65,20 @@ func (r *EDSAvailabilityResponder) Start(ctx context.Context) error {
 // HandleAvailability applies the availability workflow to one probe and
 // returns the reply. It is pure with respect to the transport: it takes the raw
 // subject and payload and returns the reply, so it can be unit-tested without
-// a NATS server.
+// a NATS server. The declared experiment_type is echoed verbatim and
+// status-independently on every reply (a capability handshake); a missing
+// declaration leaves the field absent, so the legacy reply is byte-identical.
 func (r *EDSAvailabilityResponder) HandleAvailability(ctx context.Context, subjectStr string, data []byte) (communication.EDSAvailabilityReply, error) {
 	identity, err := subject.ParseIdentity(subjectStr)
 	if err != nil {
-		return errorReply("invalid availability subject"), err
+		return errorReply("invalid availability subject", ""), err
 	}
 	// Decode the (optional) availability payload to surface a malformed request
 	// as an error reply; the EDS may send an empty payload.
 	var notice communication.EDSAvailabilityRequest
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &notice); err != nil {
-			return errorReply("invalid availability payload"), fmt.Errorf("decode availability payload: %w", err)
+			return errorReply("invalid availability payload", ""), fmt.Errorf("decode availability payload: %w", err)
 		}
 	}
 	notice.ProjectNamespace = identity.Namespace.String()
@@ -85,21 +87,24 @@ func (r *EDSAvailabilityResponder) HandleAvailability(ctx context.Context, subje
 	decision, err := r.a.admit(ctx, identity.Namespace.String(), identity.Project.String())
 	if err != nil {
 		// Transient lookup failure: reply error so the EDS retries availability.
-		return errorReply("experiment lookup failed"), err
+		return errorReply("experiment lookup failed", notice.ExperimentType), err
 	}
 	if !decision.IsAdmitted() {
 		// Unavailable (Pending/Provisioning/empty) or terminal: no batch subject.
-		return errorReply(fmt.Sprintf("experiment %s", decision)), nil
+		return errorReply(fmt.Sprintf("experiment %s", decision), notice.ExperimentType), nil
 	}
 	return communication.EDSAvailabilityReply{
-		Status:       communication.AvailabilityStatusReady,
-		BatchSubject: subject.EDSBatchSubject(identity.Namespace, identity.Project),
+		Status:         communication.AvailabilityStatusReady,
+		BatchSubject:   subject.EDSBatchSubject(identity.Namespace, identity.Project),
+		ExperimentType: notice.ExperimentType,
 	}, nil
 }
 
 // errorReply returns an availability error reply with no batch subject.
-func errorReply(reason string) communication.EDSAvailabilityReply {
-	return communication.EDSAvailabilityReply{Status: communication.AvailabilityStatusError, Reason: reason}
+// experimentType is the verbatim echo of the request's declared experiment
+// type (empty before the payload is decoded: no declaration, no echo).
+func errorReply(reason, experimentType string) communication.EDSAvailabilityReply {
+	return communication.EDSAvailabilityReply{Status: communication.AvailabilityStatusError, Reason: reason, ExperimentType: experimentType}
 }
 
 // respondAvailability marshals and publishes the reply when a reply subject is

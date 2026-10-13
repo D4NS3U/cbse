@@ -82,13 +82,16 @@ const (
 // Adapters holds the shared dependencies for the four NATS adapters: the NATS
 // connection and JetStream context, the controller-runtime client used to
 // fetch the live experiment for the lifecycle gate, the EDS batch insert
-// function, and the translator-ready semantic handler.
+// function, the finalization marker functions (mark and read), and the
+// translator-ready semantic handler.
 type Adapters struct {
-	nc           *natsgo.Conn
-	js           natsgo.JetStreamContext
-	k8s          client.Client
-	insertBatch  func(ctx context.Context, namespace, project string, records []persistence.ScenarioIntakeRecord) (int, error)
-	readyHandler communication.TranslatorReadyHandler
+	nc            *natsgo.Conn
+	js            natsgo.JetStreamContext
+	k8s           client.Client
+	insertBatch   func(ctx context.Context, namespace, project string, records []persistence.ScenarioIntakeRecord) (int, error)
+	markFinalized func(ctx context.Context, namespace, project string) error
+	isFinalized   func(ctx context.Context, namespace, project string) (bool, error)
+	readyHandler  communication.TranslatorReadyHandler
 }
 
 // NewAdapters constructs the adapter set. nc and js must be a connected NATS
@@ -104,6 +107,12 @@ func NewAdapters(nc *natsgo.Conn, js natsgo.JetStreamContext, k8s client.Client,
 		k8s: k8s,
 		insertBatch: func(ctx context.Context, namespace, project string, records []persistence.ScenarioIntakeRecord) (int, error) {
 			return persistence.InsertScenarioBatch(ctx, db, namespace, project, records)
+		},
+		markFinalized: func(ctx context.Context, namespace, project string) error {
+			return persistence.MarkFinalized(ctx, db, namespace, project)
+		},
+		isFinalized: func(ctx context.Context, namespace, project string) (bool, error) {
+			return persistence.IsFinalized(ctx, db, namespace, project)
 		},
 		readyHandler: readyHandler,
 	}

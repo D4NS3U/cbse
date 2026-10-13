@@ -1021,3 +1021,101 @@ func TestScenarioStateCountsByProject(t *testing.T) {
 		t.Fatalf("fail-fast counts = %+v err=%v; want {4 3 1}", c, err)
 	}
 }
+
+func TestFinalizationMarkerLifecycle(t *testing.T) {
+	db, _ := openTestDB(t)
+	ctx := context.Background()
+	if err := EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	table := FinalizationTable()
+
+	// EnsureSchema created the additive marker table.
+	var exists bool
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
+		t.Fatalf("check table presence: %v", err)
+	}
+	if !exists {
+		t.Fatalf("%s missing after EnsureSchema", table)
+	}
+
+	// A missing project is (false, nil), not an error.
+	finalized, err := IsFinalized(ctx, db, "default", "never-registered")
+	if err != nil || finalized {
+		t.Fatalf("IsFinalized(missing project) = (%v, %v); want (false, nil)", finalized, err)
+	}
+
+	// The finalization-only case: MarkFinalized registers a not-yet-registered
+	// project and sets the marker.
+	if err := MarkFinalized(ctx, db, "default", "fin-proj"); err != nil {
+		t.Fatalf("MarkFinalized: %v", err)
+	}
+	pid, err := ProjectIDByNamespaceAndName(ctx, db, "default", "fin-proj")
+	if err != nil {
+		t.Fatalf("project must be registered by the mark: %v", err)
+	}
+	finalized, err = IsFinalized(ctx, db, "default", "fin-proj")
+	if err != nil || !finalized {
+		t.Fatalf("IsFinalized after mark = (%v, %v); want (true, nil)", finalized, err)
+	}
+	var rows int
+	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE project_id = $1`, table), pid).Scan(&rows); err != nil {
+		t.Fatalf("count marker rows: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("marker rows = %d; want 1", rows)
+	}
+	var finalizedAt string
+	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT finalized_at::text FROM %s WHERE project_id = $1`, table), pid).Scan(&finalizedAt); err != nil {
+		t.Fatalf("read finalized_at: %v", err)
+	}
+	if finalizedAt == "" {
+		t.Fatalf("finalized_at is empty; want the NOW() default")
+	}
+
+	// Idempotent: a redelivered final batch re-marks without duplicating.
+	if err := MarkFinalized(ctx, db, "default", "fin-proj"); err != nil {
+		t.Fatalf("repeated MarkFinalized: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE project_id = $1`, table), pid).Scan(&rows); err != nil {
+		t.Fatalf("count marker rows after repeat: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("marker rows after repeat = %d; want 1 (ON CONFLICT DO NOTHING)", rows)
+	}
+
+	// Distinct projects hold distinct markers.
+	if err := MarkFinalized(ctx, db, "default", "fin-other"); err != nil {
+		t.Fatalf("MarkFinalized second project: %v", err)
+	}
+	var total int
+	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&total); err != nil {
+		t.Fatalf("count all markers: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("total marker rows = %d; want 2", total)
+	}
+
+	// The marker lifecycle follows the project: deleting the project cascades
+	// the marker away.
+	if err := DeleteProjectByNamespaceAndName(ctx, db, "default", "fin-proj"); err != nil {
+		t.Fatalf("DeleteProjectByNamespaceAndName: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE project_id = $1`, table), pid).Scan(&rows); err != nil {
+		t.Fatalf("count marker after project delete: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("marker rows after project delete = %d; want 0 (ON DELETE CASCADE)", rows)
+	}
+	// And the read back to (false, nil) on the now-missing project.
+	finalized, err = IsFinalized(ctx, db, "default", "fin-proj")
+	if err != nil || finalized {
+		t.Fatalf("IsFinalized after delete = (%v, %v); want (false, nil)", finalized, err)
+	}
+	// The other project's marker survives the unrelated delete.
+	finalized, err = IsFinalized(ctx, db, "default", "fin-other")
+	if err != nil || !finalized {
+		t.Fatalf("IsFinalized unrelated project = (%v, %v); want (true, nil)", finalized, err)
+	}
+}

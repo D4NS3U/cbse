@@ -256,3 +256,132 @@ func TestPPSEvaluationVerdictPoison(t *testing.T) {
 func jsonEqual(a, b json.RawMessage) bool {
 	return string(bytes.TrimSpace(a)) == string(bytes.TrimSpace(b))
 }
+
+// ---- the SBO wire pin (FEATURE.md section 5: byte-exact marshaled bytes) ----
+//
+// These goldens are the Scenario Manager side of the manager's byte-comparison
+// against the reference EDS wire goldens: the four SBO payloads must marshal
+// to exactly the pinned canonical JSON, including the omitempty behavior
+// (experiment_type absent when undeclared; final absent on a non-final batch).
+
+// assertExactWire marshals v and requires byte-identity with want.
+func assertExactWire(t *testing.T, v interface{}, want string) {
+	t.Helper()
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !bytes.Equal(out, []byte(want)) {
+		t.Fatalf("marshaled bytes = %s; want exactly %s", out, want)
+	}
+}
+
+func TestEDSAvailabilityRequestGoldenWireDeclaredStandard(t *testing.T) {
+	req := EDSAvailabilityRequest{
+		BatchID:        "b1",
+		Project:        "smoke-project",
+		ScenarioCount:  2,
+		ExperimentType: "standard",
+	}
+	assertExactWire(t, req, `{"batch_id":"b1","project":"smoke-project","scenario_count":2,"experiment_type":"standard"}`)
+
+	// Decode round-trip: the declared type must survive.
+	var decoded EDSAvailabilityRequest
+	if err := json.Unmarshal([]byte(`{"batch_id":"b1","project":"smoke-project","scenario_count":2,"experiment_type":"standard"}`), &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.ExperimentType != "standard" {
+		t.Fatalf("decoded experiment_type = %q; want standard", decoded.ExperimentType)
+	}
+}
+
+func TestEDSAvailabilityRequestGoldenWireLegacyUndeclared(t *testing.T) {
+	// No declaration: experiment_type is absent on the wire (the legacy state).
+	req := EDSAvailabilityRequest{BatchID: "b1", Project: "smoke-project", ScenarioCount: 2}
+	assertExactWire(t, req, `{"batch_id":"b1","project":"smoke-project","scenario_count":2}`)
+
+	// A payload without experiment_type decodes to the empty declaration.
+	var decoded EDSAvailabilityRequest
+	if err := json.Unmarshal([]byte(`{"batch_id":"b1","project":"smoke-project","scenario_count":2}`), &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if decoded.ExperimentType != "" {
+		t.Fatalf("decoded experiment_type = %q; want empty (absent on the wire)", decoded.ExperimentType)
+	}
+}
+
+func TestEDSAvailabilityReplyGoldenWireEchoOnReadyAndError(t *testing.T) {
+	ready := EDSAvailabilityReply{
+		Status:         AvailabilityStatusReady,
+		BatchSubject:   "cbse.ns.smoke-project.eds.scenarios",
+		ExperimentType: "standard",
+	}
+	assertExactWire(t, ready, `{"status":"ready","batch_subject":"cbse.ns.smoke-project.eds.scenarios","experiment_type":"standard"}`)
+
+	errorEcho := EDSAvailabilityReply{
+		Status:         AvailabilityStatusError,
+		Reason:         "experiment pending",
+		ExperimentType: "standard",
+	}
+	// The echo is status-independent: the error reply carries it verbatim.
+	assertExactWire(t, errorEcho, `{"status":"error","reason":"experiment pending","experiment_type":"standard"}`)
+
+	// No declaration means no echo: the legacy error reply stays byte-identical.
+	legacyError := EDSAvailabilityReply{Status: AvailabilityStatusError, Reason: "experiment pending"}
+	assertExactWire(t, legacyError, `{"status":"error","reason":"experiment pending"}`)
+
+	legacyReady := EDSAvailabilityReply{Status: AvailabilityStatusReady, BatchSubject: "cbse.ns.smoke-project.eds.scenarios"}
+	assertExactWire(t, legacyReady, `{"status":"ready","batch_subject":"cbse.ns.smoke-project.eds.scenarios"}`)
+}
+
+func TestScenarioBatchGoldenWireNonFinalHasNoFinalField(t *testing.T) {
+	batch := ScenarioBatch{
+		BatchID: "b1",
+		Project: "smoke-project",
+		Scenarios: []ScenarioRecord{{
+			Priority:         1,
+			NumberOfReps:     10,
+			RecipeInfo:       json.RawMessage(`{"parameterset_id":1}`),
+			ConfidenceMetric: func() *float64 { f := 0.91; return &f }(),
+		}},
+	}
+	// final absent or false is not final: the marshaled form has no final
+	// field at all.
+	assertExactWire(t, batch, `{"batch_id":"b1","project":"smoke-project","scenarios":[{"priority":1,"number_of_reps":10,"recipe_info":{"parameterset_id":1},"confidence_metric":0.91}]}`)
+}
+
+func TestScenarioBatchGoldenWireFinalizationBatch(t *testing.T) {
+	// The finalization batch: the empty scenario array is present, final is
+	// true.
+	batch := ScenarioBatch{BatchID: "fin", Project: "smoke-project", Scenarios: []ScenarioRecord{}, Final: true}
+	assertExactWire(t, batch, `{"batch_id":"fin","project":"smoke-project","scenarios":[],"final":true}`)
+
+	// A final batch with scenarios carries them plus final.
+	withScenarios := ScenarioBatch{
+		BatchID:   "fin2",
+		Project:   "smoke-project",
+		Scenarios: []ScenarioRecord{{Priority: 1, NumberOfReps: 2, RecipeInfo: json.RawMessage(`{"parameterset_id":5}`)}},
+		Final:     true,
+	}
+	assertExactWire(t, withScenarios, `{"batch_id":"fin2","project":"smoke-project","scenarios":[{"priority":1,"number_of_reps":2,"recipe_info":{"parameterset_id":5}}],"final":true}`)
+
+	// Decode round-trip of the canonical finalization batch.
+	var decoded ScenarioBatch
+	if err := json.Unmarshal([]byte(`{"batch_id":"fin","project":"smoke-project","scenarios":[],"final":true}`), &decoded); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !decoded.Final || len(decoded.Scenarios) != 0 {
+		t.Fatalf("decoded finalization batch = %+v; want final with zero scenarios", decoded)
+	}
+}
+
+func TestScenarioBatchAckGoldenWireUnchanged(t *testing.T) {
+	// The ack shape is unchanged by the finalization protocol.
+	inserted := ScenarioBatchAck{Status: BatchAckStatusInserted, BatchID: "b1", Received: 2, Inserted: 2, Failed: 0}
+	assertExactWire(t, inserted, `{"status":"inserted","batch_id":"b1","received":2,"inserted":2,"failed":0}`)
+
+	// The pinned post-final rejection: status error, the batch id echoed,
+	// nothing inserted, the pinned reason byte-exact.
+	rejected := ScenarioBatchAck{Status: BatchAckStatusError, BatchID: "b2", Received: 1, Inserted: 0, Failed: 0, Reason: ReasonExperimentFinalized}
+	assertExactWire(t, rejected, `{"status":"error","batch_id":"b2","received":1,"inserted":0,"failed":0,"reason":"experiment finalized; no further batches accepted"}`)
+}
