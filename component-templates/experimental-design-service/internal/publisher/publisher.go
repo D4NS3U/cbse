@@ -361,8 +361,10 @@ func (p *Publisher) Finish(ctx context.Context) (Result, error) {
 // SetAck records a consumed batch ack payload against the batch, so the
 // server can surface status + reason in the API response. It is a pure
 // decode + validation seam: the landed wire contract defines the ack shape,
-// while the delivery mechanism is the Scenario Manager's (absent in the
-// current SM — the reference EDS gates on the PubAck until then).
+// and the Scenario Manager finalization protocol delivers the ack on the
+// batch delivery's reply subject when one is present. The reference EDS
+// publishes without a reply subject and gates on the PubAck, so the seam
+// is currently exercised by the tests only.
 func SetAck(r *Result, data []byte) error {
 	ack, err := wire.DecodeBatchAck(data)
 	if err != nil {
