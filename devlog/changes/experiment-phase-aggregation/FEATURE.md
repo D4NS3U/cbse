@@ -57,7 +57,7 @@ Judgment is delegated (the SM reports the ground truth); authority is retained (
 - **Field ownership is the contract:** the SM never writes `phase`/`message`; the operator never writes `scenarioManagerVerdict` — enforced per D9.
 - **Secrets hygiene; verification honesty; runtime attestation** (`printf '%s/%s\n' "$PI_PROVIDER" "$PI_MODEL"` at the first checkpoint, expected `ai.forge/qwen3.8-27b-nvfp4`, mismatch → stop and report failed) **; no commits; read-only specs.**
 - **Branch discipline (user ruling 2026-09-30):** all implementation lands on a **dedicated feature branch** (an Orca-managed worktree created off `main`) — the worker's boundary is its branch. Implementation workers may commit **to that branch only** (never `main`), every commit carrying the traceability trailer `[orchestration: task <task-id> dispatch <dispatch-id>]`; the merge to `main` is **one user-approved event at settlement** (the regenerated CRD manifests are protected paths). Spec and devlog documents remain manager-authored on `main`; specs stay read-only for workers.
-- **Serialization policy:** one dispatched worker at a time (standing provider constraint — the LAPI/CrowdSec incidents).
+- **Serialization policy:** one dispatched worker at a time (standing provider constraint — the LAPI/CrowdSec incidents). **Erratum (2026-10-02, user ruling):** the constraint no longer applies — multiple workers may operate in parallel with the manager session; the experimental-design-service spec's wave plan (W1 = E1 ∥ E2 ∥ E3) is the first parallel dispatch.
 
 ## 6. Slices (ordered; five-part task specs are authored per slice at its dispatch wave)
 
