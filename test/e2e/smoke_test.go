@@ -16,8 +16,8 @@
 
 // Package e2e is the CBSE full-stack smoke suite. It runs against a live
 // cluster that smoke.sh has already provisioned (Experiment Operator, Scenario
-// Manager, core DB, NATS/JetStream, EDS mock, and the alpha4 reference
-// Translator) and verifies the end-to-end experiment lifecycle through
+// Manager, core DB, NATS/JetStream, and the alpha4 reference Translator; the
+// reference EDS is provisioned per experiment by the operator) and verifies the end-to-end experiment lifecycle through
 // Kubernetes resources and the three PostgreSQL databases (Core, Result, and
 // Scenario Detail). The ordered specs cover owned-resource reconciliation,
 // deterministic EDS intake, the full reference Translator build/run/publish
