@@ -64,9 +64,11 @@ var uiFS embed.FS
 // projection and the pre-flight resolve.
 type Store interface {
 	// NextID returns the next EDS-assigned id in the parameter's entry
-	// table (MAX(id)+1, floor 5).
+	// table (MAX(id)+1, floor 5) from the persisted rows — the server's
+	// issued-id ceiling layers on top for pending (unsaved) designs.
 	NextID(ctx context.Context, parameter string) (int, error)
-	// NextRecipeID returns the next EDS-assigned parameterset_id (floor 5).
+	// NextRecipeID returns the next EDS-assigned parameterset_id (floor 5)
+	// from the persisted rows (same visibility as NextID).
 	NextRecipeID(ctx context.Context) (int, error)
 	// Save upserts the design's entries and recipe locator rows in one
 	// transaction; ids 1-4 are refused.
@@ -99,6 +101,16 @@ type App struct {
 	entries   []designEntry
 	recipes   []designRecipe
 	scenarios []designScenario
+
+	// Issued-id ceilings (settlement erratum 6): the store's NextID/
+	// NextRecipeID see only persisted rows, so pending in-memory designs
+	// must advance the ceiling here — two unsaved entries of one parameter
+	// would otherwise collide on one id (the canonical multi-recipe design
+	// flow: design the whole experiment, then Save). The ceilings are
+	// monotonic per process and re-seed upward from the store whenever the
+	// DB-derived next id is higher (e.g. after a Save persisted rows).
+	issuedEntryID  map[string]int
+	issuedRecipeID int
 
 	// Flow state (derived; not a second source of truth).
 	savedOnce bool
@@ -207,7 +219,35 @@ type viewRowJSON struct {
 // process start (the ruled in-memory state): a restart starts with an empty
 // design, and saved rows remain in the Detail DB.
 func New(deps Deps) *App {
-	return &App{deps: deps}
+	return &App{deps: deps, issuedEntryID: map[string]int{}}
+}
+
+// nextEntryID returns the next EDS id for the parameter: the store's
+// DB-derived next id (MAX(id)+1, floor 5 — persisted rows only) or one
+// above the highest id issued in this process, whichever is greater.
+func (a *App) nextEntryID(ctx context.Context, parameter string) (int, error) {
+	dbNext, err := a.deps.Store.NextID(ctx, parameter)
+	if err != nil {
+		return 0, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id := max(dbNext, a.issuedEntryID[parameter]+1)
+	a.issuedEntryID[parameter] = id
+	return id, nil
+}
+
+// nextRecipeID mirrors nextEntryID for the recipes table's parameterset_id.
+func (a *App) nextRecipeID(ctx context.Context) (int, error) {
+	dbNext, err := a.deps.Store.NextRecipeID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	id := max(dbNext, a.issuedRecipeID+1)
+	a.issuedRecipeID = id
+	return id, nil
 }
 
 // ServeHTTP is the single HTTP handler (the mux over the API surface).
@@ -329,7 +369,7 @@ func (a *App) handleAddEntry(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	id, err := a.deps.Store.NextID(r.Context(), body.Parameter)
+	id, err := a.nextEntryID(r.Context(), body.Parameter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -381,7 +421,7 @@ func (a *App) handleAddRecipe(w http.ResponseWriter, r *http.Request) {
 				body.ArrivalRateID, body.ServiceRateID, body.RunDurationID, body.SeedPolicyID))
 		return
 	}
-	id, err := a.deps.Store.NextRecipeID(r.Context())
+	id, err := a.nextRecipeID(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

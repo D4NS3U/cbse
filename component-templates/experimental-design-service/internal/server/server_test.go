@@ -350,6 +350,77 @@ func TestRecipeCreate(t *testing.T) {
 	}
 }
 
+// TestPendingIDsAdvance covers settlement erratum 6: the store's
+// NextID/NextRecipeID see only persisted rows (the fake mirrors the real
+// store — the ids advance at Save, not at add), so pending in-memory
+// designs must advance the App's issued-id ceiling. The canonical
+// multi-recipe design flow — design the whole experiment, then Save —
+// must not collide on one id (the settlement smoke caught exactly that).
+func TestPendingIDsAdvance(t *testing.T) {
+	store := newFakeStore()
+	app, _ := newApp(t, store, readyReply)
+
+	// Three pending arrival_rate entries before any Save: 5, 6, 7 (the
+	// store's answer is 5 each time — the ceiling advances).
+	for want := 5; want <= 7; want++ {
+		w := do(t, app, http.MethodPost, "/api/entries", `{"parameter":"arrival_rate","value":2}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("pending entry %d = %d %s", want, w.Code, w.Body.String())
+		}
+		var r struct {
+			ID int `json:"id"`
+		}
+		mustDecode(t, w, &r)
+		if r.ID != want {
+			t.Fatalf("pending entry id = %d, want %d", r.ID, want)
+		}
+	}
+
+	// The recipe's other FKs need their entries (one each: service_rate,
+	// run_duration, seed_policy — each takes its first id, 5).
+	for _, p := range []string{"service_rate", "run_duration", "seed_policy"} {
+		w := do(t, app, http.MethodPost, "/api/entries", fmt.Sprintf(`{"parameter":%q,"value":8}`, p))
+		if w.Code != http.StatusOK {
+			t.Fatalf("entry %s = %d %s", p, w.Code, w.Body.String())
+		}
+	}
+
+	// Two pending recipes before any Save: 5, 6.
+	for want := 5; want <= 6; want++ {
+		w := do(t, app, http.MethodPost, "/api/recipes", `{"arrival_rate_id":5,"service_rate_id":5,"run_duration_id":5,"seed_policy_id":5}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("pending recipe %d = %d %s", want, w.Code, w.Body.String())
+		}
+		var r struct {
+			ParametersetID int `json:"parameterset_id"`
+		}
+		mustDecode(t, w, &r)
+		if r.ParametersetID != want {
+			t.Fatalf("pending recipe id = %d, want %d", r.ParametersetID, want)
+		}
+	}
+
+	// Save persists (the store's ids advance from the saved rows); a later
+	// store answer above the ceiling re-seeds the ceiling upward.
+	if w := do(t, app, http.MethodPost, "/api/save", ""); w.Code != http.StatusOK {
+		t.Fatalf("save = %d %s", w.Code, w.Body.String())
+	}
+	store.mu.Lock()
+	store.nextEntry[recipestore.ParamArrivalRate] = 9 // as if further rows persisted
+	store.mu.Unlock()
+	w := do(t, app, http.MethodPost, "/api/entries", `{"parameter":"arrival_rate","value":2}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("post-save entry = %d %s", w.Code, w.Body.String())
+	}
+	var r struct {
+		ID int `json:"id"`
+	}
+	mustDecode(t, w, &r)
+	if r.ID != 9 {
+		t.Fatalf("post-save entry id = %d, want 9 (seeded from the store)", r.ID)
+	}
+}
+
 // TestScenarioCreate covers the scenario endpoint: the domain contract and
 // the recipe reference.
 func TestScenarioCreate(t *testing.T) {
