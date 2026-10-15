@@ -283,7 +283,7 @@ It says "no further scenarios will be generated" and closes the experiment's sce
 
 The Scenario Manager's finalization-aware verdict:
 
-- A final batch first inserts its scenarios, if any, and then durably marks the project finalized (a redelivered final batch is an idempotent no-op).
+- A final batch first inserts its scenarios, if any, and then durably marks the project finalized (redelivery-safe in the finalization-only form; a redelivered final batch **with scenarios** can re-insert them in the transient insert-then-mark window — a documented limitation of the mandated two-step order).
 - `Failed` stays fail-fast: any failed scenario fails the experiment immediately, regardless of finalization.
 - `Finished` requires **all** scenarios terminally verified **and** the finalization batch received — including the explicit zero-scenario Finish, which lands `Finished` on the empty set. That is the interactive window's explicit close, distinct from an experiment that idles `InProgress` with no scenarios at all.
 - A non-final batch arriving after finalization is rejected with an acknowledgement of `status: "error"` and the pinned reason `experiment finalized; no further batches accepted`. Finalization is irrevocable: the experiment cannot be re-armed, and terminal phases are sticky.
