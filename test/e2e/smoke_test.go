@@ -222,7 +222,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 	// view. The full Created -> PostProcessing chain is asserted by the
 	// reference end-to-end spec below; this spec writes the persisted rows
 	// to the artifact directory for triage.
-	It("persists one project and four deterministic Created scenarios", func() {
+	It("persists one project and the two batch-1 Created scenarios", func() {
 		Eventually(func() string {
 			return queryDatabase(fmt.Sprintf(
 				"SELECT COUNT(*) FROM project WHERE project_name='%s'",
@@ -236,13 +236,15 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 					"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.translation_attempts > 0 AND ss.container_image IS NOT NULL) FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
 					project,
 				))
-			}, 4*time.Minute, 2*time.Second).Should(Equal("4|4"))
+			}, 4*time.Minute, 2*time.Second).Should(Equal("2|2"))
 		} else {
 			// The alpha4 Scenario Manager always runs the selection loop (there
 			// is no SELECTOR_ENABLED disable), so scenarios advance past
 			// Created toward Scheduled/StartingRunners/InProcessing/
-			// PostProcessing. This spec only verifies EDS intake persisted the
-			// project and its four scenario_status rows with the
+			// PostProcessing. At this point in the ordered flow only batch 1 (the
+			// two scenarios published by the design spec above) has been
+			// ingested; this spec verifies EDS intake persisted the project
+			// and its two batch-1 scenario_status rows with the
 			// parameterset_id recipe_info the reference Translator's Detail DB
 			// lookup expects; the full end-to-end chain (Created ->
 			// PostProcessing + Result DB rows) is verified by the reference
@@ -252,7 +254,7 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 					"SELECT COUNT(*), COUNT(*) FILTER (WHERE ss.recipe_info ? 'parameterset_id') FROM scenario_status ss JOIN project p ON p.id=ss.project_id WHERE p.project_name='%s'",
 					project,
 				))
-			}, 3*time.Minute, 2*time.Second).Should(Equal("4|4"))
+			}, 3*time.Minute, 2*time.Second).Should(Equal("2|2"))
 		}
 
 		writeDatabaseArtifact(queryDatabase(fmt.Sprintf(
