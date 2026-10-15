@@ -39,9 +39,10 @@ import (
 // its scenarios, if any, then durably marks the project finalized; a non-final
 // batch arriving after finalization is rejected without insertion with the
 // pinned reason. Every admitted batch carries a ScenarioBatchAck back on the
-// delivery's reply subject when one is present (the reference EDS publishes
-// with a reply to consume the insert report; publishers without a reply, such
-// as the protocol-faithful mock, see no behavior change).
+// delivery's reply subject when one is present (publishers without a reply
+// subject — the protocol-faithful mock, and the reference EDS, which gates on
+// the JetStream PubAck — see no behavior change; the ack seam exists for
+// reply-sending publishers).
 type EDSBatchConsumer struct {
 	a *Adapters
 }
