@@ -156,7 +156,8 @@ func (f *fakeDB) exec(sql string, args []any) ([][]any, error) {
 	m := f.modelFor()
 	sql = strings.TrimSpace(sql)
 
-	// Self-provision DDL (IF NOT EXISTS: create-or-no-op).
+	// Self-provision DDL (tables: IF NOT EXISTS create-or-no-op; the view:
+	// OR REPLACE idempotent — CREATE VIEW IF NOT EXISTS is invalid PG).
 	switch {
 	case sql == ddlArrivalRate:
 		f.record(sql)

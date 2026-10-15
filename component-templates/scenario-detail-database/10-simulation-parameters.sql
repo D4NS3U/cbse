@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS public.recipes (
     run_duration_id INTEGER NOT NULL REFERENCES public.run_duration(id),
     seed_policy_id  INTEGER NOT NULL REFERENCES public.seed_policy(id)
 );
-CREATE VIEW public.simulation_parameters AS
+CREATE OR REPLACE VIEW public.simulation_parameters AS
     SELECT r.parameterset_id,
            a.value AS arrival_rate,
            s.value AS service_rate,

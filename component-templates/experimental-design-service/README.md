@@ -157,7 +157,9 @@ entry tables and `recipes`. At startup the EDS **self-provisions** the
 canonical six objects (ruled R3): the four per-parameter entry tables
 (`arrival_rate`, `service_rate`, `run_duration`, `seed_policy`), the
 `recipes` locator table, and the `simulation_parameters` **view** over the
-join — `CREATE TABLE IF NOT EXISTS` / `CREATE VIEW IF NOT EXISTS`, the DDL
+join — `CREATE TABLE IF NOT EXISTS` / `CREATE OR REPLACE VIEW` (the only
+valid idempotent view form in PostgreSQL — `CREATE VIEW IF NOT EXISTS`
+does not exist), the DDL
 mirroring the reference seed SQL, a no-op against a pre-created matching
 schema (both delivery branches work: the seeded reference image and a
 user-pre-created host schema). No baseline INSERTs on the dynamic branch.

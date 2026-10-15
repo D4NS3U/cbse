@@ -60,8 +60,10 @@ var ErrReservedID = errors.New("ids 1-4 are the read-only reference baseline; th
 // The canonical six-object DDL (ruled R2/R3, pinned in FEATURE.md). E1's
 // startup self-provision runs exactly these statements; against a
 // pre-created matching schema (the seeded reference image, or a
-// user-pre-created host schema) every statement is a no-op by the
-// IF NOT EXISTS form.
+// user-pre-created host schema) every statement is idempotent: the tables
+// by the IF NOT EXISTS form, the view by OR REPLACE (the only valid
+// idempotent view form in PostgreSQL — CREATE VIEW IF NOT EXISTS does not
+// exist; verified live against the locked postgres image).
 const (
 	ddlArrivalRate = "CREATE TABLE IF NOT EXISTS public.arrival_rate (id INTEGER PRIMARY KEY CHECK (id > 0), value INTEGER NOT NULL CHECK (value > 0));"
 	ddlServiceRate = "CREATE TABLE IF NOT EXISTS public.service_rate (id INTEGER PRIMARY KEY CHECK (id > 0), value INTEGER NOT NULL CHECK (value > 0));"
@@ -74,7 +76,7 @@ const (
 		"    run_duration_id INTEGER NOT NULL REFERENCES public.run_duration(id),\n" +
 		"    seed_policy_id  INTEGER NOT NULL REFERENCES public.seed_policy(id)\n" +
 		");"
-	ddlView = "CREATE VIEW IF NOT EXISTS public.simulation_parameters AS\n" +
+	ddlView = "CREATE OR REPLACE VIEW public.simulation_parameters AS\n" +
 		"    SELECT r.parameterset_id,\n" +
 		"           a.value AS arrival_rate,\n" +
 		"           s.value AS service_rate,\n" +

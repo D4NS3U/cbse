@@ -83,7 +83,7 @@ func TestSimulationParametersSchema(t *testing.T) {
 
 	// The view over recipes joined with the entry tables, with the exact
 	// legacy projection (the Translator's landed lookup is view-transparent).
-	if !strings.Contains(sql, "CREATE VIEW public.simulation_parameters AS") {
+	if !strings.Contains(sql, "CREATE OR REPLACE VIEW public.simulation_parameters AS") {
 		t.Fatal("must create the public.simulation_parameters view")
 	}
 	for _, col := range []string{
