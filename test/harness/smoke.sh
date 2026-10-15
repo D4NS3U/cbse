@@ -115,6 +115,14 @@ EOF
     if [[ "${CBSE_KEEP_NAMESPACE:-0}" == "1" ]]; then
       echo "Retained test run namespace: ${namespace}" >&2
     elif (( status == 0 )) || [[ "${CBSE_KEEP_ON_FAILURE:-0}" != "1" ]]; then
+      # Delete the experiment CRs first and wait for their Scenario-Manager
+      # cleanup finalizer to clear: the namespace deletion below cascades the
+      # Scenario Manager Deployment and the CRs together, and a dead SM
+      # cannot release its own finalizer - the CR (and with it the whole
+      # namespace) then wedges in Terminating forever, and the namespace
+      # deletion timeout silently starves the lease release below
+      # (settlement-smoke discovery 5).
+      "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete simulationexperiment --all -n "${namespace}" --wait=true --timeout=120s >/dev/null 2>&1
       "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete namespace "${namespace}" --wait=true --timeout=180s >/dev/null 2>&1
     else
       echo "Retained failed run namespace: ${namespace}" >&2
@@ -123,6 +131,12 @@ EOF
 
   if (( lock_acquired == 1 )); then
     holder="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get lease cbse-smoke-lock -n cbse-test-system -o jsonpath='{.spec.holderIdentity}' 2>/dev/null)"
+    if [[ "${holder}" != "${run_id}" ]]; then
+      # One retry: a transient API error on the first read must not leak the
+      # lease (a held lock refuses every later run until manual release).
+      sleep 2
+      holder="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get lease cbse-smoke-lock -n cbse-test-system -o jsonpath='{.spec.holderIdentity}' 2>/dev/null)"
+    fi
     if [[ "${holder}" == "${run_id}" ]]; then
       "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete lease cbse-smoke-lock -n cbse-test-system --wait=false >/dev/null 2>&1
     fi
