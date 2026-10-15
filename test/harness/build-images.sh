@@ -186,7 +186,7 @@ _build() {
 component_enabled exop && build_nested exop OPERATOR_IMAGE "${root}/experiment-operator/Dockerfile" "${root}/experiment-operator" "CBSE Experiment Operator"
 component_enabled sm && build_nested sm SM_IMAGE "${root}/scenario-manager/Dockerfile" "${root}" "CBSE Scenario Manager"
 component_enabled eds-mock && build_nested eds-mock EDS_IMAGE "${root}/test/mocks/eds/Dockerfile" "${root}" "CBSE EDS Mock"
-component_enabled eds && build_nested eds EDS_REFERENCE_IMAGE "${root}/component-templates/experimental-design-service/Dockerfile" "${root}" "CBSE Experimental Design Service (reference)" --build-arg "EDS_GO_BUILDER_IMAGE=${PPS_GO_BUILDER_IMAGE}"
+component_enabled eds && build_nested eds EDS_REFERENCE_IMAGE "${root}/component-templates/experimental-design-service/Dockerfile" "${root}/component-templates/experimental-design-service" "CBSE Experimental Design Service (reference)" --build-arg "EDS_GO_BUILDER_IMAGE=${PPS_GO_BUILDER_IMAGE}"
 component_enabled trans-mock && build_nested trans-mock TRANS_IMAGE "${root}/test/mocks/translator/Dockerfile" "${root}" "CBSE Translator Mock"
 component_enabled translator && build_nested translator TRANS_IMAGE "${root}/component-templates/translator/Dockerfile" "${root}/component-templates/translator" "CBSE Translator" --build-arg "TRANSLATOR_GO_BUILDER_IMAGE=${TRANSLATOR_GO_BUILDER_IMAGE}"
 component_enabled runner-base && build_nested runner-base RUNNER_BASE_IMAGE "${root}/component-templates/translator/runner-base/Dockerfile" "${root}/component-templates/translator/runner-base" "CBSE Runner Base" --build-arg "PYTHON_BASE_IMAGE=${PYTHON_BASE_IMAGE}"
