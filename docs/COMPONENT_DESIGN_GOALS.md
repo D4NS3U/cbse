@@ -4,7 +4,7 @@ This is the starting point for developers who want to provide their own Experime
 
 CBSE is still evolving. Treat the subjects and payloads below as the current `alpha4` contract, not as a promise of long-term API stability. The only served and stored API version is `alpha4`; the `alpha2` and `alpha3` versions are retired — they are not served or stored, and no conversion webhook exists for them. In `alpha4`, EDS intake, the Translator handoff, runner-Job orchestration, and observation are implemented, while the PostProcessingService communication contract is not.
 
-The alpha4 reference component images are built from the repository: the reference Translator (`component-templates/translator/`), its runner base (`component-templates/translator/runner-base/`), and the Scenario Detail Database (`component-templates/scenario-detail-database/`). They share a common set of component design goals: each is built from a locked, digest-pinned source image recorded in `test/e2e/images.lock.env` with no environment override; each runs as a numeric non-root user (`1000:1000`); each is published in the nested repository layout (`${CBSE_REGISTRY}/<component>:<version>`) with a canonical tag plus an immutable provenance tag and referenced in production by its pushed digest; and none bakes credentials into the image. See the per-component README files for the exact build, communication, and cleanup contracts.
+The alpha4 reference component images are built from the repository: the reference Translator (`component-templates/translator/`), its runner base (`component-templates/translator/runner-base/`), the reference Experimental Design Service (`component-templates/experimental-design-service/`), and the Scenario Detail Database (`component-templates/scenario-detail-database/`). They share a common set of component design goals: each is built from a locked, digest-pinned source image recorded in `test/e2e/images.lock.env` with no environment override; each runs as a numeric non-root user (`1000:1000`); each is published in the nested repository layout (`${CBSE_REGISTRY}/<component>:<version>`) with a canonical tag plus an immutable provenance tag and referenced in production by its pushed digest; and none bakes credentials into the image. See the per-component README files for the exact build, communication, and cleanup contracts.
 
 ## Start with the current boundary
 
@@ -18,12 +18,17 @@ Experiment Operator -----> detail/result database connection Secrets (always)
         |                  detail/result database Deployments + Services (image form)
         |                  Translator Deployment (translator container +
         |                  rootless BuildKit sidecar) + Service + ConfigMap
+        |                  PPS Deployment + Service
+        |                  EDS Deployment <exp>-eds (container eds) + Service
+        |                  <exp>-eds-svc, from spec.experimentalDesignService
+        |                  (the reference EDS image, digest-validated, in the
+        |                  smoke; a custom EDS image in an installation)
         |                  runner ServiceAccount (simrunner-<UID-prefix>)
         |
         +-----------------------------------------------+
 
-EDS (installed by the installation) -- availability request --> Scenario Manager
-EDS == scenario batch ========> Scenario Manager --> Core PostgreSQL DB
+<exp>-eds (the per-experiment EDS) -- availability request --> Scenario Manager
+<exp>-eds == scenario batch ========> Scenario Manager --> Core PostgreSQL DB
                                       |
                                       +== translation request ==> Translator
                                       <== ready message =========+
@@ -31,7 +36,7 @@ EDS == scenario batch ========> Scenario Manager --> Core PostgreSQL DB
                                       +--> runner Job (simrun-<UID-prefix>-s<id>-a<attempt>)
                                       +--> observation --> PostProcessing or Failed
 
-PostProcessingService: spec field present, no provisioned workload, no call contract yet.
+PostProcessingService: per-experiment Deployment + Service provisioned from spec.postProcessingService.
 ```
 
 The arrows marked `==>` are persistent JetStream messages. The EDS availability handshake uses ordinary NATS request/reply. PostgreSQL is the authority for workflow ownership and progress; messages and Kubernetes workloads are effects of that state.
@@ -40,11 +45,11 @@ The arrows marked `==>` are persistent JetStream messages. The EDS availability 
 
 | Component | Provisioned by Operator | Usable integration today | Current limitation |
 | --- | --- | --- | --- |
-| EDS | None (the `experimentalDesignService` spec field is configuration only) | Availability request/reply and JetStream scenario-batch ingestion | The installation must run the EDS container itself; the Operator creates no EDS workload |
+| EDS | One single-container Deployment (`<exp>-eds`) and one Service (`<exp>-eds-svc`) from `spec.experimentalDesignService` — the field is no longer configuration-only: it carries `design`, `image`, `command`, `args`, `port`, `serviceType`, and `nodePort`, and the image must be an immutable digest reference | Availability request/reply with the `experiment_type` handshake, JetStream scenario-batch ingestion, and the finalization batch | Readiness-gate membership: the experiment does not reach `InProgress` until the EDS has a ready replica; a broken EDS becomes a bounded, diagnosed `Error` |
 | Translator | One two-container Deployment (translator + rootless BuildKit sidecar), one Service, and one configuration ConfigMap | JetStream translation requests and ready messages, digest and repository verification, and runner-Job start | The generated runner image is executed as a runner Job by the Scenario Manager, not by the Operator |
-| PostProcessingService | None (the `postProcessingService` spec field is configuration only) | No service-call or message contract | `PostProcessing` is a scenario state entered after runner completion; no component consumes it yet |
+| PostProcessingService | One single-container Deployment (`<exp>-pps`) and one Service (`<exp>-pps-svc`) from `spec.postProcessingService` | JetStream evaluation requests (one per scenario at `PostProcessing`) and the verdict reply (`met` / `additional_runners` / `stop_unmet`) | The reference module implements the evaluation contract; a custom PPS image must answer the verdict contract on the evaluation subject |
 
-The Operator waits for its provisioned workloads to be ready before moving the experiment to `InProgress`: both database endpoints must answer an availability probe and the Translator Deployment must have a ready replica.
+The Operator waits for its provisioned workloads to be ready before moving the experiment to `InProgress`: both database endpoints must answer an availability probe, and the Translator, PostProcessingService, and EDS Deployments must each have a ready replica. The `InProgress` message "All components provisioned and ready" is true for that full set, and a component that never becomes ready becomes a bounded, diagnosed `Error` through the readiness watchdog's retry budget.
 
 ## What every custom image receives
 
@@ -105,7 +110,15 @@ The Operator injects the following into the Translator container it provisions:
 | `BASEIMAGE` | `spec.translator.baseimage` (via the Translator ConfigMap) |
 | `NATS_URL`, `TRANSLATOR_STREAM`, `TRANSLATOR_REQUEST_SUBJECT`, `TRANSLATOR_READY_SUBJECT_TEMPLATE`, `TRANSLATOR_CONSUMER` | fixed `alpha4` values derived from the experiment's namespace, name, and UID |
 
-Image-based database containers additionally receive `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `SIMULATIONPROJECTNAME`. The `experimentalDesignService` and `postProcessingService` workloads are not provisioned by the Operator, so nothing is injected for them; an EDS must bring its own configuration (NATS URL, subjects) from wherever the installation deploys it.
+Image-based database containers additionally receive `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `SIMULATIONPROJECTNAME`. The Operator injects the following into the EDS container it provisions (the reference EDS validates every value at startup and fails fast on a missing, malformed, or inconsistent value):
+
+| Variable | Source |
+| --- | --- |
+| `NATS_URL` | the experiment's NATS endpoint (the same value the Translator and PPS containers get) |
+| `EDS_AVAILABILITY_SUBJECT` | the per-experiment availability subject `cbse.<namespace>.<project>.eds.scenarios.available`, derived by the Operator from the experiment's namespace and name |
+| `SIMULATIONPROJECTNAMESPACE`, `SIMULATIONPROJECTNAME`, `SIMULATIONEXPERIMENTUID` | Pod namespace, `metadata.name`, and `metadata.uid` (downward API) |
+
+The Detail DB connection is not environment: the Operator mounts the experiment's `<exp>-detaildb-sct` connection Secret — the same five-field endpoint contract (`host`, `port`, `dbname`, `user`, `password`) as the database Deployments — at `/detaildb-connection`. The batch subject is never injected; it arrives from the Scenario Manager's availability reply at runtime. The `postProcessingService` workload is likewise provisioned with an operator-injected environment contract and its Result DB connection Secret.
 
 `command` and `args` can override an image's entrypoint for the Translator and the image-based databases; `port`, `serviceType`, and `nodePort` configure the provisioned Services; `spec.translator.builderResources` configures the BuildKit sidecar; and `spec.runner.jobTemplate` customizes the runner Job template. The API does not provide arbitrary environment variables or Secret mounts beyond the fixed set above. Do not put credentials into an image, `command`, `args`, the `design` string, or other non-Secret fields.
 
@@ -128,17 +141,51 @@ Payload fields named `project` carry the raw `SimulationExperiment` name. The wi
 
 ## Designing an Experimental Design Service
 
-An EDS owns domain-specific experiment design: it turns the configured design into scenarios and submits those scenarios to CBSE. Scenario Manager owns persistence, initial state, scenario IDs, and later lifecycle transitions.
+An EDS owns domain-specific experiment design: it turns the configured design into scenarios and submits those scenarios to CBSE. Scenario Manager owns persistence, initial state, scenario IDs, and later lifecycle transitions. The EDS is a per-experiment component: the Operator provisions it from `spec.experimentalDesignService` (the single-container Deployment `<exp>-eds` and the Service `<exp>-eds-svc`), and the CR's `port`, `serviceType`, and `nodePort` fields configure the Service that fronts it — ClusterIP by default (port-forward for the browser), NodePort as the user's explicit choice.
 
-The EDS should:
+The reference EDS adds an interactive layer on top of this contract: a small web UI where the experimenter designs the experiment (parameter entries and scenarios), and explicit **Save Experiment**, **Start Experiment**, and **Finish Experiment** actions. See [The reference EDS](#the-reference-eds).
 
-1. Read and validate `SIMULATIONPROJECTNAME` and any configuration that is actually available to the process before doing external work.
-2. Connect to the installation's NATS server with bounded retries.
-3. Announce each pending batch with the availability handshake.
-4. Publish the complete batch to the subject returned by Scenario Manager and wait for a JetStream publish acknowledgement.
+A custom EDS should:
+
+1. Read and validate its configuration — the operator-injected environment and, where it connects to the Detail DB, the mounted connection Secret — before doing external work, failing fast with a descriptive error.
+2. Connect to the experiment's NATS endpoint (`NATS_URL`) with bounded retries.
+3. Announce each pending batch with the availability handshake, declaring its `experiment_type` and verifying the Scenario Manager's echo.
+4. Publish the batch to the subject returned by Scenario Manager and wait for a JetStream publish acknowledgement.
 5. Make retries safe and remain alive until Kubernetes terminates the Pod.
 
-The repository's [EDS mock](../test/mocks/eds/eds_mock.py) is executable protocol documentation. It is a test fixture, not a production template; its subject and stream settings are environment-configurable, and the smoke harness configures it for the `alpha4` subjects.
+The repository's [EDS mock](../test/mocks/eds/eds_mock.py) is executable protocol documentation for the unit and integration tiers. It is a test fixture, not a production template; its subject and stream settings are environment-configurable. It declares `experiment_type: "standard"` on its availability requests (a missing or mismatched echo from the Scenario Manager is a hard, non-retried error) and, with `EDS_FINALIZE` (default `true`), publishes the finalization batch after its standard batches. The mock is retired from the smoke stack: the per-experiment reference EDS, driven by the e2e through its JSON API, is the smoke's EDS.
+
+### The reference EDS
+
+The reference EDS lives in [`component-templates/experimental-design-service/`](../component-templates/experimental-design-service/README.md) (the module's README documents the contract in full). It is a standalone Go module in the reference Translator/PPS tradition — `config` (fail-fast environment and Secret validation), `wire` (the protocol payloads, golden-tested byte-for-byte against the Scenario Manager's landed structs), `recipestore` (the pgx design-layer writer), `publisher` (the handshake and the publish), and `server` (the JSON API plus the embedded UI page, a thin client over the same API) — and it never imports `scenario-manager/internal/**`.
+
+**Build.** The Dockerfile requires the locked `EDS_GO_BUILDER_IMAGE` builder stage — the identical, digest-pinned Go toolchain image the PPS and Translator builds use (recorded in the image lock under `PPS_GO_BUILDER_IMAGE`; the harness passes it through as the EDS build argument) — and compiles a static, stripped binary for `linux/amd64` into a `scratch` runtime that runs as `USER 1000:1000`. The image carries no secrets and no Kubernetes credentials; the service's identity comes exclusively from the operator-injected environment.
+
+**API surface.** Every UI button maps to exactly one endpoint, and the e2e drives the same API — the smoke's determinism is the API's determinism. Errors are JSON `{"error": "..."}` with a 4xx for client-side refusals and a 5xx for transport/DB failures; a clean Scenario Manager refusal (the experiment not `InProgress`) surfaces as a 409 carrying the SM's reason.
+
+| Endpoint | Action |
+| --- | --- |
+| `GET /` | the embedded UI (a thin client over the API) |
+| `GET /api/state` | the design, the derived flow state (`saved` / `started` / `finalized`, the last handshake and publish), and the full `simulation_parameters` view projection |
+| `POST /api/entries` | add a parameter entry; the EDS assigns the next id (floor 5) |
+| `POST /api/recipes` | add a recipe locator row — one FK per parameter, all referencing entries assigned in this process; the EDS assigns the next `parameterset_id` |
+| `POST /api/scenarios` | add an unpublished scenario (`priority`, `number_of_reps`, `confidence_metric`, and a recipe `parameterset_id`) |
+| `DELETE /api/scenarios/<index>` | remove an unpublished scenario (a published one is refused — it already exists in the Scenario Manager) |
+| `POST /api/save` | the **Save Experiment** action: the design's entries and recipes into the Detail DB, one transaction |
+| `POST /api/start` | the **Start Experiment** action: the pre-flight, the handshake, the publish of exactly the not-yet-published scenarios |
+| `POST /api/finish` | the **Finish Experiment** action: the finalization batch |
+
+**The four-step flow.** Design (in memory) → **Save Experiment** → **Start Experiment** → **Finish Experiment**.
+
+- **Save** persists the entries into the four per-parameter tables and the recipes into the `recipes` locator table in one transaction. It is a step in the flow, not an automatic side effect.
+- **Start** first runs the pre-flight: every batch-referenced `parameterset_id` must resolve in the `simulation_parameters` view, else a clean refusal names the missing ids (preventing the scenario from reaching the Translator's `RecipeError` path — a silent stall, not a failure). It then publishes one batch containing exactly the scenarios not yet published; an empty delta is refused ("no new scenarios to publish"). The experiment can be re-armed: design further scenarios, save, start again — the Scenario Manager accepts multiple batches into one `InProgress` experiment.
+- **Finish** publishes the finalization batch (`scenarios: []`, `final: true`) — the explicit close of the experiment's scenario lifecycle. Finalization is **irrevocable**: the server refuses a second Finish and any Start after finalization (409), and the Scenario Manager rejects later batches (below). Before start the UI self-enforces the ordering; after finalization the server enforces it.
+
+**The Detail DB contract.** The Detail DB is the EDS's only store; its write surface is exactly the entry tables and `recipes` — never ids 1–4, never the view, never any other schema or table. At startup the EDS self-provisions the canonical six objects — the four per-parameter entry tables (`arrival_rate`, `service_rate`, `run_duration`, `seed_policy`), the `recipes` locator table, and the `simulation_parameters` **view** over their join — with `CREATE TABLE IF NOT EXISTS` / `CREATE OR REPLACE VIEW` (the only valid idempotent view form in PostgreSQL; `CREATE VIEW IF NOT EXISTS` does not exist). Against a pre-created matching schema the DDL is a no-op, so both delivery branches work: the seeded reference image and a user-pre-created host schema. No baseline INSERTs happen on the dynamic branch. EDS-assigned ids are `MAX(id)+1` with the floor 5 in every table; ids 1–4 are the read-only reference baseline, and any write targeting them is refused. The seed and the grants are documented in the [Scenario Detail Database README](../component-templates/scenario-detail-database/README.md).
+
+**The publisher skeleton.** Each Start and Finish re-enters the proven bounded-retry skeleton (the mock's reference semantics): connection retries 60 attempts × 2 s; the availability request retries 60 × 2 s with a 5 s per-request timeout (retried on timeout and transient transport errors); a reply with `status != "ready"`, a missing `batch_subject`, or a missing/mismatched `experiment_type` echo is a **hard error** — no retry, the reason is surfaced to the UI. The batch publishes to the reply's `batch_subject` through JetStream, and success requires the JetStream PubAck. A healthy connection is reused across actions; on loss the skeleton reconnects.
+
+**The operator-injected environment (the D2 contract).** The EDS's identity and configuration come exclusively from the operator-injected set documented in [What every custom image receives](#what-every-custom-image-receives): `NATS_URL`, `EDS_AVAILABILITY_SUBJECT`, and the three downward-API identity variables — plus the `<exp>-detaildb-sct` connection Secret mounted at `/detaildb-connection` (the five fields `host`, `port`, `dbname`, `user`, `password`). The EDS validates every value at startup and refuses to serve on a missing, malformed, or inconsistent value; the batch subject is never part of the configuration.
 
 ### 1. Announce availability
 
@@ -148,28 +195,30 @@ Send a NATS request to the experiment's availability subject:
 cbse.<namespace>.<project>.eds.scenarios.available
 ```
 
-Request body:
+Request body (the reference EDS always declares `experiment_type`):
 
 ```json
 {
   "batch_id": "design-001",
   "project": "example-experiment",
-  "scenario_count": 2
+  "scenario_count": 2,
+  "experiment_type": "standard"
 }
 ```
 
-`batch_id` and `scenario_count` are informational in the current implementation. `project` must equal the subject's project token.
+`batch_id` and `scenario_count` are informational in the current implementation. `project` must equal the subject's project token. `experiment_type` is the capability handshake of the finalization protocol: it declares that the producer participates in the protocol. It is a capability signal, not a behavior selector — the Scenario Manager keeps no per-project mode state. The reference EDS always declares `"standard"`; an undeclared producer sends no field and receives no echo, so its exchange stays byte-identical to the legacy state.
 
 For an admitted (live, non-deleting, `InProgress`) experiment the response is:
 
 ```json
 {
   "status": "ready",
-  "batch_subject": "cbse.<namespace>.<project>.eds.scenarios"
+  "batch_subject": "cbse.<namespace>.<project>.eds.scenarios",
+  "experiment_type": "standard"
 }
 ```
 
-On failure, `status` is `error` and `reason` describes the rejection; no `batch_subject` is returned. Do not construct the batch subject independently; use the returned value so the EDS follows Scenario Manager configuration.
+On failure, `status` is `error` and `reason` describes the rejection; no `batch_subject` is returned. A declared `experiment_type` is echoed **verbatim and status-independently** — on both the ready and the error reply — and stays absent when the request declared none, so an undeclared producer sees the legacy reply byte-identical. Do not construct the batch subject independently; use the returned value so the EDS follows Scenario Manager configuration. An EDS that declared `experiment_type` must treat a missing or mismatched echo as a hard protocol error: it indicates a Scenario Manager without the finalization protocol, and retrying cannot fix it (the reference EDS surfaces it to the UI instead of burning its retry budget).
 
 ### 2. Publish a scenario batch
 
@@ -184,9 +233,7 @@ Publish the batch through JetStream to `batch_subject` (stream `cbse_eds_scenari
       "priority": 10,
       "number_of_reps": 20,
       "recipe_info": {
-        "arrival_rate": 4.2,
-        "servers": 3,
-        "seed": 1042
+        "parameterset_id": 5
       },
       "confidence_metric": 0.95
     },
@@ -194,9 +241,7 @@ Publish the batch through JetStream to `batch_subject` (stream `cbse_eds_scenari
       "priority": 20,
       "number_of_reps": 20,
       "recipe_info": {
-        "arrival_rate": 5.0,
-        "servers": 4,
-        "seed": 1043
+        "parameterset_id": 6
       },
       "confidence_metric": 0.95
     }
@@ -211,12 +256,39 @@ Publish the batch through JetStream to `batch_subject` (stream `cbse_eds_scenari
 | `scenarios` | Zero or more scenario definitions |
 | `priority` | Stored with the scenario; the selector does not schedule by priority |
 | `number_of_reps` | Requested repetitions; must be in `1..100000` or the whole batch is permanent poison, and is executed as the runner Job's completion count |
-| `recipe_info` | Arbitrary JSON consumed later by the user-defined Translator |
+| `recipe_info` | JSON consumed later by the user-defined Translator; the reference contract is the single field `parameterset_id`, the locator of one `simulation_parameters` row |
 | `confidence_metric` | Optional numeric target for future post-processing |
+| `final` | Absent or `false` = a normal scenario batch (the legacy state, byte-identical on the wire); `true` = the finalization batch ([below](#3-the-finalization-protocol)) |
 
 Scenario Manager assigns each inserted row its database ID, initializes it in `Created`, and inserts the whole batch in one transaction. A database failure rolls back the whole batch and negatively acknowledges the delivery so JetStream can redeliver it. Malformed JSON, an invalid subject or identity, a subject/payload mismatch, or an out-of-range `number_of_reps` is permanent poison: the delivery is acknowledged and no rows are inserted. A terminal experiment is acknowledged and discarded; an unavailable experiment or transient dependency failure is negatively acknowledged for redelivery.
 
+The Scenario Manager builds an acknowledgement (`status` one of `inserted`, `poison`, or `error`, plus `batch_id`, `received`, `inserted`, `failed`, and a `reason` where applicable) for every admitted batch and delivers it on the delivery's reply subject only when one is present. The reference EDS — like the protocol-faithful mock and the e2e harness — publishes without a reply subject and gates on the JetStream PubAck instead; the observable outcome of a publish is therefore the scenario rows in the Core DB and the CR's state, not an ack payload on the wire.
+
 JetStream delivery is at least once. The database schema does not deduplicate `batch_id`, so an EDS must not assume that a retry can never create duplicate scenarios. Use deterministic recipes and retain a stable batch ID for observability; if duplicates are unacceptable, wait for or contribute an explicit idempotency contract rather than querying or modifying the Core DB directly.
+
+### 3. The finalization protocol
+
+A scenario batch carries a `final` flag. A batch with `final` absent or `false` is a normal scenario batch — byte-identical to the legacy wire. The **finalization batch** carries the present empty scenario array and the flag:
+
+```json
+{
+  "batch_id": "design-002",
+  "project": "example-experiment",
+  "scenarios": [],
+  "final": true
+}
+```
+
+It says "no further scenarios will be generated" and closes the experiment's scenario lifecycle explicitly, not by inference. The reference EDS publishes it through the **Finish Experiment** action; an optimization EDS publishes it on algorithmic completion.
+
+The Scenario Manager's finalization-aware verdict:
+
+- A final batch first inserts its scenarios, if any, and then durably marks the project finalized (a redelivered final batch is an idempotent no-op).
+- `Failed` stays fail-fast: any failed scenario fails the experiment immediately, regardless of finalization.
+- `Finished` requires **all** scenarios terminally verified **and** the finalization batch received — including the explicit zero-scenario Finish, which lands `Finished` on the empty set. That is the interactive window's explicit close, distinct from an experiment that idles `InProgress` with no scenarios at all.
+- A non-final batch arriving after finalization is rejected with an acknowledgement of `status: "error"` and the pinned reason `experiment finalized; no further batches accepted`. Finalization is irrevocable: the experiment cannot be re-armed, and terminal phases are sticky.
+
+While every scenario is terminal and verified but the finalization batch is still outstanding, the experiment idles `InProgress` by design, and the Scenario Manager's aggregate pass writes the diagnostic `status.message = "awaiting EDS finalization"`. The diagnostic is a merge patch that carries only `status.message` — never `phase`, never the verdict — and is written only when different. It clears when the finalization lands and the `Finished` verdict is reported: the Operator's terminal derivation overwrites the message at the phase transition (the `Finished` verdict requires the finalization, so it always lands later in the sequence).
 
 ## Designing a Translator
 
