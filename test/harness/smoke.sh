@@ -21,7 +21,7 @@
 # non-alpha4 version or non-pipeline-managed CRD unless CBSE_ALLOW_CRD_UPGRADE);
 # create the ephemeral cbse-e2e-<RUN_ID> namespace with the run ownership label
 # and the registry pull secret; apply the support stack; wait for the core-db,
-# NATS, EDS mock, operator, and scenario-manager Deployments to roll out and
+# NATS, operator, and scenario-manager Deployments to roll out and
 # for the Scenario Manager to log readiness; apply the experiment manifest;
 # and run the Ginkgo e2e suite. The finish trap tears it all down.
 #
@@ -33,8 +33,8 @@
 #   TEST_IMAGE_VERSION (default 26.7.16) canonical image tag (YY.M.D).
 #   CBSE_REGISTRY_AUTH_FILE  passed to build-images.sh for push credentials.
 #   SKIP_BUILD=1  reuse pre-built images from OPERATOR_IMAGE, SM_IMAGE, EDS_IMAGE,
-#            TRANS_IMAGE, RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE, PPS_IMAGE instead of
-#            building.
+#            EDS_REFERENCE_IMAGE, TRANS_IMAGE, RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE,
+#            PPS_IMAGE instead of building.
 #   CBSE_KEEP_ON_FAILURE=1  retain the namespace if the run fails (for debugging).
 #   CBSE_KEEP_NAMESPACE=1  retain the namespace unconditionally.
 #   CBSE_ALLOW_CRD_UPGRADE=1  allow applying an existing non-pipeline-managed CRD.
@@ -115,6 +115,14 @@ EOF
     if [[ "${CBSE_KEEP_NAMESPACE:-0}" == "1" ]]; then
       echo "Retained test run namespace: ${namespace}" >&2
     elif (( status == 0 )) || [[ "${CBSE_KEEP_ON_FAILURE:-0}" != "1" ]]; then
+      # Delete the experiment CRs first and wait for their Scenario-Manager
+      # cleanup finalizer to clear: the namespace deletion below cascades the
+      # Scenario Manager Deployment and the CRs together, and a dead SM
+      # cannot release its own finalizer - the CR (and with it the whole
+      # namespace) then wedges in Terminating forever, and the namespace
+      # deletion timeout silently starves the lease release below
+      # (settlement-smoke discovery 5).
+      "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete simulationexperiment --all -n "${namespace}" --wait=true --timeout=120s >/dev/null 2>&1
       "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete namespace "${namespace}" --wait=true --timeout=180s >/dev/null 2>&1
     else
       echo "Retained failed run namespace: ${namespace}" >&2
@@ -123,6 +131,12 @@ EOF
 
   if (( lock_acquired == 1 )); then
     holder="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get lease cbse-smoke-lock -n cbse-test-system -o jsonpath='{.spec.holderIdentity}' 2>/dev/null)"
+    if [[ "${holder}" != "${run_id}" ]]; then
+      # One retry: a transient API error on the first read must not leak the
+      # lease (a held lock refuses every later run until manual release).
+      sleep 2
+      holder="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get lease cbse-smoke-lock -n cbse-test-system -o jsonpath='{.spec.holderIdentity}' 2>/dev/null)"
+    fi
     if [[ "${holder}" == "${run_id}" ]]; then
       "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete lease cbse-smoke-lock -n cbse-test-system --wait=false >/dev/null 2>&1
     fi
@@ -162,14 +176,15 @@ else
   OPERATOR_IMAGE="${OPERATOR_IMAGE}"
   SM_IMAGE="${SM_IMAGE}"
   EDS_IMAGE="${EDS_IMAGE}"
+  EDS_REFERENCE_IMAGE="${EDS_REFERENCE_IMAGE}"
   TRANS_IMAGE="${TRANS_IMAGE}"
   RUNNER_BASE_IMAGE="${RUNNER_BASE_IMAGE}"
   DETAIL_DB_IMAGE="${DETAIL_DB_IMAGE}"
   PPS_IMAGE="${PPS_IMAGE}"
 fi
-export OPERATOR_IMAGE SM_IMAGE EDS_IMAGE TRANS_IMAGE RUNNER_BASE_IMAGE DETAIL_DB_IMAGE PPS_IMAGE
-printf 'OPERATOR_IMAGE=%s\nSM_IMAGE=%s\nEDS_IMAGE=%s\nTRANS_IMAGE=%s\nRUNNER_BASE_IMAGE=%s\nDETAIL_DB_IMAGE=%s\nPPS_IMAGE=%s\n' \
-  "${OPERATOR_IMAGE}" "${SM_IMAGE}" "${EDS_IMAGE}" "${TRANS_IMAGE}" \
+export OPERATOR_IMAGE SM_IMAGE EDS_IMAGE EDS_REFERENCE_IMAGE TRANS_IMAGE RUNNER_BASE_IMAGE DETAIL_DB_IMAGE PPS_IMAGE
+printf 'OPERATOR_IMAGE=%s\nSM_IMAGE=%s\nEDS_IMAGE=%s\nEDS_REFERENCE_IMAGE=%s\nTRANS_IMAGE=%s\nRUNNER_BASE_IMAGE=%s\nDETAIL_DB_IMAGE=%s\nPPS_IMAGE=%s\n' \
+  "${OPERATOR_IMAGE}" "${SM_IMAGE}" "${EDS_IMAGE}" "${EDS_REFERENCE_IMAGE}" "${TRANS_IMAGE}" \
   "${RUNNER_BASE_IMAGE}" "${DETAIL_DB_IMAGE}" "${PPS_IMAGE}" >"${artifact_dir}/images.env"
 
 crd="${root}/experiment-operator/config/crd/bases/experiment.cbse.terministic.de_simulationexperiments.yaml"
@@ -219,12 +234,11 @@ sed \
   -e "s|CBSE_RUN_ID|${run_id}|g" \
   -e "s|CBSE_OPERATOR_IMAGE|${OPERATOR_IMAGE}|g" \
   -e "s|CBSE_SM_IMAGE|${SM_IMAGE}|g" \
-  -e "s|CBSE_EDS_IMAGE|${EDS_IMAGE}|g" \
   -e "s|CBSE_PROJECT|${project}|g" \
   "${tmp}/stack.raw.yaml" >"${artifact_dir}/stack.yaml"
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" apply -n "${namespace}" -f "${artifact_dir}/stack.yaml" >/dev/null
 
-for deployment in core-db sm-eds-nats eds-mock experiment-operator scenario-manager; do
+for deployment in core-db sm-eds-nats experiment-operator scenario-manager; do
   "${kubectl_bin}" --kubeconfig "${kubeconfig}" rollout status deployment/"${deployment}" -n "${namespace}" --timeout=240s
 done
 
@@ -242,7 +256,8 @@ sed \
   -e "s|CBSE_NAMESPACE|${namespace}|g" \
   -e "s|CBSE_PROJECT|${project}|g" \
   -e "s|CBSE_RUN_ID|${run_id}|g" \
-  -e "s|CBSE_SUPPORT_IMAGE|${EDS_IMAGE}|g" \
+  -e "s|CBSE_SUPPORT_IMAGE|${EDS_REFERENCE_IMAGE}|g" \
+  -e "s|CBSE_EDS_REFERENCE_IMAGE|${EDS_REFERENCE_IMAGE}|g" \
   -e "s|CBSE_PPS_IMAGE|${PPS_IMAGE}|g" \
   -e "s|CBSE_TRANS_IMAGE|${TRANS_IMAGE}|g" \
   -e "s|CBSE_BUILDER_IMAGE|${BUILDER_IMAGE}|g" \

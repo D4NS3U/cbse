@@ -42,14 +42,23 @@ type patchCall struct {
 	err       error
 }
 
+// messagePatchCall records one PatchAwaitingFinalization attempt.
+type messagePatchCall struct {
+	namespace string
+	name      string
+	err       error
+}
+
 type fakeKube struct {
-	mu          sync.Mutex
-	experiments []experimentalpha4.SimulationExperiment
-	listErr     error
-	listCalls   int
-	patchErr    error
-	failFirstN  int
-	patchCalls  []patchCall
+	mu                sync.Mutex
+	experiments       []experimentalpha4.SimulationExperiment
+	listErr           error
+	listCalls         int
+	patchErr          error
+	failFirstN        int
+	patchCalls        []patchCall
+	messagePatchErr   error
+	messagePatchCalls []messagePatchCall
 }
 
 func (f *fakeKube) ListExperiments(ctx context.Context) ([]experimentalpha4.SimulationExperiment, error) {
@@ -85,11 +94,40 @@ func (f *fakeKube) PatchVerdict(ctx context.Context, namespace, name, verdict st
 	return nil
 }
 
+func (f *fakeKube) PatchAwaitingFinalization(ctx context.Context, namespace, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.messagePatchCalls = append(f.messagePatchCalls, messagePatchCall{namespace, name, f.messagePatchErr})
+	if f.messagePatchErr != nil {
+		return f.messagePatchErr
+	}
+	// Apply the diagnostic the way the API server would: the next tick's
+	// write-if-different check sees the message on the listed object.
+	for i := range f.experiments {
+		if f.experiments[i].Namespace == namespace && f.experiments[i].Name == name {
+			f.experiments[i].Status.Message = awaitingFinalizationMessage
+		}
+	}
+	return nil
+}
+
 func (f *fakeKube) successfulCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	n := 0
 	for _, c := range f.patchCalls {
+		if c.err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeKube) successfulMessageCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.messagePatchCalls {
 		if c.err == nil {
 			n++
 		}
@@ -104,9 +142,12 @@ type fakeStore struct {
 	lookupErr  error
 	counts     map[int]persistence.ScenarioStateCounts
 	countsErr  error
+	finalized  map[string]bool
+	finalErr   error
 
 	lookupCalls []string
 	countsCalls []int
+	finalCalls  []string
 }
 
 func newFakeStore(counts map[int]persistence.ScenarioStateCounts) *fakeStore {
@@ -114,6 +155,7 @@ func newFakeStore(counts map[int]persistence.ScenarioStateCounts) *fakeStore {
 		projectIDs: map[string]int{"ns/proj": 7},
 		notFound:   make(map[string]bool),
 		counts:     counts,
+		finalized:  make(map[string]bool),
 	}
 }
 
@@ -141,6 +183,17 @@ func (f *fakeStore) ScenarioStateCounts(ctx context.Context, projectID int) (per
 	return f.counts[projectID], nil
 }
 
+func (f *fakeStore) IsFinalized(ctx context.Context, namespace, project string) (bool, error) {
+	key := namespace + "/" + project
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.finalCalls = append(f.finalCalls, key)
+	if f.finalErr != nil {
+		return false, f.finalErr
+	}
+	return f.finalized[key], nil
+}
+
 func (f *fakeStore) lookups() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -165,6 +218,14 @@ func experiment(ns, name, phase, verdict string) *experimentalpha4.SimulationExp
 			ScenarioManagerVerdict: verdict,
 		},
 	}
+}
+
+// experimentWithMessage builds an experiment with the given phase, verdict,
+// and status message (the diagnostic write-if-different state).
+func experimentWithMessage(ns, name, phase, verdict, message string) *experimentalpha4.SimulationExperiment {
+	exp := experiment(ns, name, phase, verdict)
+	exp.Status.Message = message
+	return exp
 }
 
 func newTestScheduler(t *testing.T, store *fakeStore, k *fakeKube) *Scheduler {
@@ -200,45 +261,60 @@ func TestConfigDefaults(t *testing.T) {
 	}
 }
 
-// ---- the D3 aggregation rule ----
+// ---- the finalization-aware aggregation rule ----
 
-func TestVerdictForCounts(t *testing.T) {
+// TestVerdictForCountsFinalizationMatrix is the six-case verdict matrix of the
+// finalization-aware rule: (a) all-terminal without final stays unreported,
+// (b) all-terminal with final finishes, (c) zero scenarios with final
+// finishes (the empty set), (d) zero without final stays unreported, (e) any
+// Failed fails fast regardless of final, (f) partial with final stays
+// unreported.
+func TestVerdictForCountsFinalizationMatrix(t *testing.T) {
 	cases := []struct {
-		name   string
-		counts persistence.ScenarioStateCounts
-		want   string
+		name      string
+		counts    persistence.ScenarioStateCounts
+		finalized bool
+		want      string
 	}{
-		{"fail-fast: one failed with unfinished present", persistence.ScenarioStateCounts{Total: 3, Finished: 1, Failed: 1}, "Failed"},
-		{"fail-fast: failed alongside finished", persistence.ScenarioStateCounts{Total: 5, Finished: 3, Failed: 2}, "Failed"},
-		{"all finished", persistence.ScenarioStateCounts{Total: 4, Finished: 4, Failed: 0}, "Finished"},
-		{"single finished", persistence.ScenarioStateCounts{Total: 1, Finished: 1, Failed: 0}, "Finished"},
-		{"zero scenarios never", persistence.ScenarioStateCounts{}, ""},
-		{"mixed non-terminal no-op", persistence.ScenarioStateCounts{Total: 3, Finished: 2, Failed: 0}, ""},
-		{"none terminal yet", persistence.ScenarioStateCounts{Total: 2, Finished: 0, Failed: 0}, ""},
+		{"a: all-terminal without final stays InProgress", persistence.ScenarioStateCounts{Total: 4, Finished: 4, Failed: 0}, false, ""},
+		{"b: all-terminal with final finishes", persistence.ScenarioStateCounts{Total: 4, Finished: 4, Failed: 0}, true, "Finished"},
+		{"c: zero scenarios with explicit Finish finishes the empty set", persistence.ScenarioStateCounts{}, true, "Finished"},
+		{"d: zero scenarios without final stays idle", persistence.ScenarioStateCounts{}, false, ""},
+		{"e: fail-fast with final", persistence.ScenarioStateCounts{Total: 3, Finished: 1, Failed: 1}, true, "Failed"},
+		{"e: fail-fast without final", persistence.ScenarioStateCounts{Total: 3, Finished: 1, Failed: 1}, false, "Failed"},
+		{"f: partial (some terminal) with final stays unreported", persistence.ScenarioStateCounts{Total: 3, Finished: 2, Failed: 0}, true, ""},
+		{"partial without final stays unreported", persistence.ScenarioStateCounts{Total: 3, Finished: 2, Failed: 0}, false, ""},
+		{"failed alongside finished with final", persistence.ScenarioStateCounts{Total: 5, Finished: 3, Failed: 2}, true, "Failed"},
 	}
 	for _, c := range cases {
-		if got := verdictForCounts(c.counts); got != c.want {
-			t.Errorf("%s: verdictForCounts(%+v) = %q; want %q", c.name, c.counts, got, c.want)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			if got := verdictForCounts(c.counts, c.finalized); got != c.want {
+				t.Fatalf("verdictForCounts(%+v, finalized=%v) = %q; want %q", c.counts, c.finalized, got, c.want)
+			}
+		})
 	}
 }
 
 // ---- the tick: gate, absorbing skip, D3, failure taxonomy ----
 
-func TestTickReportsVerdictPerD3(t *testing.T) {
+func TestTickReportsVerdictPerFinalizationRule(t *testing.T) {
 	cases := []struct {
 		name        string
 		counts      persistence.ScenarioStateCounts
+		finalized   bool
 		wantVerdict string
 	}{
-		{"fail-fast one failed with unfinished", persistence.ScenarioStateCounts{Total: 3, Finished: 1, Failed: 1}, "Failed"},
-		{"all finished", persistence.ScenarioStateCounts{Total: 4, Finished: 4, Failed: 0}, "Finished"},
-		{"zero scenarios never reports", persistence.ScenarioStateCounts{}, ""},
-		{"mixed non-terminal reports nothing", persistence.ScenarioStateCounts{Total: 3, Finished: 2, Failed: 0}, ""},
+		{"fail-fast one failed with unfinished (finalized)", persistence.ScenarioStateCounts{Total: 3, Finished: 1, Failed: 1}, true, "Failed"},
+		{"all finished with final reports Finished", persistence.ScenarioStateCounts{Total: 4, Finished: 4, Failed: 0}, true, "Finished"},
+		{"zero scenarios with explicit Finish reports Finished", persistence.ScenarioStateCounts{}, true, "Finished"},
+		{"all finished without final reports nothing (diagnostic instead)", persistence.ScenarioStateCounts{Total: 4, Finished: 4, Failed: 0}, false, ""},
+		{"zero scenarios without final reports nothing", persistence.ScenarioStateCounts{}, false, ""},
+		{"mixed non-terminal reports nothing", persistence.ScenarioStateCounts{Total: 3, Finished: 2, Failed: 0}, true, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: c.counts})
+			store.finalized["ns/proj"] = c.finalized
 			k := &fakeKube{}
 			oneInProgress(k)
 			s := newTestScheduler(t, store, k)
@@ -249,15 +325,19 @@ func TestTickReportsVerdictPerD3(t *testing.T) {
 			defer k.mu.Unlock()
 			if c.wantVerdict == "" {
 				if got := len(k.patchCalls); got != 0 {
-					t.Fatalf("patch calls = %d; want 0: %+v", got, k.patchCalls)
+					t.Fatalf("verdict patch calls = %d; want 0: %+v", got, k.patchCalls)
 				}
 			} else {
 				if len(k.patchCalls) != 1 {
-					t.Fatalf("patch calls = %d; want 1: %+v", len(k.patchCalls), k.patchCalls)
+					t.Fatalf("verdict patch calls = %d; want 1: %+v", len(k.patchCalls), k.patchCalls)
 				}
 				call := k.patchCalls[0]
 				if call.namespace != "ns" || call.name != "proj" || call.verdict != c.wantVerdict || call.err != nil {
 					t.Fatalf("patch call = %+v; want ns/proj %q success", call, c.wantVerdict)
+				}
+				// A reported verdict suppresses the diagnostic message.
+				if got := len(k.messagePatchCalls); got != 0 {
+					t.Fatalf("message patch calls = %d; want 0 (verdict reported): %+v", got, k.messagePatchCalls)
 				}
 			}
 			if store.countsCallsCount() != 1 {
@@ -367,6 +447,7 @@ func TestTickCountsErrorSkipsExperiment(t *testing.T) {
 
 func TestTickListFailureRetriesNextTick(t *testing.T) {
 	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 1, Finished: 1}})
+	store.finalized["ns/proj"] = true
 	k := &fakeKube{listErr: errors.New("apiserver unavailable")}
 	oneInProgress(k)
 	k.listCalls = 0
@@ -386,6 +467,7 @@ func TestTickListFailureRetriesNextTick(t *testing.T) {
 
 func TestTickPatchErrorRetriesNextTick(t *testing.T) {
 	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 4, Finished: 4}})
+	store.finalized["ns/proj"] = true
 	k := &fakeKube{failFirstN: 1}
 	oneInProgress(k)
 	s := newTestScheduler(t, store, k)
@@ -405,7 +487,190 @@ func TestTickPatchErrorRetriesNextTick(t *testing.T) {
 	}
 }
 
-// ---- the status patch payload (D9: only scenarioManagerVerdict) ----
+// ---- the awaiting-EDS-finalization InProgress diagnostic ----
+//
+// The diagnostic is the one status.message case the SM writes: InProgress,
+// every scenario terminal, the finalization still outstanding. It never
+// touches phase or scenarioManagerVerdict, and it is write-if-different.
+
+func TestTickDiagnosticFiresOnlyWhenAllTerminalNotFinalizedInProgress(t *testing.T) {
+	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 3, Finished: 3}})
+	// finalized false: the final batch is still outstanding.
+	k := &fakeKube{experiments: []experimentalpha4.SimulationExperiment{*experiment("ns", "proj", "InProgress", "")}}
+	s := newTestScheduler(t, store, k)
+
+	s.tick(context.Background())
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	// The diagnostic message patch fires ...
+	if len(k.messagePatchCalls) != 1 {
+		t.Fatalf("message patch calls = %d; want 1: %+v", len(k.messagePatchCalls), k.messagePatchCalls)
+	}
+	if k.messagePatchCalls[0].namespace != "ns" || k.messagePatchCalls[0].name != "proj" {
+		t.Fatalf("message patch target = %+v; want ns/proj", k.messagePatchCalls[0])
+	}
+	// ... and no verdict is reported (final is still outstanding).
+	if len(k.patchCalls) != 0 {
+		t.Fatalf("verdict patch calls = %d; want 0 (final outstanding): %+v", len(k.patchCalls), k.patchCalls)
+	}
+	// The operator-owned phase is untouched.
+	if got := k.experiments[0].Status.Phase; got != "InProgress" {
+		t.Fatalf("phase = %q; want InProgress untouched", got)
+	}
+}
+
+func TestTickDiagnosticNotOnPartialCounts(t *testing.T) {
+	// Not every scenario terminal: no diagnostic.
+	for _, counts := range []persistence.ScenarioStateCounts{
+		{Total: 3, Finished: 2},
+		{Total: 2, Finished: 0},
+		{Total: 0, Finished: 0}, // zero is the idle, not the all-terminal case
+	} {
+		store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: counts})
+		k := &fakeKube{experiments: []experimentalpha4.SimulationExperiment{*experiment("ns", "proj", "InProgress", "")}}
+		s := newTestScheduler(t, store, k)
+
+		s.tick(context.Background())
+
+		k.mu.Lock()
+		if len(k.messagePatchCalls) != 0 {
+			t.Fatalf("counts %+v: message patch calls = %+v; want none (not all terminal)", counts, k.messagePatchCalls)
+		}
+		if len(k.patchCalls) != 0 {
+			t.Fatalf("counts %+v: verdict patch calls = %+v; want none", counts, k.patchCalls)
+		}
+		k.mu.Unlock()
+	}
+}
+
+func TestTickDiagnosticNotWhenFinalized(t *testing.T) {
+	// All terminal AND finalized: the Finished verdict is due instead; the
+	// diagnostic never writes alongside a verdict.
+	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 2, Finished: 2}})
+	store.finalized["ns/proj"] = true
+	k := &fakeKube{experiments: []experimentalpha4.SimulationExperiment{*experiment("ns", "proj", "InProgress", "")}}
+	s := newTestScheduler(t, store, k)
+
+	s.tick(context.Background())
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if len(k.patchCalls) != 1 || k.patchCalls[0].verdict != "Finished" {
+		t.Fatalf("verdict patches = %+v; want Finished", k.patchCalls)
+	}
+	if len(k.messagePatchCalls) != 0 {
+		t.Fatalf("message patch calls = %+v; want none (verdict wins)", k.messagePatchCalls)
+	}
+}
+
+func TestTickDiagnosticNotAfterVerdict(t *testing.T) {
+	// The absorbing verdict gate skips the experiment entirely: no message,
+	// no re-touch after a verdict is reported.
+	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 2, Finished: 2}})
+	k := &fakeKube{experiments: []experimentalpha4.SimulationExperiment{*experiment("ns", "proj", "InProgress", "Finished")}}
+	s := newTestScheduler(t, store, k)
+
+	s.tick(context.Background())
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if len(k.messagePatchCalls) != 0 {
+		t.Fatalf("message patch calls = %+v; want none (absorbing verdict skip)", k.messagePatchCalls)
+	}
+	if len(k.patchCalls) != 0 {
+		t.Fatalf("verdict patch calls = %+v; want none", k.patchCalls)
+	}
+}
+
+func TestTickDiagnosticWriteIfDifferent(t *testing.T) {
+	// The message already equals the diagnostic: the write-if-different guard
+	// skips the patch; a second tick is a no-op too.
+	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 2, Finished: 2}})
+	k := &fakeKube{experiments: []experimentalpha4.SimulationExperiment{*experimentWithMessage("ns", "proj", "InProgress", "", "awaiting EDS finalization")}}
+	s := newTestScheduler(t, store, k)
+
+	s.tick(context.Background())
+	s.tick(context.Background())
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if len(k.messagePatchCalls) != 0 {
+		t.Fatalf("message patch calls = %+v; want none (write-if-different)", k.messagePatchCalls)
+	}
+}
+
+func TestTickDiagnosticIdempotentAcrossTicks(t *testing.T) {
+	// First tick writes the diagnostic; the fake applies it to the listed
+	// object the way the API server would, so the next tick's
+	// write-if-different check sees it and skips.
+	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 2, Finished: 2}})
+	k := &fakeKube{experiments: []experimentalpha4.SimulationExperiment{*experiment("ns", "proj", "InProgress", "")}}
+	s := newTestScheduler(t, store, k)
+
+	s.tick(context.Background())
+	s.tick(context.Background())
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if len(k.messagePatchCalls) != 1 {
+		t.Fatalf("message patch calls = %d; want exactly 1 (write-if-different): %+v", len(k.messagePatchCalls), k.messagePatchCalls)
+	}
+}
+
+func TestTickDiagnosticNotOnOtherPhases(t *testing.T) {
+	// The diagnostic is InProgress-only: every other phase is gate-rejected
+	// (or terminal), so the message never writes outside the open window.
+	phases := []string{"Pending", "Provisioning", "", "Error", "Failed", "Finished", "MysteryPhase"}
+	for _, phase := range phases {
+		t.Run("phase="+phase, func(t *testing.T) {
+			store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 2, Finished: 2}})
+			k := &fakeKube{experiments: []experimentalpha4.SimulationExperiment{*experiment("ns", "proj", phase, "")}}
+			s := newTestScheduler(t, store, k)
+
+			s.tick(context.Background())
+
+			k.mu.Lock()
+			defer k.mu.Unlock()
+			if len(k.messagePatchCalls) != 0 {
+				t.Fatalf("phase %q: message patch calls = %+v; want none", phase, k.messagePatchCalls)
+			}
+			if len(k.patchCalls) != 0 {
+				t.Fatalf("phase %q: verdict patch calls = %+v; want none", phase, k.patchCalls)
+			}
+		})
+	}
+}
+
+func TestTickDiagnosticPatchErrorSkipsNoVerdict(t *testing.T) {
+	// A diagnostic patch failure is a dependency error: the experiment is
+	// skipped, no verdict is reported, and the next tick retries the message.
+	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 2, Finished: 2}})
+	k := &fakeKube{experiments: []experimentalpha4.SimulationExperiment{*experiment("ns", "proj", "InProgress", "")}}
+	k.messagePatchErr = errors.New("apiserver unavailable")
+	s := newTestScheduler(t, store, k)
+
+	s.tick(context.Background())
+
+	k.mu.Lock()
+	if len(k.messagePatchCalls) != 1 || k.messagePatchCalls[0].err == nil {
+		t.Fatalf("first tick: message patch attempts = %+v; want one failed attempt", k.messagePatchCalls)
+	}
+	if len(k.patchCalls) != 0 {
+		t.Fatalf("verdict patch calls = %+v; want none", k.patchCalls)
+	}
+	k.mu.Unlock()
+
+	k.messagePatchErr = nil
+	s.tick(context.Background())
+	if k.successfulMessageCalls() != 1 {
+		k.mu.Lock()
+		defer k.mu.Unlock()
+		t.Fatalf("second tick: successful message patches = %+v; want one success (self-healing)", k.messagePatchCalls)
+	}
+}
+
+// ---- the status patch payload (field ownership: the additive amendment) ----
 
 // recordingClient wraps a controller-runtime client and records every
 // pre-encoded merge patch payload and its target before delegating, so a test
@@ -482,6 +747,11 @@ func testScheme(t *testing.T) *runtime.Scheme {
 }
 
 func TestKubePatchVerdictPayloadCarriesOnlyScenarioManagerVerdict(t *testing.T) {
+	// Field ownership (the additive amendment of the SBO finalization
+	// protocol): the SM never writes phase; the SM writes status fields in
+	// exactly two cases - this verdict patch and the awaiting-finalization
+	// diagnostic message (TestKubePatchAwaitingFinalizationPayloadCarriesOnlyMessage).
+	// The operator retains full ownership of phase and all other messages.
 	obj := &experimentalpha4.SimulationExperiment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "proj", UID: types.UID("uid-1")},
 		Status:     experimentalpha4.SimulationExperimentStatus{Phase: "InProgress"},
@@ -513,7 +783,7 @@ func TestKubePatchVerdictPayloadCarriesOnlyScenarioManagerVerdict(t *testing.T) 
 	}
 
 	// The patch must land on the object: the verdict is set, and the
-	// operator-owned phase is untouched.
+	// operator-owned phase and message are untouched.
 	got := &experimentalpha4.SimulationExperiment{}
 	if err := cs.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "proj"}, got); err != nil {
 		t.Fatalf("get after patch: %v", err)
@@ -524,6 +794,62 @@ func TestKubePatchVerdictPayloadCarriesOnlyScenarioManagerVerdict(t *testing.T) 
 	if got.Status.Phase != "InProgress" {
 		t.Fatalf("status.phase = %q; want InProgress untouched", got.Status.Phase)
 	}
+	if got.Status.Message != "" {
+		t.Fatalf("status.message = %q; want empty (the operator owns all messages except the diagnostic)", got.Status.Message)
+	}
+}
+
+// TestKubePatchAwaitingFinalizationPayloadCarriesOnlyMessage is the second of
+// the SM's exactly-two status-write cases: the InProgress
+// awaiting-EDS-finalization diagnostic. The merge patch carries only
+// status.message - never phase, never scenarioManagerVerdict - so the
+// operator's terminal derivation (which overwrites the message at the phase
+// transition) and the verdict field are untouched by the SM's diagnostic.
+func TestKubePatchAwaitingFinalizationPayloadCarriesOnlyMessage(t *testing.T) {
+	obj := &experimentalpha4.SimulationExperiment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "proj", UID: types.UID("uid-1")},
+		Status:     experimentalpha4.SimulationExperimentStatus{Phase: "InProgress", Message: "operator detail"},
+	}
+	cs := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(obj).
+		// Enforce the live API-server semantics: with the status subresource
+		// enabled, a main-resource write never alters status.
+		WithStatusSubresource(&experimentalpha4.SimulationExperiment{}).Build()
+	rc := &recordingClient{WithWatch: cs}
+
+	if err := NewKube(rc).PatchAwaitingFinalization(context.Background(), "ns", "proj"); err != nil {
+		t.Fatalf("PatchAwaitingFinalization: %v", err)
+	}
+
+	rc.mu.Lock()
+	if len(rc.patches) != 1 {
+		t.Fatalf("patches = %d; want 1", len(rc.patches))
+	}
+	p := rc.patches[0]
+	rc.mu.Unlock()
+
+	if p.namespace != "ns" || p.name != "proj" {
+		t.Fatalf("patch target = %s/%s; want ns/proj", p.namespace, p.name)
+	}
+	want := []byte(`{"status":{"message":"awaiting EDS finalization"}}`)
+	if !bytes.Equal(p.data, want) {
+		t.Fatalf("patch payload = %s; want exactly %s (only message - never phase, never scenarioManagerVerdict)", p.data, want)
+	}
+
+	// The diagnostic lands on the object; the operator-owned phase and the
+	// SM-owned verdict field are untouched.
+	got := &experimentalpha4.SimulationExperiment{}
+	if err := cs.Get(context.Background(), types.NamespacedName{Namespace: "ns", Name: "proj"}, got); err != nil {
+		t.Fatalf("get after patch: %v", err)
+	}
+	if got.Status.Message != "awaiting EDS finalization" {
+		t.Fatalf("status.message = %q; want the diagnostic", got.Status.Message)
+	}
+	if got.Status.Phase != "InProgress" {
+		t.Fatalf("status.phase = %q; want InProgress untouched (the SM never writes phase)", got.Status.Phase)
+	}
+	if got.Status.ScenarioManagerVerdict != "" {
+		t.Fatalf("status.scenarioManagerVerdict = %q; want empty (the diagnostic never writes the verdict)", got.Status.ScenarioManagerVerdict)
+	}
 }
 
 // TestPassWriteIfAbsentIsIdempotent drives the whole pass (production Kube
@@ -531,6 +857,7 @@ func TestKubePatchVerdictPayloadCarriesOnlyScenarioManagerVerdict(t *testing.T) 
 // and the second tick must be a no-op because the verdict is absorbing.
 func TestPassWriteIfAbsentIsIdempotent(t *testing.T) {
 	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 4, Finished: 4}})
+	store.finalized["ns/proj"] = true
 	obj := &experimentalpha4.SimulationExperiment{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "proj", UID: types.UID("uid-1")},
 		Status:     experimentalpha4.SimulationExperimentStatus{Phase: "InProgress"},
@@ -576,6 +903,7 @@ func TestPassWriteIfAbsentIsIdempotent(t *testing.T) {
 
 func TestSchedulerStartShutdown(t *testing.T) {
 	store := newFakeStore(map[int]persistence.ScenarioStateCounts{7: {Total: 2, Finished: 2}})
+	store.finalized["ns/proj"] = true
 	k := &fakeKube{}
 	oneInProgress(k)
 	s, err := NewScheduler(store, k, Config{Interval: 10 * time.Millisecond, TickTimeout: time.Second})

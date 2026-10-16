@@ -20,14 +20,21 @@
 // counts over the Core DB and reports the verdict through the status
 // subresource.
 //
-// Field ownership is the contract: the status merge patch carries ONLY
-// scenarioManagerVerdict - never phase, never message. The verdict is
-// absorbing (write-if-absent): an experiment whose field is already set is
-// skipped, so the pass is idempotent and the field never changes once
-// written. Per-experiment failures are logged in the established operation=
-// style and skipped; the next tick retries (self-healing). The pass holds no
-// queue, row lock, leader flag, or cross-replica coordination state; the
-// absorbing field and the fixed cadence are the durability mechanism.
+// Field ownership is the contract (the additive amendment of the SBO
+// finalization protocol): the SM never writes phase; the SM writes status
+// fields in exactly two cases - the absorbing scenarioManagerVerdict report
+// and the awaiting-EDS-finalization InProgress diagnostic message
+// (write-if-different, never phase, never a verdict write). The operator
+// retains full ownership of phase and all other messages and overwrites the
+// diagnostic message at the phase transition (its terminal derivation lands
+// later in the sequence: the Finished verdict requires the finalization).
+// The verdict is absorbing (write-if-absent): an experiment whose field is
+// already set is skipped, so the pass is idempotent and the field never
+// changes once written. Per-experiment failures are logged in the established
+// operation= style and skipped; the next tick retries (self-healing). The
+// pass holds no queue, row lock, leader flag, or cross-replica coordination
+// state; the absorbing field and the fixed cadence are the durability
+// mechanism.
 package aggregate
 
 import (
@@ -45,10 +52,11 @@ import (
 
 // Operation names for the pass's established operation= log lines.
 const (
-	opPass          = "alpha4_scenario_aggregate_pass"
-	opProjectLookup = "alpha4_aggregate_project_lookup"
-	opAggregate     = "alpha4_aggregate_scenario_counts"
-	opVerdictPatch  = "alpha4_aggregate_verdict_patch"
+	opPass                 = "alpha4_scenario_aggregate_pass"
+	opProjectLookup        = "alpha4_aggregate_project_lookup"
+	opAggregate            = "alpha4_aggregate_scenario_counts"
+	opVerdictPatch         = "alpha4_aggregate_verdict_patch"
+	opAwaitingFinalization = "alpha4_aggregate_awaiting_finalization"
 )
 
 // Config is the aggregate scheduler configuration. Defaults are applied via
@@ -170,10 +178,13 @@ func (s *Scheduler) tick(root context.Context) {
 	}
 }
 
-// processExperiment applies the D3 aggregation rule to one experiment and,
-// when a verdict is due, reports it through the status subresource. It never
-// fails the pass: every step's error is logged in the established operation=
-// style and the experiment is skipped; the next tick retries (self-healing).
+// processExperiment applies the finalization-aware aggregation rule to one
+// experiment and, when a verdict is due, reports it through the status
+// subresource; when every scenario is terminal and the finalization is still
+// outstanding, it writes the awaiting-EDS-finalization InProgress diagnostic.
+// It never fails the pass: every step's error is logged in the established
+// operation= style and the experiment is skipped; the next tick retries
+// (self-healing).
 func (s *Scheduler) processExperiment(ctx context.Context, exp *experimentalpha4.SimulationExperiment) {
 	// Gate: only admitted experiments aggregate. Pending/Provisioning skip
 	// (unavailable), terminal phases skip, an unknown phase conservatively
@@ -182,7 +193,8 @@ func (s *Scheduler) processExperiment(ctx context.Context, exp *experimentalpha4
 		return
 	}
 	// Absorbing verdict (write-if-absent): once reported, the field never
-	// changes, so an already-set verdict is a no-op.
+	// changes, so an already-set verdict is a no-op. The pass also never
+	// re-touches the diagnostic after a verdict, since it stops here.
 	if exp.Status.ScenarioManagerVerdict != "" {
 		return
 	}
@@ -205,31 +217,56 @@ func (s *Scheduler) processExperiment(ctx context.Context, exp *experimentalpha4
 		return
 	}
 
-	verdict := verdictForCounts(counts)
-	if verdict == "" {
-		// The experiment has no scenarios yet, or not every scenario is
-		// terminal: no verdict this tick.
+	finalized, err := s.store.IsFinalized(ctx, exp.Namespace, exp.Name)
+	if err != nil {
+		log.Printf("operation=%q namespace=%s project=%s error_class=%q error=%v", opAwaitingFinalization, exp.Namespace, exp.Name, "dependency", err)
 		return
 	}
 
-	if err := s.kube.PatchVerdict(ctx, exp.Namespace, exp.Name, verdict); err != nil {
-		// The verdict stays unreported; the next tick re-derives and retries.
-		log.Printf("operation=%q namespace=%s project=%s verdict=%s error_class=%q error=%v", opVerdictPatch, exp.Namespace, exp.Name, verdict, "dependency", err)
+	verdict := verdictForCounts(counts, finalized)
+	if verdict != "" {
+		if err := s.kube.PatchVerdict(ctx, exp.Namespace, exp.Name, verdict); err != nil {
+			// The verdict stays unreported; the next tick re-derives and
+			// retries.
+			log.Printf("operation=%q namespace=%s project=%s verdict=%s error_class=%q error=%v", opVerdictPatch, exp.Namespace, exp.Name, verdict, "dependency", err)
+			return
+		}
+		log.Printf("operation=%q namespace=%s project=%s verdict=%s scenarios_total=%d", opVerdictPatch, exp.Namespace, exp.Name, verdict, counts.Total)
 		return
 	}
-	log.Printf("operation=%q namespace=%s project=%s verdict=%s scenarios_total=%d", opVerdictPatch, exp.Namespace, exp.Name, verdict, counts.Total)
+
+	// The InProgress diagnostic: every scenario is terminal and verified, but
+	// the EDS finalization batch is still outstanding, so the experiment
+	// idles InProgress by design. Write the diagnostic message
+	// (write-if-different); the operator's terminal derivation overwrites it
+	// at the phase transition once the Finished verdict lands.
+	if !finalized && exp.Status.Phase == lifecycle.PhaseInProgress && counts.Total > 0 && counts.Finished == counts.Total {
+		if exp.Status.Message == awaitingFinalizationMessage {
+			// Write-if-different: the diagnostic is already in place.
+			return
+		}
+		if err := s.kube.PatchAwaitingFinalization(ctx, exp.Namespace, exp.Name); err != nil {
+			// The message stays unwritten; the next tick retries.
+			log.Printf("operation=%q namespace=%s project=%s error_class=%q error=%v", opAwaitingFinalization, exp.Namespace, exp.Name, "dependency", err)
+			return
+		}
+		log.Printf("operation=%q namespace=%s project=%s scenarios_total=%d scenarios_finished=%d", opAwaitingFinalization, exp.Namespace, exp.Name, counts.Total, counts.Finished)
+	}
 }
 
-// verdictForCounts applies the D3 aggregation rule over the scenario-state
-// counts: any scenario Failed fails fast (the experiment's failure is decided
-// by the first failing scenario); else a non-empty set of all-Finished
-// scenarios finishes; otherwise no verdict. The two written values are
+// verdictForCounts applies the finalization-aware aggregation rule over the
+// scenario-state counts and the durable finalization marker: any scenario
+// Failed fails fast (the experiment's failure is decided by the first
+// failing scenario, regardless of finalization); else a finalized project
+// finishes - including the explicit zero-scenario Finish (c.Total == 0 with
+// the finalization received, the interactive window's explicit close, distinct
+// from the absent-EDS idle); otherwise no verdict. The two written values are
 // mutually exclusive and each absorbing, so the field stays monotone.
-func verdictForCounts(c persistence.ScenarioStateCounts) string {
+func verdictForCounts(c persistence.ScenarioStateCounts, finalized bool) string {
 	if c.Failed > 0 {
 		return lifecycle.PhaseFailed
 	}
-	if c.Total > 0 && c.Finished == c.Total {
+	if finalized && (c.Total == 0 || c.Finished == c.Total) {
 		return lifecycle.PhaseFinished
 	}
 	return ""

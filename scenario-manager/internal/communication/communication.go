@@ -54,6 +54,13 @@ type EDSAvailabilityRequest struct {
 	Project       string `json:"project,omitempty"`
 	ScenarioCount int    `json:"scenario_count,omitempty"`
 
+	// ExperimentType declares the EDS's experiment type (the reference EDS
+	// always declares "standard"). It is a capability handshake, not a
+	// behavior selector: absent (the legacy state) means the EDS does not
+	// participate in the finalization protocol, and the SM echoes it back
+	// verbatim and status-independently on the reply.
+	ExperimentType string `json:"experiment_type,omitempty"`
+
 	// ProjectNamespace and ProjectName are populated by the adapter from the
 	// request subject after parsing; they are not part of the wire payload.
 	ProjectNamespace string `json:"-"`
@@ -68,6 +75,13 @@ type EDSAvailabilityReply struct {
 	Status       string `json:"status"`
 	Reason       string `json:"reason,omitempty"`
 	BatchSubject string `json:"batch_subject,omitempty"`
+
+	// ExperimentType is the verbatim, status-independent echo of the request's
+	// experiment_type (a capability handshake: an optimization EDS detects an
+	// SM without the finalization protocol from the missing echo). It is set
+	// on both the ready and the error reply and stays absent when the request
+	// declared none, so the legacy reply remains byte-identical.
+	ExperimentType string `json:"experiment_type,omitempty"`
 }
 
 // Availability status values.
@@ -84,6 +98,14 @@ type ScenarioBatch struct {
 	BatchID   string           `json:"batch_id,omitempty"`
 	Project   string           `json:"project,omitempty"`
 	Scenarios []ScenarioRecord `json:"scenarios"`
+
+	// Final marks the finalization batch: "no further scenarios will be
+	// generated". Absent or false means the batch is a normal scenario batch
+	// (the legacy state, byte-identical on the wire). A final batch inserts
+	// its scenarios, if any, and durably finalizes the project; a non-final
+	// batch arriving after finalization is rejected with the pinned reason
+	// in ReasonExperimentFinalized.
+	Final bool `json:"final,omitempty"`
 
 	// ProjectNamespace and ProjectName are populated by the adapter from the
 	// batch subject after parsing; they are not part of the wire payload.
@@ -116,6 +138,11 @@ const (
 	BatchAckStatusPoison   = "poison"
 	BatchAckStatusError    = "error"
 )
+
+// ReasonExperimentFinalized is the pinned rejection reason carried in the
+// batch ack (status=error) when a non-final batch arrives after the
+// project's finalization. The string is byte-exact per the SBO wire pin.
+const ReasonExperimentFinalized = "experiment finalized; no further batches accepted"
 
 // ScenarioForTranslation is the transport-neutral projection returned when the
 // Scenario Manager claims a scenario row for translation handoff. It carries

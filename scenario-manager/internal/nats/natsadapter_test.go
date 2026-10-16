@@ -59,11 +59,12 @@ func phaseExperiment(namespace, name, phase string) *experimentalpha4.Simulation
 }
 
 // testAdapters builds an Adapters with a fake k8s client, a recording insert
-// function, and a ready handler whose result is configurable. nc/js are nil
-// (the Handle* methods do not use them).
-func testAdapters(t *testing.T, k8s client.Client, insertErr error, readyStatus communication.TranslatorReadyHandlingStatus) (*Adapters, *insertRecorder, *readyRecorder) {
+// function, finalization fakes, and a ready handler whose result is
+// configurable. nc/js are nil (the Handle* methods do not use them).
+func testAdapters(t *testing.T, k8s client.Client, insertErr error, readyStatus communication.TranslatorReadyHandlingStatus) (*Adapters, *insertRecorder, *finalizationRecorder, *readyRecorder) {
 	t.Helper()
 	ins := &insertRecorder{err: insertErr}
+	fin := &finalizationRecorder{}
 	rr := &readyRecorder{status: readyStatus}
 	a := &Adapters{
 		k8s: k8s,
@@ -74,12 +75,40 @@ func testAdapters(t *testing.T, k8s client.Client, insertErr error, readyStatus 
 			}
 			return len(records), nil
 		},
+		markFinalized: func(ctx context.Context, namespace, project string) error {
+			fin.mark(namespace, project)
+			return fin.markErr
+		},
+		isFinalized: func(ctx context.Context, namespace, project string) (bool, error) {
+			fin.lookup(namespace, project)
+			return fin.finalized, fin.lookupErr
+		},
 		readyHandler: func(ctx context.Context, m communication.TranslatorReadyMessage) communication.TranslatorReadyHandlingResult {
 			rr.record(m)
 			return communication.TranslatorReadyHandlingResult{Status: rr.status, Reason: "test"}
 		},
 	}
-	return a, ins, rr
+	return a, ins, fin, rr
+}
+
+// finalizationRecorder fakes the durable finalization marker: lookupErr and
+// lookupCalls drive IsFinalized, markCalls and markErr drive MarkFinalized.
+type finalizationRecorder struct {
+	finalized   bool
+	lookupErr   error
+	lookupCalls []string
+	markErr     error
+	markCalls   []string
+}
+
+func keyPair(namespace, project string) string { return namespace + "/" + project }
+
+func (r *finalizationRecorder) lookup(namespace, project string) {
+	r.lookupCalls = append(r.lookupCalls, keyPair(namespace, project))
+}
+
+func (r *finalizationRecorder) mark(namespace, project string) {
+	r.markCalls = append(r.markCalls, keyPair(namespace, project))
 }
 
 type insertRecorder struct {
@@ -118,6 +147,26 @@ func batchPayload(project string, reps int) []byte {
 	return data
 }
 
+// finalBatchPayload builds the finalization-only wire shape: the empty scenario
+// array present, final true.
+func finalBatchPayload(project string) []byte {
+	batch := communication.ScenarioBatch{BatchID: "fin", Project: project, Scenarios: []communication.ScenarioRecord{}, Final: true}
+	data, _ := json.Marshal(batch)
+	return data
+}
+
+// finalBatchWithScenariosPayload builds a final batch carrying one scenario.
+func finalBatchWithScenariosPayload(project string, reps int) []byte {
+	batch := communication.ScenarioBatch{
+		BatchID:   "fin",
+		Project:   project,
+		Scenarios: []communication.ScenarioRecord{{Priority: 1, NumberOfReps: reps}},
+		Final:     true,
+	}
+	data, _ := json.Marshal(batch)
+	return data
+}
+
 func readyPayload(attempt int, image string) []byte {
 	p := translatorReadyPayload{TranslationAttempt: attempt, ContainerImage: image}
 	data, _ := json.Marshal(p)
@@ -128,7 +177,7 @@ func readyPayload(attempt int, image string) []byte {
 
 func TestAvailabilityAdmittedRepliesReadyWithBatchSubject(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	r := NewEDSAvailabilityResponder(a)
 
 	reply, err := r.HandleAvailability(context.Background(), subject.EDSAvailabilitySubject("ns", "proj"), nil)
@@ -145,7 +194,7 @@ func TestAvailabilityAdmittedRepliesReadyWithBatchSubject(t *testing.T) {
 
 func TestAvailabilityUnavailableRepliesError(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhasePending))
-	a, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	r := NewEDSAvailabilityResponder(a)
 
 	reply, _ := r.HandleAvailability(context.Background(), subject.EDSAvailabilitySubject("ns", "proj"), nil)
@@ -159,7 +208,7 @@ func TestAvailabilityUnavailableRepliesError(t *testing.T) {
 
 func TestAvailabilityTerminalRepliesErrorNoBatchSubject(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseFailed))
-	a, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	r := NewEDSAvailabilityResponder(a)
 
 	reply, _ := r.HandleAvailability(context.Background(), subject.EDSAvailabilitySubject("ns", "proj"), nil)
@@ -170,7 +219,7 @@ func TestAvailabilityTerminalRepliesErrorNoBatchSubject(t *testing.T) {
 
 func TestAvailabilityNotFoundRepliesError(t *testing.T) {
 	k8s := fakeK8s(t) // no experiment
-	a, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	r := NewEDSAvailabilityResponder(a)
 
 	reply, _ := r.HandleAvailability(context.Background(), subject.EDSAvailabilitySubject("ns", "missing"), nil)
@@ -181,7 +230,7 @@ func TestAvailabilityNotFoundRepliesError(t *testing.T) {
 
 func TestAvailabilityInvalidSubjectRepliesError(t *testing.T) {
 	k8s := fakeK8s(t)
-	a, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	r := NewEDSAvailabilityResponder(a)
 
 	reply, _ := r.HandleAvailability(context.Background(), "not-a-subject", nil)
@@ -190,14 +239,104 @@ func TestAvailabilityInvalidSubjectRepliesError(t *testing.T) {
 	}
 }
 
+func availabilityPayload(experimentType string) []byte {
+	req := communication.EDSAvailabilityRequest{BatchID: "b1", Project: "proj", ScenarioCount: 1}
+	if experimentType != "" {
+		req.ExperimentType = experimentType
+	}
+	data, _ := json.Marshal(req)
+	return data
+}
+
+func TestAvailabilityEchoesDeclaredExperimentTypeOnReady(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	r := NewEDSAvailabilityResponder(a)
+
+	reply, err := r.HandleAvailability(context.Background(), subject.EDSAvailabilitySubject("ns", "proj"), availabilityPayload("standard"))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if reply.Status != communication.AvailabilityStatusReady {
+		t.Fatalf("status = %q; want ready", reply.Status)
+	}
+	if reply.ExperimentType != "standard" {
+		t.Fatalf("ready echo = %q; want verbatim standard", reply.ExperimentType)
+	}
+	// The declared echo rides the canonical wire bytes.
+	out, err := json.Marshal(reply)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(out) != `{"status":"ready","batch_subject":"cbse.ns.proj.eds.scenarios","experiment_type":"standard"}` {
+		t.Fatalf("ready reply bytes = %s; want echo included", out)
+	}
+}
+
+func TestAvailabilityEchoesDeclaredExperimentTypeOnError(t *testing.T) {
+	// The echo is status-independent: the error reply carries it verbatim.
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhasePending))
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	r := NewEDSAvailabilityResponder(a)
+
+	reply, err := r.HandleAvailability(context.Background(), subject.EDSAvailabilitySubject("ns", "proj"), availabilityPayload("standard"))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if reply.Status != communication.AvailabilityStatusError {
+		t.Fatalf("status = %q; want error", reply.Status)
+	}
+	if reply.ExperimentType != "standard" {
+		t.Fatalf("error echo = %q; want verbatim standard (status-independent)", reply.ExperimentType)
+	}
+	if reply.BatchSubject != "" {
+		t.Fatalf("error reply batch subject = %q; want empty", reply.BatchSubject)
+	}
+}
+
+func TestAvailabilityUndeclaredRequestGetsLegacyReply(t *testing.T) {
+	// No declaration: no echo, the legacy reply stays byte-identical on both
+	// statuses.
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	r := NewEDSAvailabilityResponder(a)
+
+	ready, err := r.HandleAvailability(context.Background(), subject.EDSAvailabilitySubject("ns", "proj"), nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if ready.ExperimentType != "" {
+		t.Fatalf("undeclared ready echo = %q; want absent", ready.ExperimentType)
+	}
+	out, _ := json.Marshal(ready)
+	if string(out) != `{"status":"ready","batch_subject":"cbse.ns.proj.eds.scenarios"}` {
+		t.Fatalf("legacy ready reply bytes = %s; want byte-identical", out)
+	}
+
+	k8sPending := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhasePending))
+	aPending, _, _, _ := testAdapters(t, k8sPending, nil, communication.TranslatorReadyHandled)
+	rPending := NewEDSAvailabilityResponder(aPending)
+	errReply, err := rPending.HandleAvailability(context.Background(), subject.EDSAvailabilitySubject("ns", "proj"), availabilityPayload(""))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if errReply.ExperimentType != "" {
+		t.Fatalf("undeclared error echo = %q; want absent", errReply.ExperimentType)
+	}
+	out, _ = json.Marshal(errReply)
+	if string(out) != `{"status":"error","reason":"experiment unavailable"}` {
+		t.Fatalf("legacy error reply bytes = %s; want byte-identical", out)
+	}
+}
+
 // --- EDS batch ---
 
 func TestEDSBatchAdmittedInsertsAndACKs(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, ins, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, ins, fin, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewEDSBatchConsumer(a)
 
-	decision, err := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 10))
+	decision, ack, err := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 10))
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -207,15 +346,23 @@ func TestEDSBatchAdmittedInsertsAndACKs(t *testing.T) {
 	if !ins.called || ins.namespace != "ns" || ins.project != "proj" || len(ins.records) != 1 || ins.records[0].NumberOfReps != 10 {
 		t.Fatalf("insert not called as expected: %+v", ins)
 	}
+	// The normal inserted ack reports the inserted count; a non-final batch
+	// touches no finalization marker.
+	if ack.Status != communication.BatchAckStatusInserted || ack.BatchID != "b1" || ack.Received != 1 || ack.Inserted != 1 || ack.Failed != 0 || ack.Reason != "" {
+		t.Fatalf("ack = %+v; want inserted b1 received=1 inserted=1", ack)
+	}
+	if len(fin.lookupCalls) != 1 || len(fin.markCalls) != 0 {
+		t.Fatalf("finalization recorder = lookups=%v marks=%v; want one read, no mark", fin.lookupCalls, fin.markCalls)
+	}
 }
 
 func TestEDSBatchSubjectPayloadMismatchIsPoisonACK(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, ins, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, ins, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewEDSBatchConsumer(a)
 
 	// Subject says proj; payload project says other.
-	decision, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("other", 10))
+	decision, _, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("other", 10))
 	if decision != decisionACK {
 		t.Fatalf("decision = %v; want ACK (poison)", decision)
 	}
@@ -226,10 +373,10 @@ func TestEDSBatchSubjectPayloadMismatchIsPoisonACK(t *testing.T) {
 
 func TestEDSBatchOutOfRangeRepsIsPoisonACK(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, ins, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, ins, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewEDSBatchConsumer(a)
 
-	decision, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", communication.MaxReps+1))
+	decision, _, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", communication.MaxReps+1))
 	if decision != decisionACK {
 		t.Fatalf("decision = %v; want ACK (poison)", decision)
 	}
@@ -240,10 +387,10 @@ func TestEDSBatchOutOfRangeRepsIsPoisonACK(t *testing.T) {
 
 func TestEDSBatchInvalidSubjectIsPoisonACK(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, ins, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, ins, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewEDSBatchConsumer(a)
 
-	decision, _ := c.HandleEDSBatch(context.Background(), "cbse.ns.proj.eds.bogus", batchPayload("proj", 1))
+	decision, _, _ := c.HandleEDSBatch(context.Background(), "cbse.ns.proj.eds.bogus", batchPayload("proj", 1))
 	if decision != decisionACK {
 		t.Fatalf("decision = %v; want ACK (poison)", decision)
 	}
@@ -254,10 +401,10 @@ func TestEDSBatchInvalidSubjectIsPoisonACK(t *testing.T) {
 
 func TestEDSBatchTerminalACKDiscardNoInsert(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseFailed))
-	a, ins, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, ins, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewEDSBatchConsumer(a)
 
-	decision, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 1))
+	decision, _, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 1))
 	if decision != decisionACK {
 		t.Fatalf("decision = %v; want ACK (terminal discard)", decision)
 	}
@@ -268,10 +415,10 @@ func TestEDSBatchTerminalACKDiscardNoInsert(t *testing.T) {
 
 func TestEDSBatchUnavailableNAKs(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhasePending))
-	a, ins, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, ins, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewEDSBatchConsumer(a)
 
-	decision, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 1))
+	decision, _, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 1))
 	if decision != decisionNAK {
 		t.Fatalf("decision = %v; want NAK (unavailable)", decision)
 	}
@@ -282,10 +429,10 @@ func TestEDSBatchUnavailableNAKs(t *testing.T) {
 
 func TestEDSBatchInsertErrorNAKs(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, ins, _ := testAdapters(t, k8s, errors.New("connection refused"), communication.TranslatorReadyHandled)
+	a, ins, _, _ := testAdapters(t, k8s, errors.New("connection refused"), communication.TranslatorReadyHandled)
 	c := NewEDSBatchConsumer(a)
 
-	decision, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 1))
+	decision, _, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 1))
 	if decision != decisionNAK {
 		t.Fatalf("decision = %v; want NAK (insert error)", decision)
 	}
@@ -294,11 +441,170 @@ func TestEDSBatchInsertErrorNAKs(t *testing.T) {
 	}
 }
 
+// --- the finalization protocol (SBO) ---
+
+func TestEDSBatchFinalWithScenariosInsertsAndFinalizes(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, ins, fin, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	c := NewEDSBatchConsumer(a)
+
+	decision, ack, err := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), finalBatchWithScenariosPayload("proj", 10))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK", decision)
+	}
+	// The scenarios insert first (the landed insert path).
+	if !ins.called || len(ins.records) != 1 || ins.records[0].NumberOfReps != 10 {
+		t.Fatalf("insert not called as expected: %+v", ins)
+	}
+	// Then the project is durably finalized.
+	if len(fin.markCalls) != 1 || fin.markCalls[0] != "ns/proj" {
+		t.Fatalf("mark calls = %v; want one for ns/proj", fin.markCalls)
+	}
+	// The ack is the normal inserted ack for the inserted count.
+	if ack.Status != communication.BatchAckStatusInserted || ack.BatchID != "fin" || ack.Received != 1 || ack.Inserted != 1 || ack.Reason != "" {
+		t.Fatalf("ack = %+v; want inserted fin received=1 inserted=1", ack)
+	}
+}
+
+func TestEDSBatchFinalizationOnlyBatchRegistersAndMarks(t *testing.T) {
+	// The finalization-only shape (scenarios: [], final: true) on a
+	// not-yet-registered project: nothing inserts, MarkFinalized registers
+	// the project and sets the marker, and the ack reports zero inserts.
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, ins, fin, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	c := NewEDSBatchConsumer(a)
+
+	decision, ack, err := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), finalBatchPayload("proj"))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK", decision)
+	}
+	if ins.called {
+		t.Fatalf("finalization-only batch must not insert: %+v", ins)
+	}
+	if len(fin.markCalls) != 1 || fin.markCalls[0] != "ns/proj" {
+		t.Fatalf("mark calls = %v; want one for ns/proj (project registered by the mark)", fin.markCalls)
+	}
+	if ack.Status != communication.BatchAckStatusInserted || ack.Received != 0 || ack.Inserted != 0 || ack.Failed != 0 {
+		t.Fatalf("ack = %+v; want inserted received=0 inserted=0", ack)
+	}
+}
+
+func TestEDSBatchNonFinalAfterFinalizationRejectedWithPinnedReason(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, ins, fin, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	fin.finalized = true // the durable marker says the project is finalized
+	c := NewEDSBatchConsumer(a)
+
+	decision, ack, err := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 10))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK (permanent rejection, no redelivery)", decision)
+	}
+	if ins.called {
+		t.Fatalf("post-final batch must not insert: %+v", ins)
+	}
+	if len(fin.markCalls) != 0 {
+		t.Fatalf("post-final batch must not re-mark: %v", fin.markCalls)
+	}
+	// The exact rejection ack, including the pinned reason string.
+	if ack.Status != communication.BatchAckStatusError {
+		t.Fatalf("ack status = %q; want error", ack.Status)
+	}
+	if ack.BatchID != "b1" {
+		t.Fatalf("ack batch_id = %q; want b1 echoed", ack.BatchID)
+	}
+	if ack.Received != 1 || ack.Inserted != 0 || ack.Failed != 0 {
+		t.Fatalf("ack counts = received %d inserted %d failed %d; want 1/0/0", ack.Received, ack.Inserted, ack.Failed)
+	}
+	if ack.Reason != "experiment finalized; no further batches accepted" {
+		t.Fatalf("ack reason = %q; want exactly the pinned reason", ack.Reason)
+	}
+	if ack.Reason != communication.ReasonExperimentFinalized {
+		t.Fatalf("ack reason = %q; want the communication-layer pinned constant", ack.Reason)
+	}
+}
+
+func TestEDSBatchRepeatedFinalizationOnlyBatchIsIdempotent(t *testing.T) {
+	// A redelivered finalization-only batch is an idempotent no-op: the
+	// marker insert is ON CONFLICT DO NOTHING, no scenario rows are touched,
+	// and the ack reports zero inserts again.
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, ins, fin, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	fin.finalized = true // already finalized from the first delivery
+	c := NewEDSBatchConsumer(a)
+
+	decision, ack, err := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), finalBatchPayload("proj"))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if decision != decisionACK {
+		t.Fatalf("decision = %v; want ACK (redelivery-safe)", decision)
+	}
+	if ins.called {
+		t.Fatalf("repeated finalization-only batch must not insert: %+v", ins)
+	}
+	if len(fin.markCalls) != 1 {
+		t.Fatalf("mark calls = %v; want the idempotent re-mark (ON CONFLICT DO NOTHING)", fin.markCalls)
+	}
+	if ack.Status != communication.BatchAckStatusInserted || ack.Inserted != 0 {
+		t.Fatalf("ack = %+v; want inserted inserted=0", ack)
+	}
+}
+
+func TestEDSBatchFinalInsertErrorNAKsBeforeMark(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, _, fin, _ := testAdapters(t, k8s, errors.New("connection refused"), communication.TranslatorReadyHandled)
+	c := NewEDSBatchConsumer(a)
+
+	decision, _, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), finalBatchWithScenariosPayload("proj", 10))
+	if decision != decisionNAK {
+		t.Fatalf("decision = %v; want NAK (insert error, redeliver)", decision)
+	}
+	if len(fin.markCalls) != 0 {
+		t.Fatalf("insert failure must not finalize: %v", fin.markCalls)
+	}
+}
+
+func TestEDSBatchFinalMarkErrorNAKs(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, _, fin, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	fin.markErr = errors.New("marker write failed")
+	c := NewEDSBatchConsumer(a)
+
+	decision, _, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), finalBatchPayload("proj"))
+	if decision != decisionNAK {
+		t.Fatalf("decision = %v; want NAK (mark error, redeliver)", decision)
+	}
+}
+
+func TestEDSBatchFinalizedLookupErrorNAKs(t *testing.T) {
+	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
+	a, ins, fin, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	fin.lookupErr = errors.New("marker read failed")
+	c := NewEDSBatchConsumer(a)
+
+	decision, _, _ := c.HandleEDSBatch(context.Background(), subject.EDSBatchSubject("ns", "proj"), batchPayload("proj", 10))
+	if decision != decisionNAK {
+		t.Fatalf("decision = %v; want NAK (transient marker read failure, redeliver)", decision)
+	}
+	if ins.called {
+		t.Fatalf("unknown finalization state must not insert: %+v", ins)
+	}
+}
+
 // --- Translator ready ---
 
 func TestTranslatorReadyAdmittedHandledACKs(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewTranslatorReadyConsumer(a)
 
 	decision, err := c.handleTranslatorReady(context.Background(), subject.TranslatorReadySubject("ns", "proj", "7"), readyPayload(1, "img@sha256:abc"), a.readyHandler)
@@ -315,7 +621,7 @@ func TestTranslatorReadyAdmittedHandledACKs(t *testing.T) {
 
 func TestTranslatorReadyAdmittedRetryNAKs(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyRetry)
+	a, _, _, _ := testAdapters(t, k8s, nil, communication.TranslatorReadyRetry)
 	c := NewTranslatorReadyConsumer(a)
 
 	decision, _ := c.handleTranslatorReady(context.Background(), subject.TranslatorReadySubject("ns", "proj", "7"), readyPayload(1, "img"), a.readyHandler)
@@ -326,7 +632,7 @@ func TestTranslatorReadyAdmittedRetryNAKs(t *testing.T) {
 
 func TestTranslatorReadyTerminalACKDiscardNoHandler(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseFinished))
-	a, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewTranslatorReadyConsumer(a)
 
 	decision, _ := c.handleTranslatorReady(context.Background(), subject.TranslatorReadySubject("ns", "proj", "7"), readyPayload(1, "img"), a.readyHandler)
@@ -340,7 +646,7 @@ func TestTranslatorReadyTerminalACKDiscardNoHandler(t *testing.T) {
 
 func TestTranslatorReadyUnavailableNAKsNoHandler(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhasePending))
-	a, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewTranslatorReadyConsumer(a)
 
 	decision, _ := c.handleTranslatorReady(context.Background(), subject.TranslatorReadySubject("ns", "proj", "7"), readyPayload(1, "img"), a.readyHandler)
@@ -354,7 +660,7 @@ func TestTranslatorReadyUnavailableNAKsNoHandler(t *testing.T) {
 
 func TestTranslatorReadyInvalidSubjectPoisonACK(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewTranslatorReadyConsumer(a)
 
 	decision, _ := c.handleTranslatorReady(context.Background(), "cbse.ns.proj.trans.request", readyPayload(1, "img"), a.readyHandler)
@@ -368,7 +674,7 @@ func TestTranslatorReadyInvalidSubjectPoisonACK(t *testing.T) {
 
 func TestTranslatorReadyNonPositiveScenarioIDPoisonACK(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewTranslatorReadyConsumer(a)
 
 	// scenario id "0" is not a canonical positive decimal.
@@ -383,7 +689,7 @@ func TestTranslatorReadyNonPositiveScenarioIDPoisonACK(t *testing.T) {
 
 func TestTranslatorReadyNonPositiveAttemptPoisonACK(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewTranslatorReadyConsumer(a)
 
 	decision, _ := c.handleTranslatorReady(context.Background(), subject.TranslatorReadySubject("ns", "proj", "7"), readyPayload(0, "img"), a.readyHandler)
@@ -397,7 +703,7 @@ func TestTranslatorReadyNonPositiveAttemptPoisonACK(t *testing.T) {
 
 func TestTranslatorReadyMalformedPayloadPoisonACK(t *testing.T) {
 	k8s := fakeK8s(t, phaseExperiment("ns", "proj", lifecycle.PhaseInProgress))
-	a, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
+	a, _, _, rr := testAdapters(t, k8s, nil, communication.TranslatorReadyHandled)
 	c := NewTranslatorReadyConsumer(a)
 
 	decision, _ := c.handleTranslatorReady(context.Background(), subject.TranslatorReadySubject("ns", "proj", "7"), []byte("{not json"), a.readyHandler)

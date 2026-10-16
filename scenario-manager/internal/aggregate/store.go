@@ -39,6 +39,10 @@ type Store interface {
 	// ScenarioStateCounts aggregates the scenario-state counts of one project
 	// (total, Finished, Failed) over the configured scenario-status table.
 	ScenarioStateCounts(ctx context.Context, projectID int) (persistence.ScenarioStateCounts, error)
+	// IsFinalized reports whether the exact (namespace, name) pair carries the
+	// durable finalization marker (the SBO finalization protocol). A missing
+	// project is (false, nil), not an error.
+	IsFinalized(ctx context.Context, namespace, project string) (bool, error)
 }
 
 // PersistenceStore adapts a persistence.DB to the aggregate Store interface.
@@ -54,18 +58,32 @@ func (s *PersistenceStore) ScenarioStateCounts(ctx context.Context, projectID in
 	return persistence.ScenarioStateCountsByProject(ctx, s.DB, projectID)
 }
 
+func (s *PersistenceStore) IsFinalized(ctx context.Context, namespace, project string) (bool, error) {
+	return persistence.IsFinalized(ctx, s.DB, namespace, project)
+}
+
 // Kube is the Kubernetes surface the aggregate pass uses: the cluster-wide
 // SimulationExperiment list (the same namespace scope the informer's watch
-// uses) and the status-subresource verdict patch.
+// uses) and the status-subresource patches.
+//
+// Field ownership (the additive amendment of the SBO finalization protocol):
+// the SM never writes phase; the SM writes status fields in exactly two
+// cases - the absorbing scenarioManagerVerdict report and the
+// awaiting-EDS-finalization InProgress diagnostic message. The operator
+// retains full ownership of phase and all other messages (its terminal
+// derivation overwrites the diagnostic message at the phase transition).
 type Kube interface {
 	// ListExperiments lists every SimulationExperiment cluster-wide.
 	ListExperiments(ctx context.Context) ([]experimentalpha4.SimulationExperiment, error)
 	// PatchVerdict reports the verdict through the status subresource writer
 	// (client.Status().Patch) with a merge patch whose status payload carries
-	// only scenarioManagerVerdict (D9 field ownership: never phase, never
-	// message). The alpha4 CRD enables the status subresource, so a
-	// main-resource patch would be silently discarded by the API server.
+	// only scenarioManagerVerdict (never phase, never message).
 	PatchVerdict(ctx context.Context, namespace, name, verdict string) error
+	// PatchAwaitingFinalization writes the one SM-owned status.message case -
+	// the InProgress awaiting-EDS-finalization diagnostic - through the
+	// status subresource writer with a merge patch whose status payload
+	// carries only message (never phase, never scenarioManagerVerdict).
+	PatchAwaitingFinalization(ctx context.Context, namespace, name string) error
 }
 
 // kubeAdapter is the production Kube over a controller-runtime client.
@@ -87,16 +105,37 @@ func (k *kubeAdapter) ListExperiments(ctx context.Context) ([]experimentalpha4.S
 	return kube.ListSimulationExperiments(ctx, k.k8s, listNamespace)
 }
 
-// patchPayload is the exact status merge patch the SM writes. Field ownership
-// (D9): the status payload carries only scenarioManagerVerdict - never
-// phase, never message.
+// patchPayload is the exact status merge patch the SM writes for the verdict
+// report. Field ownership: the status payload carries only
+// scenarioManagerVerdict - never phase, never message.
 type patchPayload struct {
 	Status verdictStatus `json:"status"`
 }
 
-// verdictStatus is the SM-owned slice of the status subresource.
+// verdictStatus is the SM-owned slice of the status subresource carried by
+// the verdict merge patch.
 type verdictStatus struct {
 	ScenarioManagerVerdict string `json:"scenarioManagerVerdict"`
+}
+
+// awaitingFinalizationMessage is the one status message the SM writes: the
+// InProgress diagnostic while every scenario is terminal and the EDS
+// finalization batch is still outstanding. The operator's terminal
+// derivation (the Finished verdict requires the finalization, so it lands
+// later in the sequence) overwrites the message at the phase transition.
+const awaitingFinalizationMessage = "awaiting EDS finalization"
+
+// messagePatchPayload is the exact status merge patch of the awaiting-
+// finalization diagnostic. Field ownership: the status payload carries only
+// message - never phase, never scenarioManagerVerdict.
+type messagePatchPayload struct {
+	Status messageStatus `json:"status"`
+}
+
+// messageStatus is the SM-owned slice of the status subresource carried by
+// the diagnostic merge patch.
+type messageStatus struct {
+	Message string `json:"message"`
 }
 
 func (k *kubeAdapter) PatchVerdict(ctx context.Context, namespace, name, verdict string) error {
@@ -117,6 +156,27 @@ func (k *kubeAdapter) PatchVerdict(ctx context.Context, namespace, name, verdict
 	// writer.
 	if err := k.k8s.Status().Patch(ctx, exp, client.RawPatch(types.MergePatchType, payload)); err != nil {
 		return fmt.Errorf("patch scenarioManagerVerdict on %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
+// PatchAwaitingFinalization writes the awaiting-EDS-finalization InProgress
+// diagnostic through the status subresource. The merge patch carries only
+// status.message (never phase, never scenarioManagerVerdict); the
+// write-if-different guard lives in the pass, which skips the patch when the
+// enumerated CR already carries the message.
+func (k *kubeAdapter) PatchAwaitingFinalization(ctx context.Context, namespace, name string) error {
+	patch := messagePatchPayload{}
+	patch.Status.Message = awaitingFinalizationMessage
+	payload, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("encode awaiting-finalization patch for %s/%s: %w", namespace, name, err)
+	}
+	exp := &experimentalpha4.SimulationExperiment{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+	}
+	if err := k.k8s.Status().Patch(ctx, exp, client.RawPatch(types.MergePatchType, payload)); err != nil {
+		return fmt.Errorf("patch status.message on %s/%s: %w", namespace, name, err)
 	}
 	return nil
 }

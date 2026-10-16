@@ -22,8 +22,9 @@ import (
 	"strings"
 )
 
-// EnsureSchema creates the alpha4 project and scenario_status tables when they
-// are absent and validates them when they already exist. It never issues
+// EnsureSchema creates the alpha4 project, scenario_status, and
+// experiment_finalization tables when they are absent and validates the
+// project and scenario_status tables when they already exist. It never issues
 // ALTER TABLE repair: an incompatible table returns ErrSchemaIncompatible so
 // startup fails before the informer, NATS consumers, or selector starts.
 //
@@ -68,6 +69,19 @@ func EnsureSchema(ctx context.Context, db DB) error {
 
 	if err := validateProjectTable(ctx, db, projectTable); err != nil {
 		return err
+	}
+
+	// The finalization marker table is purely additive (the SBO finalization
+	// protocol): one row per finalized project, cascading with the project
+	// lifecycle. CREATE TABLE IF NOT EXISTS keeps concurrent Scenario Manager
+	// startups safe and no-ops against an already-finalized database.
+	finalizationTable := FinalizationTable()
+	createFinalization := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+		project_id INTEGER PRIMARY KEY REFERENCES %s(id) ON DELETE CASCADE,
+		finalized_at TIMESTAMP NOT NULL DEFAULT NOW()
+	)`, finalizationTable, projectTable)
+	if _, err := db.ExecContext(ctx, createFinalization); err != nil {
+		return fmt.Errorf("create %s: %w", finalizationTable, err)
 	}
 
 	if !scenarioExists {

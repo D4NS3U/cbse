@@ -101,6 +101,7 @@ common=(
   OPERATOR_IMAGE=registry.example.test/operator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   SM_IMAGE=registry.example.test/sm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   EDS_IMAGE=registry.example.test/eds@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  EDS_REFERENCE_IMAGE=registry.example.test/eds-reference@sha256:2222222222222222222222222222222222222222222222222222222222222222
   TRANS_IMAGE=registry.example.test/trans@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
   RUNNER_BASE_IMAGE=registry.example.test/runner-base@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
   DETAIL_DB_IMAGE=registry.example.test/scenario-detail-database@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
@@ -112,9 +113,9 @@ common=(
 env "${common[@]}" "${root}/test/harness/preflight.sh" >/dev/null
 
 # Preflight must reject a partial skip-build set: the alpha4 smoke requires all
-# seven images (operator, sm, eds, translator, runner base, Detail Database,
-# and PPS). partial_common omits RUNNER_BASE_IMAGE, DETAIL_DB_IMAGE, and
-# PPS_IMAGE, so preflight must fail.
+# eight images (operator, sm, eds mock, the reference EDS, translator, runner
+# base, Detail Database, and PPS). partial_common omits RUNNER_BASE_IMAGE,
+# DETAIL_DB_IMAGE, and PPS_IMAGE, so preflight must fail.
 partial_common=(
   KUBECTL="${tmp}/kubectl"
   KUBECONFIG="${tmp}/kubeconfig"
@@ -123,6 +124,7 @@ partial_common=(
   OPERATOR_IMAGE=registry.example.test/operator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   SM_IMAGE=registry.example.test/sm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
   EDS_IMAGE=registry.example.test/eds@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  EDS_REFERENCE_IMAGE=registry.example.test/eds-reference@sha256:2222222222222222222222222222222222222222222222222222222222222222
   TRANS_IMAGE=registry.example.test/trans@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json"
 )
@@ -136,7 +138,7 @@ fi
 
 # Repository-structure invariants.
 grep -Fqx 'CBSE_REGISTRY ?=' "${root}/Makefile"
-grep -Fqx 'CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,translator,runner-base,scenario-detail-database,pps' "${root}/Makefile"
+grep -Fqx 'CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,eds,translator,runner-base,scenario-detail-database,pps' "${root}/Makefile"
 grep -Fqx '  local immutable="${repository}:${immutable_suffix}"' "${root}/test/harness/build-images.sh"
 # The flat layout (cbse-test:<component>.test.<version>) is retired; every
 # component uses the nested layout cbse-test/<component>:<version>.
@@ -212,21 +214,23 @@ PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
   FAKE_DOCKER_LOG="${tmp}/docker-tags.txt" \
   CBSE_REGISTRY=registry.unibw.de/i31bdase/cbse-test \
   TEST_IMAGE_VERSION=26.9.7 RUN_ID=alpha4-repository-test \
-  CBSE_IMAGE_COMPONENTS=exop,sm,eds-mock,translator,runner-base,scenario-detail-database,pps \
+  CBSE_IMAGE_COMPONENTS=exop,sm,eds-mock,eds,translator,runner-base,scenario-detail-database,pps \
   CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json" \
   CBSE_IMAGE_ARTIFACT_DIR="${tmp}/build-artifacts" \
   "${root}/test/harness/build-images.sh" >/dev/null
-for image in exop sm eds-mock translator runner-base scenario-detail-database pps; do
+for image in exop sm eds-mock eds translator runner-base scenario-detail-database pps; do
   grep -Fqx "registry.unibw.de/i31bdase/cbse-test/${image}:26.9.7" "${tmp}/docker-tags.txt"
   grep -Eq "^registry\.unibw\.de/i31bdase/cbse-test/${image}:26\.9\.7\.sha-" "${tmp}/docker-tags.txt"
 done
 grep -Fqx 'ARG TRANSLATOR_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:3bf5b04541eb4a37fe62aa1bc9c98a1dec09db9d2e79c1d2eb54e3c9d08dbca9' "${tmp}/docker-tags.txt"
+grep -Fqx 'ARG EDS_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:3bf5b04541eb4a37fe62aa1bc9c98a1dec09db9d2e79c1d2eb54e3c9d08dbca9' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG PYTHON_BASE_IMAGE=docker.io/library/python@sha256:b921fe7e7522f828d45197a47656ec465a9b15689b27fa8e1fba2864fca5b967' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG POSTGRES_IMAGE=docker.io/library/postgres@sha256:7341002d2b8c7c5bdd7542a671a95b36196c0b5b888daf454ae4fc33ba5346d7' "${tmp}/docker-tags.txt"
 grep -Fqx 'ARG PPS_GO_BUILDER_IMAGE=docker.io/library/golang@sha256:3bf5b04541eb4a37fe62aa1bc9c98a1dec09db9d2e79c1d2eb54e3c9d08dbca9' "${tmp}/docker-tags.txt"
 grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^SM_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/sm@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^EDS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/eds-mock@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
+grep -Eq '^EDS_REFERENCE_IMAGE=.*/eds@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts/images.env"
@@ -244,10 +248,12 @@ PATH="${tmp}/fake-bin:${PATH}" DOCKER_CONFIG="${tmp}/docker-source" \
   CBSE_IMAGE_ARTIFACT_DIR="${tmp}/build-artifacts-default" \
   "${root}/test/harness/build-images.sh" >/dev/null
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/translator:26.9.7" "${tmp}/docker-tags-default.txt"
+grep -Eq '^.*/eds:26\.9\.7$' "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/runner-base:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/scenario-detail-database:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Fqx "registry.unibw.de/i31bdase/cbse-test/pps:26.9.7" "${tmp}/docker-tags-default.txt"
 grep -Eq '^OPERATOR_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/exop@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
+grep -Eq '^EDS_REFERENCE_IMAGE=.*/eds@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^TRANS_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/translator@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^RUNNER_BASE_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/runner-base@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
 grep -Eq '^DETAIL_DB_IMAGE=registry\.unibw\.de/i31bdase/cbse-test/scenario-detail-database@sha256:[a-f0-9]{64}$' "${tmp}/build-artifacts-default/images.env"
