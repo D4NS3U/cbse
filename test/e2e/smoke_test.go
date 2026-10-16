@@ -1254,6 +1254,19 @@ var _ = Describe("full-stack smoke", Ordered, func() {
 		}
 		Expect(k8sClient.Create(ctx, red)).To(Succeed())
 
+		// The red experiment must reach InProgress before the API drive: the
+		// readiness gate guarantees the reference EDS (and its Service) is
+		// provisioned and ready - the port-forward helper's 90-second window
+		// races the child provisioning otherwise (the fcrash-eds pod
+		// restart-fail-fasts until its detail DB is up, stretching the
+		// timeline past the window; settlement-smoke discovery 6).
+		Eventually(func(g Gomega) string {
+			experiment := &experimentalpha4.SimulationExperiment{}
+			g.Expect(k8sClient.Get(ctx, redKey, experiment)).To(Succeed())
+			g.Expect(experiment.Status.Phase).NotTo(Equal("Error"), experiment.Status.Message)
+			return experiment.Status.Phase
+		}, 5*time.Minute, 2*time.Second).Should(Equal("InProgress"))
+
 		// Batch: drive the red experiment's reference EDS through the same
 		// API helper the green spec uses (the red CR inherits the reference
 		// EDS from the green clone): the same fixed design (two entries per
