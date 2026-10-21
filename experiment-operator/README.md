@@ -31,7 +31,10 @@ one form: `image` (a container image the operator deploys) or `host` (an
 existing reachable database). `spec.translator` names the Translator runtime
 image, the generated-runner repository, the digest-pinned runner base image,
 the rootless BuildKit builder image, and the namespace-local
-`cbse-registry-auth` Docker configuration Secret. `spec.runner.jobTemplate`
+`cbse-registry-auth` Docker configuration Secret.
+`spec.experimentalDesignService` and `spec.postProcessingService` name the
+per-experiment Experimental Design Service and Post Processing Service images
+and their service settings. `spec.runner.jobTemplate`
 optionally overrides the default runner Job template; the operator validates
 it, and the Scenario Manager builds the effective Job from it.
 
@@ -58,16 +61,24 @@ updates:
   [docs/CLUSTER_REQUIREMENTS.md](../docs/CLUSTER_REQUIREMENTS.md) for the
   `UserNamespacesSupport` feature gate this requires
 - **Translator Service** `<name>-translator-svc`
+- **Post Processing Service Deployment and Service** `<name>-pps` /
+  `<name>-pps-svc` — a single-container workload from
+  `spec.postProcessingService`
+- **Experimental Design Service Deployment and Service** `<name>-eds` /
+  `<name>-eds-svc` — a single-container workload from
+  `spec.experimentalDesignService`
 - **runner ServiceAccount** `simrunner-<12-char-UID-prefix>` — no permissions,
   no token automount. The Scenario Manager references it by exact name in
   runner Job pod templates and computes the same name from the same UID
 
 The reconciler moves the experiment to `InProgress` only after both database
 endpoints answer a `SELECT 1` availability probe (see
-`internal/dbendpoint`) and the Translator Deployment has a ready replica.
+`internal/dbendpoint`) and the Translator, Post Processing Service, and
+Experimental Design Service Deployments each have a ready replica.
 Validation failures move the experiment to `Error` before any component is
-created. The operator does not provision EDS or PostProcessingService
-workloads and never creates runner Jobs; it injects the fixed `alpha4`
+created. The operator provisions the Post Processing Service and the
+Experimental Design Service from their spec sections and never creates runner
+Jobs; it injects the fixed `alpha4`
 NATS/JetStream configuration and the downward-API identity variables
 (`SIMULATIONPROJECTNAMESPACE`, `SIMULATIONPROJECTNAME`,
 `SIMULATIONEXPERIMENTUID`) into the Translator container.
