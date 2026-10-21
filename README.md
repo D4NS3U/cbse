@@ -58,6 +58,7 @@ The most useful follow-up references are:
 - [Cluster requirements](docs/CLUSTER_REQUIREMENTS.md) for the runtime cluster requirements, including the `UserNamespacesSupport` feature gate.
 - [Experiment Operator README](experiment-operator/README.md) for operator development and generated API assets.
 - [Test harness README](test/README.md) for the test harness layout.
+- [Code wiki](docs/wiki/README.md) — the generated reference documentation: architecture, per-module deep-dives, and Mermaid/UML diagrams for the whole component chain.
 
 ## Quickstart (from source)
 
