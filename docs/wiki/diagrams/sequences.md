@@ -1,8 +1,43 @@
 # End-to-End Sequence Diagrams
 
-Sequence diagrams of the three end-to-end flows at `alpha4`. Participants are the real components from [architecture.md](../architecture.md); every subject and payload matches [modules/communication-interfaces.md](../modules/communication-interfaces.md). JetStream messages are durable (WorkQueue streams); Core NATS availability is plain request/reply.
+Sequence diagrams of the four end-to-end flows at `alpha4` — provisioning, design, execution rounds, and finalization — composing one experiment lifecycle. Participants are the real components from [architecture.md](../architecture.md); every subject and payload matches [modules/communication-interfaces.md](../modules/communication-interfaces.md). JetStream messages are durable (WorkQueue streams); Core NATS availability is plain request/reply.
 
-## 1. Design flow — EDS API to Core DB rows
+## 1. Provisioning — the Experiment Operator builds the component set
+
+```mermaid
+sequenceDiagram
+    participant Client as Client (kubectl / harness)
+    participant OP as Experiment Operator
+    participant DDB as Scenario Detail DB
+    participant RDB as Result DB
+    participant TR as Translator
+    participant PPS as Post Processing Service
+    participant EDS as Experimental Design Service
+    participant CR as SimulationExperiment CR
+
+    Client->>CR: apply SimulationExperiment (alpha4 spec)
+    OP->>OP: validateExperiment (failure moves phase to Error before any component is created)
+    OP->>CR: patch phase Pending to Provisioning ("Provisioning components")
+    OP->>DDB: Secret name-detaildb-sct; image form adds Deployment name-detaildb + Service name-detaildb-svc
+    OP->>RDB: Secret name-resultdb-sct; image form adds Deployment name-resultdb + Service name-resultdb-svc
+    OP->>TR: ConfigMap name-translator-cfg; Deployment name-translator (runtime + rootless BuildKit sidecar); Service name-translator-svc
+    OP->>PPS: Deployment name-pps + Service name-pps-svc
+    OP->>EDS: Deployment name-eds + Service name-eds-svc
+    Note over OP: runner ServiceAccount simrunner-uid12 (no permissions, no token automount) for the Scenario Manager's runner Jobs
+    loop readiness gates (5 s requeue; the watchdog counts a retry every ~60 s, the third counted failure moves phase to Error)
+        OP->>DDB: SELECT 1 availability probe
+        OP->>RDB: SELECT 1 availability probe
+        OP->>TR: ready replicas >= 1
+        OP->>PPS: ready replicas >= 1
+        EDS->>DDB: EnsureSchema at pod startup - the R3 self-provision (fail-fast restarts until the DB answers, then the six-object seed)
+        OP->>EDS: ready replicas >= 1
+    end
+    OP->>CR: patch phase InProgress, message "All components provisioned and ready"
+```
+
+Source anchors: [startProvisioning and provisionComponents](https://github.com/D4NS3U/cbse/blob/c993397/experiment-operator/internal/controller/simulationexperiment_alpha4_controller.go), [checkReadiness gates](https://github.com/D4NS3U/cbse/blob/c993397/experiment-operator/internal/controller/simulationexperiment_alpha4_controller.go#L202), [bounded-retry watchdog](https://github.com/D4NS3U/cbse/blob/c993397/experiment-operator/internal/controller/readiness_watchdog.go), [DB probe contract](https://github.com/D4NS3U/cbse/blob/c993397/experiment-operator/internal/dbendpoint), [EDS startup self-provision](https://github.com/D4NS3U/cbse/blob/c993397/component-templates/experimental-design-service/cmd/experimental-design-service/main.go#L70).
+
+## 2. Design flow — EDS API to Core DB rows
 
 ```mermaid
 sequenceDiagram
@@ -38,7 +73,7 @@ sequenceDiagram
 
 Source anchors: [EDS server flow](https://github.com/D4NS3U/cbse/blob/c993397/component-templates/experimental-design-service/internal/server/server.go), [availability responder](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/nats/availability.go), [batch consumer](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/nats/edsbatch.go), [intake](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/persistence/eds_intake.go).
 
-## 2. Execution round — SM to Translator to runner to PPS verdict
+## 3. Execution round — SM to Translator to runner to PPS verdict
 
 ```mermaid
 sequenceDiagram
@@ -95,7 +130,7 @@ sequenceDiagram
 
 Source anchors: [selection loop](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/selection/selection.go), [Translator orchestrator](https://github.com/D4NS3U/cbse/blob/c993397/component-templates/translator/internal/translator/translator.go), [Detail DB lookup](https://github.com/D4NS3U/cbse/blob/c993397/component-templates/translator/internal/detaildb/detaildb.go), [ready workflow](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/ready/ready.go), [runnerstart](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/runnerstart/scheduler.go), [runner entrypoint](https://github.com/D4NS3U/cbse/blob/c993397/component-templates/translator/internal/generator/runnermod/main.py), [evaluationpub](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/evaluationpub/evaluationpub.go), [PPS processor](https://github.com/D4NS3U/cbse/blob/c993397/component-templates/post-processing-service/internal/messaging/processor.go), [verdict workflow](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/verdict/verdict.go), [aggregate pass](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/internal/aggregate/scheduler.go).
 
-## 3. Finalization — EDS Finish to CR Finished
+## 4. Finalization — EDS Finish to CR Finished
 
 ```mermaid
 sequenceDiagram

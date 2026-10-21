@@ -40,7 +40,7 @@ A Kubernetes operator pattern with a NATS/JetStream data plane: the CR is the si
 | [modules/post-processing-service.md](modules/post-processing-service.md) | The statistical evaluation policy (CI half-width semantics) and its wire |
 | [modules/scenario-databases.md](modules/scenario-databases.md) | The experiment-scoped databases: six-object design schema, result tables |
 | [diagrams/class-diagram.md](diagrams/class-diagram.md) | The core domain types across the wire |
-| [diagrams/sequences.md](diagrams/sequences.md) | End-to-end sequence diagrams: design, execution round, finalization |
+| [diagrams/sequences.md](diagrams/sequences.md) | End-to-end sequence diagrams: provisioning, design, execution round, finalization |
 
 ## Getting Started
 
