@@ -1,6 +1,6 @@
 # FEATURE.md — The CBSE Helm control-plane installation (first sketch)
 
-**Status: DRAFT — design pass complete (2026-10-22).** All rulings H1–H8 are closed; implementation-slice authoring is unblocked. v0.1 renders its own NATS/JetStream and PostgreSQL Core DB directly in the chart, alongside the Experiment Operator and Scenario Manager. External NATS and PostgreSQL are required future installation modes and their compatibility seams are specified here, but they do not ship as non-functional values in v0.1.
+**Status: DRAFT — design pass complete and slice specifications authored (2026-10-22).** All rulings H1–H8 are closed; H1–H6 are dispatch-ready after prompt authoring. v0.1 renders its own NATS/JetStream and PostgreSQL Core DB directly in the chart, alongside the Experiment Operator and Scenario Manager. External NATS and PostgreSQL are required future installation modes and their compatibility seams are specified here, but they do not ship as non-functional values in v0.1.
 
 ## 1. Title and mission
 
@@ -126,12 +126,12 @@ Detailed task specs are authored only after H1–H8 close.
 
 | Slice | Content | Dependency | Gate |
 |---|---|---|---|
-| **H1 — chart skeleton and contract tests** | `charts/cbse/` skeleton; Chart metadata; values + JSON schema; helper templates; static naming/image/label/Secret contracts; `helm lint`/`helm template` repository entry points; CRD copy integrity check | — | `make test-fast` + chart lint/render tests |
-| **H2 — Operator and Scenario Manager packaging** | ServiceAccounts, least-privilege namespaced RBAC, Deployments, probes, resources, security contexts, configuration, fixed watch namespace, image/Secret refs | H1 | `make test-fast` + Helm install readiness |
-| **H3 — direct NATS and Core DB** | NATS and PostgreSQL StatefulSets/Services/PVCs, internal config, NetworkPolicies, Helm-generated fixed-name Core DB Secret, persistent + explicit ephemeral branches | H1 | `make test-fast` + install/restart/persistence checks |
-| **H4 — lifecycle safety** | Upgrade invariants, generated-secret reuse, PVC retention ruling, pre-delete experiment guard, uninstall behavior, CRD lifecycle documentation | H2, H3 | install → upgrade → uninstall acceptance |
-| **H5 — smoke-harness Helm installer** | Add `manifest|helm` shared-stack installer seam; run the existing 15-spec suite against Helm; diagnostics include Helm release/values/status without Secret payloads; teardown honors CRs-first finalization cleanup | H2–H4 | `make test-fast` + `make test-smoke` 15/15 through Helm |
-| **H6 — install/operator documentation** | Chart README, prerequisites, Secret creation/reference guide, first experiment, upgrade/rollback/uninstall, persistence limitations, external-service roadmap, root docs/index updates | H5 | docs/link/render checks |
+| **[H1 — chart skeleton and contract tests](slices/H1-chart-skeleton-contract-tests.md)** | `charts/cbse/` skeleton; Chart metadata; values + JSON schema; helper templates; static naming/image/label/Secret contracts; `helm lint`/`helm template` repository entry points; CRD copy integrity check | — | `make test-fast` + chart lint/render tests |
+| **[H2 — Operator and Scenario Manager packaging](slices/H2-control-plane-workloads.md)** | ServiceAccounts, least-privilege namespaced RBAC, Deployments, probes, resources, security contexts, configuration, fixed watch namespace, image/Secret refs; SM HTTP readiness; numeric runtime user; explicit EDS/PPS pull Secrets | H1 | `make test-fast` + W2 consolidated smoke |
+| **[H3 — direct NATS and Core DB](slices/H3-internal-nats-core-db.md)** | NATS and PostgreSQL StatefulSets/Services/PVCs, internal config, NetworkPolicies, Helm-generated fixed-name Core DB Secret, persistent + explicit ephemeral branches | H1 | `make test-fast` + W2 consolidated smoke |
+| **[H4 — lifecycle safety](slices/H4-lifecycle-safety.md)** | Locked auxiliary images; generated private release values; registry/pre-delete hooks; upgrade invariants; credential/PVC retention; lifecycle cluster harness; CRs-first `clean.sh` | H2, H3 | install → restart → upgrade → guarded uninstall acceptance + smoke regression |
+| **[H5 — smoke-harness Helm installer](slices/H5-helm-smoke-integration.md)** | Add `manifest|helm` shared-stack installer seam; run the existing 15-spec suite unchanged against Helm; safe diagnostics; retained-run and teardown behavior | H2–H4 | `make test-fast` + manifest smoke 15/15 + Helm smoke 15/15 |
+| **[H6 — install/operator documentation](slices/H6-documentation.md)** | Canonical Helm guide; chart README/NOTES; Secret creation/reference guide; first experiment; upgrade/rollback/uninstall; persistence limitations; external-service roadmap; root/testing/requirements/wiki links | H5 | docs/link/chart-render checks |
 
 Proposed wave plan after rulings: **W1 = H1**, **W2 = H2 ∥ H3** (ownership-disjoint after the chart contracts are pinned), **W3 = H4**, **W4 = H5**, **W5 = H6**, each implementation slice followed by an independent review lane. Settlement requires a consolidated Helm-installed smoke and an install/upgrade/uninstall acceptance record.
 
