@@ -424,4 +424,83 @@ fi
 KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit "${root}/test/harness/clean.sh"
 KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit "${root}/test/harness/clean.sh"
 
+# install-helm.sh: pinned Helm installer. A stub curl serves a real tarball
+# bundle; the checksum-failure and download-failure paths are caught, and the
+# success path installs only the checksum-verified binary. No real
+# network/cluster operation: the stub refuses any unexpected URL.
+helm_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+helm_arch="$(uname -m)"
+case "${helm_arch}" in
+  x86_64|amd64) helm_arch="amd64" ;;
+  arm64|aarch64) helm_arch="arm64" ;;
+esac
+helm_bundle="helm-v3.18.4-${helm_os}-${helm_arch}"
+# The official release tarball extracts into an inner <os>-<arch> directory.
+helm_bundle_dir="${helm_os}-${helm_arch}"
+mkdir -p "${tmp}/helm-src/${helm_bundle_dir}"
+cat >"${tmp}/helm-src/${helm_bundle_dir}/helm" <<'EOF'
+#!/usr/bin/env bash
+echo "v3.18.4+h1-selftest"
+EOF
+chmod +x "${tmp}/helm-src/${helm_bundle_dir}/helm"
+tar -C "${tmp}/helm-src" -czf "${tmp}/helm.tar.gz" "${helm_bundle_dir}"
+if command -v sha256sum >/dev/null 2>&1; then
+  helm_sha="$(sha256sum "${tmp}/helm.tar.gz" | awk '{print $1}')"
+else
+  helm_sha="$(shasum -a 256 "${tmp}/helm.tar.gz" | awk '{print $1}')"
+fi
+printf '%s\n' "${helm_sha}" >"${tmp}/helm-ok.sha256"
+printf '%s\n' "0000000000000000000000000000000000000000000000000000000000000000" >"${tmp}/helm-bad.sha256"
+cat >"${tmp}/fake-bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+out=""
+url=""
+while (( $# > 0 )); do
+  case "$1" in
+    --output|-o) out="$2"; shift 2 ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "${url}" in
+  *.tar.gz) cp "${FAKE_HELM_TARBALL:?}" "${out}" ;;
+  *.sha256) cp "${FAKE_HELM_CHECKSUM_FILE:?}" "${out}" ;;
+  *) echo "unexpected fake curl url: ${url}" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "${tmp}/fake-bin/curl"
+helm_install_out="$(PATH="${tmp}/fake-bin:${PATH}" FAKE_HELM_TARBALL="${tmp}/helm.tar.gz" \
+  FAKE_HELM_CHECKSUM_FILE="${tmp}/helm-ok.sha256" \
+  HELM_VERSION=v3.18.4 OUTPUT="${tmp}/helm-bin-ok" \
+  "${root}/test/harness/install-helm.sh")"
+[[ -x "${tmp}/helm-bin-ok" ]] || { echo "install-helm did not install the verified binary" >&2; exit 1; }
+grep -Fq 'v3.18.4' <(printf '%s' "${helm_install_out}") || { echo "install-helm did not print the verified version" >&2; exit 1; }
+helm_rc=0
+PATH="${tmp}/fake-bin:${PATH}" FAKE_HELM_TARBALL="${tmp}/helm.tar.gz" \
+  FAKE_HELM_CHECKSUM_FILE="${tmp}/helm-bad.sha256" \
+  HELM_VERSION=v3.18.4 OUTPUT="${tmp}/helm-bin-bad" \
+  "${root}/test/harness/install-helm.sh" >/dev/null 2>"${tmp}/helm-bad.err" || helm_rc=$?
+[[ "${helm_rc}" -eq 1 ]] || { echo "install-helm checksum failure not caught (rc=${helm_rc})" >&2; exit 1; }
+grep -Fq 'checksum verification failed' "${tmp}/helm-bad.err"
+[[ ! -e "${tmp}/helm-bin-bad" ]] || { echo "install-helm installed a binary with a bad checksum" >&2; exit 1; }
+helm_rc=0
+PATH="${tmp}/fake-bin:${PATH}" FAKE_HELM_TARBALL="${tmp}/helm.tar.gz" \
+  FAKE_HELM_CHECKSUM_FILE="${tmp}/does-not-exist.sha256" \
+  HELM_VERSION=v3.18.4 OUTPUT="${tmp}/helm-bin-dl" \
+  "${root}/test/harness/install-helm.sh" >/dev/null 2>&1 || helm_rc=$?
+[[ "${helm_rc}" -ne 0 ]] || { echo "install-helm accepted a failed download" >&2; exit 1; }
+[[ ! -e "${tmp}/helm-bin-dl" ]] || { echo "install-helm installed after a failed download" >&2; exit 1; }
+
+# Pinned-Helm wiring: the Makefile pins the version and binary path, the chart
+# tests honor the HELM environment, and test-fast runs the chart tests.
+grep -Fqx 'HELM_VERSION ?= v3.18.4' "${root}/Makefile"
+grep -Fqx 'HELM ?= $(ROOT)/bin/helm-$(HELM_VERSION)' "${root}/Makefile"
+grep -Fq 'HELM_VERSION=$(HELM_VERSION) OUTPUT=$@ $(TEST_DIR)/harness/install-helm.sh' "${root}/Makefile"
+grep -Fq 'HELM="$(HELM)" $(TEST_DIR)/harness/test-helm-chart.sh' "${root}/Makefile"
+grep -Fq '$(MAKE) test-helm-chart' "${root}/Makefile"
+grep -Fq 'pinned_helm="${HELM:-}"' "${root}/test/harness/test-helm-chart.sh"
+grep -Fq 'cbse_helm_run_discovered' "${root}/test/harness/test-helm-chart.sh"
+grep -Fq 'assert-helpers.sh' "${root}/test/harness/test-helm-chart.sh"
+
 echo "Harness self-tests passed."

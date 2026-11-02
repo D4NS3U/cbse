@@ -17,8 +17,10 @@
 #
 # Regenerates the operator's CRDs, RBAC role, and DeepCopy code with
 # controller-gen in an isolated temp copy of the experiment-operator module,
-# then diffs the result against the checked-in files. It fails on any drift,
-# enforcing that generated artifacts stay in sync with the alpha4 API
+# then diffs the result against the checked-in files. It also diffs the
+# chart's CRD copy (charts/cbse/crds/) against the generated alpha4 CRD so a
+# CRD or API change can never leave the Helm chart stale. It fails on any
+# drift, enforcing that generated artifacts stay in sync with the alpha4 API
 # definitions so a commit never ships stale generated code. Read-only against
 # the repository: only a temp directory is written.
 #
@@ -35,8 +37,9 @@
 #   Copies the experiment-operator module (api, cmd, config, hack, internal,
 #   go.mod, go.sum, PROJECT) into a temp dir with an isolated GOCACHE, runs
 #   controller-gen for RBAC, CRD (alpha4 paths), and object (DeepCopy), then
-#   diffs config/crd/bases, config/rbac/role.yaml, and every
-#   zz_generated.deepcopy.go against the repo. The temp dir is removed on EXIT.
+#   diffs config/crd/bases, config/rbac/role.yaml, every
+#   zz_generated.deepcopy.go, and the chart CRD copy against the repo. The
+#   temp dir is removed on EXIT.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -59,3 +62,9 @@ while IFS= read -r generated; do
   relative="${generated#./}"
   diff -u "${root}/experiment-operator/${relative}" "${tmp}/experiment-operator/${relative}"
 done < <(find . -name zz_generated.deepcopy.go -type f | sort)
+
+# Chart CRD lockstep: the Helm chart ships a byte-identical copy of the
+# generated alpha4 CRD; any CRD or API change must update the chart copy in
+# the same commit.
+chart_crd="charts/cbse/crds/experiment.cbse.terministic.de_simulationexperiments.yaml"
+diff -u "${root}/experiment-operator/config/crd/bases/$(basename "${chart_crd}")" "${root}/${chart_crd}"
