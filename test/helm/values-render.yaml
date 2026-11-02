@@ -1,0 +1,80 @@
+# Public, non-runnable static-render fixture for the CBSE chart.
+#
+# Repositories use the reserved example.invalid host and the digests are
+# syntactically valid (64 lowercase hex) but clearly non-runnable. This file
+# is the only values source used by `make helm-lint`, `make helm-render`, and
+# the static chart contract tests; it is never applied to a cluster.
+global:
+  imagePullPolicy: IfNotPresent
+
+operator:
+  image:
+    repository: example.invalid/cbse/experiment-operator
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
+
+scenarioManager:
+  image:
+    repository: example.invalid/cbse/scenario-manager
+    digest: "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  runnerStartWorkers: 4
+  healthPort: 8080
+  resources:
+    requests:
+      cpu: 10m
+      memory: 48Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
+
+nats:
+  image:
+    repository: example.invalid/nats
+    digest: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  jetstream:
+    maxMemoryStore: 128MB
+    maxFileStore: 512MB
+  persistence:
+    enabled: true
+    size: 2Gi
+    storageClass: ""
+    retain: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+coreDatabase:
+  image:
+    repository: example.invalid/postgres
+    digest: "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  database: scenarios
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    retain: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      cpu: 750m
+      memory: 384Mi
+
+hooks:
+  kubectlImage:
+    repository: example.invalid/kubectl
+    digest: "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+
+networkPolicies:
+  enabled: true

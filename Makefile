@@ -7,6 +7,8 @@ GOCACHE ?= $(ROOT)/.cache/go-build
 export GOCACHE
 KUBECTL_VERSION ?= v1.32.5
 KUBECTL ?= $(ROOT)/bin/kubectl-$(KUBECTL_VERSION)
+HELM_VERSION ?= v3.18.4
+HELM ?= $(ROOT)/bin/helm-$(HELM_VERSION)
 RUN_ID ?=
 # CBSE_REGISTRY is required for the image-build and cluster targets. It is
 # environment-provided and has no default in this repository; see
@@ -16,7 +18,7 @@ CBSE_REGISTRY ?=
 TEST_IMAGE_VERSION ?= $(shell date -u +%-y.%-m.%-d)
 CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,eds,translator,runner-base,scenario-detail-database,pps
 
-.PHONY: help test-fast test-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools verify-generated
+.PHONY: help test-fast test-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools helm-tools helm-lint helm-render test-helm-chart verify-generated
 
 help:
 	@echo "CBSE test commands:"
@@ -26,9 +28,13 @@ help:
 	@echo "  make test-e2e-retained KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
 	@echo "  make test-diagnose RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 	@echo "  make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/config"
+	@echo "  make helm-lint"
+	@echo "  make helm-render"
+	@echo "  make test-helm-chart"
 
 test-fast: verify-generated
 	$(TEST_DIR)/harness/test-harness.sh
+	$(MAKE) test-helm-chart
 	@unformatted="$$(gofmt -l $$(find experiment-operator scenario-manager component-templates/translator component-templates/post-processing-service component-templates/experimental-design-service $(TEST_DIR)/e2e -name '*.go' -type f))"; \
 	if [[ -n "$${unformatted}" ]]; then echo "Unformatted Go files:"; echo "$${unformatted}"; exit 1; fi
 	cd experiment-operator && go vet ./...
@@ -57,6 +63,23 @@ test-tools: $(KUBECTL)
 
 $(KUBECTL):
 	KUBECTL_VERSION=$(KUBECTL_VERSION) OUTPUT=$@ $(TEST_DIR)/harness/install-kubectl.sh
+
+helm-tools: $(HELM)
+
+$(HELM):
+	HELM_VERSION=$(HELM_VERSION) OUTPUT=$@ $(TEST_DIR)/harness/install-helm.sh
+
+helm-lint: helm-tools
+	$(HELM) lint charts/cbse -f $(TEST_DIR)/helm/values-render.yaml
+
+helm-render: helm-tools
+	@tmp="$$(mktemp)"; \
+	$(HELM) template cbse charts/cbse --namespace cbse-system --include-crds -f $(TEST_DIR)/helm/values-render.yaml >"$$tmp"; \
+	echo "helm-render: $$(grep -c '^kind: ' "$$tmp") rendered Kubernetes document(s)"; \
+	rm -f "$$tmp"
+
+test-helm-chart: helm-tools
+	HELM="$(HELM)" $(TEST_DIR)/harness/test-helm-chart.sh
 
 publish-test-images:
 	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }
