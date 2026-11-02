@@ -1,0 +1,13 @@
+# Dispatch prompt — H1: Helm chart skeleton and contract tests
+
+**Task title:** H1 — Establish the CBSE Helm chart foundation: complete v0.1 values/schema/helper contract, alpha4 CRD lockstep, pinned Helm v3.18.4 installer, lint/render/static tests, and Makefile/test-fast entry points—no workloads yet
+
+**Read order (mandatory, normative and read-only):** 1) `devlog/changes/helm-control-plane-installation/FEATURE.md` (§2, §3 D1–D10/D14, §4, §5, §6 H1, Appendix A, rulings); 2) `devlog/changes/helm-control-plane-installation/slices/H1-chart-skeleton-contract-tests.md` (your complete Target/contract/evidence); 3) repository-root `AGENTS.md`; 4) live `Makefile`, `test/harness/{install-kubectl,test-harness,verify-generated}.sh`, and the generated alpha4 CRD. Contradiction → ask; never reinterpret the spec.
+
+**Target summary (slice is authoritative):** create `charts/cbse/{Chart.yaml,values.yaml,values.schema.json,.helmignore,README.md,crds/...,templates/_helpers.tpl,templates/NOTES.txt}`; static fixtures/assertions under `test/helm/`; pinned checksum-verified `test/harness/install-helm.sh`; `test/harness/test-helm-chart.sh`; CRD-copy lockstep in `verify-generated.sh`; Helm self-test truths; root Makefile Helm tools/lint/render/test targets and `test-fast` wiring. The complete value surface and fixed-name helpers are byte-/shape-pinned in the slice. Render no Operator/SM/NATS/Core DB workload: H2/H3 own them.
+
+**Acceptance summary:** Helm v3.18.4 exists and is pinned; `helm lint`/`helm template --include-crds` pass with public fake fixture values; malformed digests/unknown keys fail; chart CRD is byte-identical to generated alpha4; no private defaults/tags/credentials; `make verify-generated`, `make test-helm-chart`, and `make test-fast` rc=0.
+
+**Ownership/branch:** dedicated Orca child worktree and branch; edit only H1 Target paths. H2/H3 are future dependent tasks, not concurrent files. Commit natural milestones to your child branch only, never `main`, with `[orchestration: task <task-id> dispatch <dispatch-id>]` in every commit body.
+
+**Mandatory protocol:** first checkpoint `printf '%s/%s\n' "$PI_PROVIDER" "$PI_MODEL"` must be `ai.forge/qwen3.8-27b-nvfp4`; mismatch → stop/failed. Keep outputs bounded; collect the slice’s ten evidence blocks incrementally. FEATURE/slice/AGENTS/MANAGER/devlog are read-only. Check coordinator messages before each file group, after tests, and immediately before completion. Send `worker_done` exactly once with three-sentence summary, task+dispatch IDs, explicit outcome, attestation, evidence 1–10, `--files-modified`, and report path.

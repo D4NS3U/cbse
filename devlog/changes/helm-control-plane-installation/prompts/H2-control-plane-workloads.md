@@ -1,0 +1,13 @@
+# Dispatch prompt — H2: Operator and Scenario Manager chart workloads
+
+**Task title:** H2 — Package the Experiment Operator and Scenario Manager for Helm with namespaced RBAC, probes/security/resources, fixed namespace/Secret/DNS contracts; add explicit SM `/healthz` + `/readyz`, numeric UID 1000, and explicit `cbse-registry-auth` pull references for EDS/PPS
+
+**Read order (mandatory/read-only):** 1) Helm feature `FEATURE.md` (§2, D1/D3/D4/D6/D8/D11/D12, §4–§6, rulings); 2) `slices/H2-control-plane-workloads.md`; 3) settled H1 slice + live chart contracts; 4) root `AGENTS.md`; 5) live Operator/SM code, Dockerfiles, tests, and smoke stack as factual archetypes. Missing H1 value/helper → ask; do not edit shared contracts.
+
+**Target summary:** own only `charts/cbse/templates/{operator,scenario-manager}/`, `test/helm/assert-control-plane.sh`, Scenario Manager health/core/cmd/Dockerfile paths named by the slice, and `experiment-operator/internal/controller/` pull-secret correction/tests. Render one namespaced Operator and one namespaced SM with Roles (no ClusterRole), fixed names, digest images, exact ConfigMap env, explicit ServiceAccount pull Secrets, restricted contexts, and HTTP probes. Add an explicit-dependency health server: liveness 200; readiness 503 until the same point as the existing ready log then 200; NotReady on shutdown. Change SM image to numeric UID/GID 1000. Set EDS/PPS Pod imagePullSecrets explicitly—never patch/use default SA policy.
+
+**Parallel wave:** H3 runs concurrently in a different child worktree and owns only NATS/Core DB/networking templates. Never edit H1 shared chart contracts or H3 paths. Report a missing contract instead of fixing across partitions.
+
+**Acceptance summary:** targeted SM race/vet and Operator envtest green; Helm control-plane assertions prove exact RBAC/probes/env/images/security/no root/no ClusterRole; API/generated files untouched; `make test-helm-chart` and `make test-fast` rc=0. W2 consolidated smoke is a manager settlement gate after H2+H3 merge—name it honestly as pending wave evidence.
+
+**Branch/protocol:** dedicated child branch; never `main`. Every commit body carries `[orchestration: task <task-id> dispatch <dispatch-id>]` using the injected lifecycle IDs. First checkpoint runs `printf '%s/%s\n' "$PI_PROVIDER" "$PI_MODEL"` and must print `ai.forge/qwen3.8-27b-nvfp4`; mismatch stops with failed outcome. Specs/devlog read-only. Keep outputs bounded and gather the slice’s ten evidence blocks. Check coordinator messages at checkpoints. `worker_done` exactly once with three-sentence summary, IDs, outcome, attestation, evidence, modified files, report path, and explicit W2 smoke report line.

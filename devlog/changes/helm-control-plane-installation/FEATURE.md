@@ -1,6 +1,6 @@
 # FEATURE.md — The CBSE Helm control-plane installation (first sketch)
 
-**Status: DRAFT — design pass complete and slice specifications authored (2026-10-22).** All rulings H1–H8 are closed; H1–H6 are dispatch-ready after prompt authoring. v0.1 renders its own NATS/JetStream and PostgreSQL Core DB directly in the chart, alongside the Experiment Operator and Scenario Manager. External NATS and PostgreSQL are required future installation modes and their compatibility seams are specified here, but they do not ship as non-functional values in v0.1.
+**Status: DRAFT — design pass complete; slice specifications and dispatch prompts authored (2026-10-22).** All rulings H1–H8 are closed; H1 is ready for dispatch, with H2–H6 dependency-gated by the wave plan. v0.1 renders its own NATS/JetStream and PostgreSQL Core DB directly in the chart, alongside the Experiment Operator and Scenario Manager. External NATS and PostgreSQL are required future installation modes and their compatibility seams are specified here, but they do not ship as non-functional values in v0.1.
 
 ## 1. Title and mission
 

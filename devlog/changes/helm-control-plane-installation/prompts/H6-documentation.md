@@ -1,0 +1,11 @@
+# Dispatch prompt — H6: Helm installation and operations documentation
+
+**Task title:** H6 — Document the proven Helm installation: canonical install/Secret/image-values guide, chart values/reference/NOTES, first experiment, observation, upgrade/rollback, guarded uninstall and retained data, CRD lifecycle, troubleshooting, limitations, testing, and external-service roadmap
+
+**Read order (mandatory/read-only):** 1) Helm feature `FEATURE.md`; 2) `slices/H6-documentation.md`; 3) settled H1–H5 live CLI/value/resource behavior and reports; 4) root `AGENTS.md`; 5) current root README, cluster requirements, testing guide, chart README/NOTES, and code wiki. Document only proven behavior; discrepancy → ask/report, never fix implementation.
+
+**Target summary:** documentation paths listed by H6 only. Create `docs/HELM_INSTALLATION.md`; complete chart README/NOTES; update root README, cluster requirements, testing guide, and bounded wiki links/topology. Canonical guide covers exact install contents/prerequisites, all Secrets and owners, safe registry-Secret file import (no credential args), generated private digest values, install/first experiment/observe, upgrade/rollback, pre-delete guard and CRs-first uninstall, retained PVC/Core DB Secret, CRD preservation, troubleshooting, limitations, and external roadmap. Explicitly separate public chart source, optional packaged publication, and private images.
+
+**Acceptance summary:** chart lint/render/static tests green; relative links valid; every command/value/resource exists; secret/private-infra scan empty; all required guide headings present; docs-only containment. No smoke required for docs-only final wave.
+
+**Branch/protocol:** dedicated child branch after H5; no implementation edits and never `main`. Every commit body carries `[orchestration: task <task-id> dispatch <dispatch-id>]`. First checkpoint runs `printf '%s/%s\n' "$PI_PROVIDER" "$PI_MODEL"` and must print `ai.forge/qwen3.8-27b-nvfp4`; mismatch stops with failed outcome. Specs/devlog read-only; bounded outputs; nine evidence blocks. Check inbox at checkpoints and immediately before exactly one `worker_done` with summary, IDs, outcome, attestation, evidence, files, report path.

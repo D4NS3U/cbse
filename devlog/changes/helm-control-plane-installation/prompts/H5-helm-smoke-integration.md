@@ -1,0 +1,11 @@
+# Dispatch prompt — H5: Full smoke through the Helm installer
+
+**Task title:** H5 — Add the `manifest|helm` shared-stack installer Strategy to the existing harness and prove the unchanged 15-spec suite through both paths, with safe Helm diagnostics, retained runs, CRs-first uninstall, and installer-independent Core DB access
+
+**Read order (mandatory/read-only):** 1) Helm feature `FEATURE.md` D14/§5–§7; 2) `slices/H5-helm-smoke-integration.md`; 3) settled H1–H4 contracts/scripts/chart; 4) root `AGENTS.md`; 5) live smoke/diagnose/clean/Ginkgo code. Contradiction → ask; defects outside partition become report lines.
+
+**Target summary:** own only harness smoke/preflight/diagnose/clean/self-test files, minimal shared-stack lookup changes in `test/e2e/smoke_test.go`, e2e test-mode README, and `test-helm-smoke` Make target. Add `CBSE_STACK_INSTALLER=manifest|helm`, default manifest. Common flow/image set/e2e suite remains one path after readiness. Helm mode: namespace + owner Secret, generate safe digest values, chart installs CRD if absent, `helm upgrade --install --wait --atomic`, StatefulSets/Deployments Ready, no harness Core DB Secret/default-SA patch. Preserve CRD safety checks. Replace `deployment/core-db` exec assumption with exact-one-Ready-Pod label lookup. Helm teardown: CRs wait → helm uninstall → namespace; retained mode stays; `test-clean` detects release. Artifacts may contain status/history/values but never Helm manifest/Secret data.
+
+**Acceptance summary:** fake harness proves both command orders; Ginkgo compile/spec count 15; `make test-fast`; live default manifest smoke 15/15; live Helm smoke 15/15; safe artifacts and fully clean teardown; retained cleanup behavior. Both cluster runs mandatory—otherwise verification-blocked.
+
+**Branch/protocol:** serial child branch after H4. No chart/application/image-lock edits and never `main`. Every commit body carries `[orchestration: task <task-id> dispatch <dispatch-id>]`. First checkpoint runs `printf '%s/%s\n' "$PI_PROVIDER" "$PI_MODEL"` and must print `ai.forge/qwen3.8-27b-nvfp4`; mismatch stops with failed outcome. Specs read-only, bounded evidence, ten acceptance blocks. Check coordinator inbox at checkpoints and before exactly one `worker_done` with summary, IDs, outcome, attestation, evidence, files, run IDs/report.
