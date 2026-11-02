@@ -6,7 +6,7 @@ This is the durable routing ledger for [FEATURE.md](FEATURE.md). Slice states us
 
 | Slice | State | Landing / evidence | Next owner |
 |---|---|---|---|
-| H1 — chart skeleton and contract tests | **complete** | Merged locally to `main` as `bcc6d87` (reviewed implementation HEAD `2ac80718fa87208c562b7d8d49dd2987806c5af0`; commits `82a64ef`, `2ac8071`) | none |
+| H1 — chart skeleton and contract tests | **complete** | Landed on feature branch `D4NS3U/helm-control-plane-installation` via merge commit `bcc6d87` (reviewed implementation HEAD `2ac80718fa87208c562b7d8d49dd2987806c5af0`; commits `82a64ef`, `2ac8071`) | none |
 | H2 — Operator and Scenario Manager workloads | incomplete | dependency H1 satisfied; not dispatched | manager/user decision to start W2 |
 | H3 — internal NATS and Core DB | incomplete | dependency H1 satisfied; not dispatched | manager/user decision to start W2 |
 | H4 — lifecycle safety | incomplete | waits for H2+H3 settlement | — |
@@ -18,7 +18,7 @@ This is the durable routing ledger for [FEATURE.md](FEATURE.md). Slice states us
 - **Run:** `run_019967646d6d`
 - **Implementation:** task `task_863c88586e8e`, dispatch `ctx_5e875c8442d6`, runtime attestation `ai.forge/qwen3.8-27b-nvfp4`.
 - **Independent review:** task `task_538e39970502`, dispatch `ctx_f364b232c6d2`, runtime attestation `ai.forge/glm`, verdict **approve** on exact HEAD `2ac80718fa87208c562b7d8d49dd2987806c5af0`.
-- **Merge:** local `main` merge commit `bcc6d87`; the child worktree and merged branch were removed after evidence preservation.
+- **Landing:** feature-branch merge commit `bcc6d87`; the H1 child worktree and slice branch were removed after evidence preservation. `main` remains untouched until final settlement and explicit user approval.
 - **Reports (untracked, main repo):** `artifacts/orchestration/helm-H1-implementation-report.md`, `artifacts/orchestration/helm-H1-review.md`.
 
 ### Verified gates
