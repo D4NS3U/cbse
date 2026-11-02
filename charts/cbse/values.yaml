@@ -1,0 +1,91 @@
+# CBSE chart values — complete v0.1 value surface.
+#
+# This file contains no private infrastructure. Image repository and digest
+# fields default to empty; the release process generates an installation-owner
+# values file with repositories and resolved immutable digests, and workload
+# templates fail with Helm `required` when rendered without release values.
+# See devlog/changes/helm-control-plane-installation/FEATURE.md for the
+# normative contract.
+global:
+  # Pull policy applied to every CBSE-owned workload.
+  imagePullPolicy: IfNotPresent
+
+operator:
+  image:
+    repository: ""
+    digest: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
+
+scenarioManager:
+  image:
+    repository: ""
+    digest: ""
+  # Concurrent runner-start workers in the Scenario Manager.
+  runnerStartWorkers: 4
+  # Port the Scenario Manager readiness/health endpoint listens on.
+  healthPort: 8080
+  resources:
+    requests:
+      cpu: 10m
+      memory: 48Mi
+    limits:
+      cpu: 500m
+      memory: 192Mi
+
+nats:
+  # Authentication-free in v0.1; no credential, TLS, or user values exist.
+  image:
+    repository: ""
+    digest: ""
+  jetstream:
+    maxMemoryStore: 128MB
+    maxFileStore: 512MB
+  persistence:
+    enabled: true
+    size: 2Gi
+    # Empty means the cluster default StorageClass decides.
+    storageClass: ""
+    # JetStream data is retained on uninstall so a reinstall reconnects.
+    retain: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+coreDatabase:
+  # The chart generates and retains the fixed-name core-db-credentials
+  # Secret; there is no username/password or existing-Secret value here.
+  image:
+    repository: ""
+    digest: ""
+  database: scenarios
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClass: ""
+    retain: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 96Mi
+    limits:
+      cpu: 750m
+      memory: 384Mi
+
+hooks:
+  # Image for the read-only pre-delete guard Job added by a later slice.
+  kubectlImage:
+    repository: ""
+    digest: ""
+
+networkPolicies:
+  enabled: true

@@ -1,0 +1,15 @@
+Thank you for installing {{ .Chart.Name }} {{ .Chart.Version }} (release "{{ .Release.Name }}").
+
+This chart is pre-release: the complete installation guide is supplied by the
+H6 documentation slice, and this note is the only operational contract until
+then.
+
+Prerequisite:
+  * The kubernetes.io/dockerconfigjson Secret named cbse-registry-auth must
+    already exist in {{ .Release.Namespace }}. The chart validates and
+    references it but never creates, mutates, or deletes it.
+
+Experiments:
+  * SimulationExperiment resources belong in the release namespace
+    {{ .Release.Namespace }}; one chart release per namespace is the v0.1
+    installation model.

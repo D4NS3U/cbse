@@ -1,0 +1,13 @@
+apiVersion: v2
+name: cbse
+description: >-
+  CBSE shared control plane: the SimulationExperiment alpha4 CRD, the
+  Experiment Operator, the Scenario Manager, a directly rendered single-node
+  NATS/JetStream, and the Scenario Manager PostgreSQL Core DB for a single
+  release namespace.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/D4NS3U/cbse
+sources:
+  - https://github.com/D4NS3U/cbse
