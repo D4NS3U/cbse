@@ -27,6 +27,8 @@ Sole ownership of:
 
 Everything else is out of scope: no component workload templates, no application Go/Dockerfile changes, no smoke/cluster mutation, no docs beyond the two chart skeleton files, no image-lock changes, no `devlog/**` edits.
 
+**Settlement amendment (2026-11-02, manager-licensed before independent review):** H1 additionally owns exactly one `.gitignore` line, `/bin/helm-*`, mirroring the existing `/bin/kubectl-*`; the pinned installer otherwise leaves every tested checkout dirty. No other scope extension is licensed.
+
 ## Pinned chart structure and metadata
 
 `Chart.yaml`:
