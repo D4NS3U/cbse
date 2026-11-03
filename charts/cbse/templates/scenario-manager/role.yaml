@@ -1,0 +1,27 @@
+# Namespaced Role for the Scenario Manager. v0.1 watches one namespace (the
+# release namespace), so a Role/RoleBinding pair replaces the ClusterRole/
+# ClusterRoleBinding of the smoke stack: exactly the SM workload verbs and
+# resources, scoped to the release namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cbse.name.scenarioManager" . }}
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["experiment.cbse.terministic.de"]
+    resources: ["simulationexperiments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["experiment.cbse.terministic.de"]
+    resources: ["simulationexperiments/status"]
+    verbs: ["patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["cbse-registry-auth"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get"]

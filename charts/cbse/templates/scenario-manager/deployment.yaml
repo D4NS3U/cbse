@@ -1,0 +1,68 @@
+# Scenario Manager Deployment: one replica, stable selector, digest-pinned
+# image, the scenario-manager-config ConfigMap plus the Helm-managed
+# core-db-credentials Secret as env sources, the fixed watch namespace (the
+# release namespace via the downward API), HTTP /healthz liveness and
+# /readyz readiness probes on the named health port, and the restricted
+# security profile with the numeric UID/GID 1000 runtime user the image
+# declares. The smoke stack's root exception does not enter the chart.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cbse.name.scenarioManager" . }}
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "cbse.name.scenarioManager" . }}
+      {{- include "cbse.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "cbse.name.scenarioManager" . }}
+        {{- include "cbse.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cbse.name.scenarioManager" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scenario-manager
+          image: {{ include "cbse.image" .Values.scenarioManager.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: scenario-manager-config
+            - secretRef:
+                name: {{ include "cbse.name.coreDatabaseCredentials" . }}
+          env:
+            - name: SCENARIO_MANAGER_WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: health
+              containerPort: {{ .Values.scenarioManager.healthPort }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.scenarioManager.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true

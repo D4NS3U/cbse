@@ -24,7 +24,7 @@ FROM alpine:3.21
 ARG IMAGE_VERSION=dev
 ARG VCS_REF=unknown
 
-RUN addgroup -S app && adduser -S -G app app
+RUN addgroup -S -g 1000 app && adduser -S -u 1000 -G app app
 
 COPY --from=builder /out/scenario-manager /usr/local/bin/scenario-manager
 
@@ -33,6 +33,9 @@ LABEL org.opencontainers.image.title="CBSE Scenario Manager" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.source="https://github.com/d4ns3u/cbse"
 
-USER app
+# Numeric UID/GID 1000 runtime user: the chart security context pins
+# runAsUser/runAsGroup 1000, and Kubernetes cannot verify symbolic users
+# under runAsNonRoot.
+USER 1000:1000
 
 ENTRYPOINT ["/usr/local/bin/scenario-manager"]
