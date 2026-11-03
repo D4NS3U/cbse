@@ -32,10 +32,11 @@ import (
 // server start failure is fatal), serves /healthz and /readyz on that
 // address, and runs core.RunScenarioManager, which performs all startup
 // validation (runner-start worker count, messaging templates/stream names,
-// Core DB schema, Kubernetes authorization, and the authentication-free NATS
-// connection) in the SM startup failure-class order before starting any
-// informer, consumer, selector, or scheduler; any startup configuration
-// failure is fatal and exits the process before the control loop starts.
+// the single release/experiment watch namespace, Core DB schema, namespaced
+// Kubernetes authorization, and the authentication-free NATS connection) in
+// the SM startup failure-class order before starting any informer, consumer,
+// selector, or scheduler; any startup configuration failure is fatal and
+// exits the process before the control loop starts.
 // RunScenarioManager flips the readiness state to ready at exactly the point
 // immediately before the existing "Scenario Manager is ready" log and back to
 // not ready before the shutdown join.

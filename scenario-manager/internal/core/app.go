@@ -82,6 +82,7 @@ const (
 // RunScenarioManager uses to construct components.
 type startupConfig struct {
 	workers                int
+	watchNamespace         string
 	natsURL                string
 	maxAttempts            int
 	publishRecoveryTimeout time.Duration
@@ -101,17 +102,18 @@ type readinessReporter interface {
 // RunScenarioManager is the Scenario Manager composition entry point invoked
 // by cmd/main.go. It performs startup validation in the SM startup
 // failure-class order (runner-start worker count, messaging subject/stream
-// canonicality, Core DB schema, Kubernetes authorization, authentication-free
-// NATS), connects to NATS and JetStream and reconciles streams and consumers,
-// constructs and starts the experiment informer, the four NATS adapters, the
-// selection loop, the evaluation-request publication loop, the PPS-evaluation
-// consumer, and the runner-start, observation, and aggregate schedulers, and
-// only after every component has started flips the explicit readiness
-// reporter to ready at the same point immediately before emitting the ready
-// log. It blocks on ctx, flips the reporter back to not ready before the
-// shutdown join, and joins every started component on shutdown. Any startup
-// configuration failure is fatal and terminates the process before any
-// informer, consumer, selector, or scheduler starts.
+// canonicality, single release/experiment watch namespace, Core DB schema,
+// namespaced Kubernetes authorization, authentication-free NATS), connects to
+// NATS and JetStream and reconciles streams and consumers, constructs and
+// starts the experiment informer (scoped to the watch namespace), the four
+// NATS adapters, the selection loop, the evaluation-request publication loop,
+// the PPS-evaluation consumer, and the runner-start, observation, and
+// aggregate schedulers, and only after every component has started flips the
+// explicit readiness reporter to ready at the same point immediately before
+// emitting the ready log. It blocks on ctx, flips the reporter back to not
+// ready before the shutdown join, and joins every started component on
+// shutdown. Any startup configuration failure is fatal and terminates the
+// process before any informer, consumer, selector, or scheduler starts.
 func RunScenarioManager(ctx context.Context, readiness readinessReporter) {
 	cfg, err := validatePureConfig(os.Getenv)
 	if err != nil {
@@ -134,7 +136,7 @@ func RunScenarioManager(ctx context.Context, readiness readinessReporter) {
 
 	// Kubernetes: build the in-cluster REST config, the controller-runtime
 	// client, and the client-go clientset. rbac.Verify rejects a denied
-	// required cluster-wide authorization check before any component starts.
+	// required namespaced authorization check before any component starts.
 	restCfg, err := loadRESTConfig()
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: kubernetes config: %v", err)
@@ -151,7 +153,7 @@ func RunScenarioManager(ctx context.Context, readiness readinessReporter) {
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: kubernetes clientset: %v", err)
 	}
-	if _, err := rbac.Verify(ctx, clientset); err != nil {
+	if _, err := rbac.Verify(ctx, clientset, cfg.watchNamespace); err != nil {
 		log.Fatalf("Scenario Manager startup: authorization: %v", err)
 	}
 
@@ -174,7 +176,7 @@ func RunScenarioManager(ctx context.Context, readiness readinessReporter) {
 	// Construct the components.
 	msgCleaner := nats.NewNATSDeletionClient(js)
 	dispatch := informer.NewProductionDispatcher(k8sClient, store, msgCleaner)
-	inf, err := informer.NewInformer(informer.Config{RESTConfig: restCfg, Scheme: k8sScheme}, dispatch)
+	inf, err := informer.NewInformer(informer.Config{RESTConfig: restCfg, Scheme: k8sScheme, Namespace: cfg.watchNamespace}, dispatch)
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: informer: %v", err)
 	}
@@ -324,9 +326,11 @@ func markReady(readiness readinessReporter) {
 }
 
 // validatePureConfig performs the startup configuration checks that need no
-// external dependency: the runner-start worker count and the messaging subject
-// template / stream name canonicality. It is factored out so the configuration
-// failure classes can be tested in isolation without a DB, Kubernetes, or NATS.
+// external dependency: the runner-start worker count, the messaging subject
+// template / stream name canonicality, and the single release/experiment
+// watch namespace (v0.1 has no cluster-wide fallback). It is factored out so
+// the configuration failure classes can be tested in isolation without a DB,
+// Kubernetes, or NATS.
 func validatePureConfig(getenv func(string) string) (startupConfig, error) {
 	workers, err := config.ParseRunnerStartWorkers(getenv(config.RunnerStartWorkersEnv))
 	if err != nil {
@@ -338,7 +342,11 @@ func validatePureConfig(getenv func(string) string) (startupConfig, error) {
 	if err := nats.ValidateStreamNames(getenv); err != nil {
 		return startupConfig{}, err
 	}
-	return startupConfig{workers: workers}, nil
+	watchNamespace, err := config.ParseWatchNamespace(getenv(config.WatchNamespaceEnv))
+	if err != nil {
+		return startupConfig{}, err
+	}
+	return startupConfig{workers: workers, watchNamespace: watchNamespace}, nil
 }
 
 // validateNATSConfig validates the NATS URL and legacy credential env vars. The

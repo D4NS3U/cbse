@@ -45,6 +45,8 @@ func baseEnv() map[string]string {
 		// (absent resolves to default; set explicitly to "" is invalid)
 		// NATS authentication-free.
 		natsURLEnv: "nats://nats:4222",
+		// Single release/experiment watch namespace (v0.1 required).
+		config.WatchNamespaceEnv: "cbse-system",
 		// Core DB credentials present (form only; not opened by these tests).
 		coreDBDSNEnv:      "postgres://db:5432/cbse",
 		coreDBUserEnv:     "cbse",
@@ -99,6 +101,42 @@ func TestValidatePureConfigRejectsNonCanonicalStreamName(t *testing.T) {
 	env[edsStreamNameEnv] = "wrong_stream_name"
 	if _, err := validatePureConfig(envMap(env)); err == nil {
 		t.Fatal("non-canonical stream name: want error")
+	}
+}
+
+// TestValidatePureConfigAcceptsWatchNamespace pins that a valid watch
+// namespace passes the pure configuration phase and is carried through to
+// component construction.
+func TestValidatePureConfigAcceptsWatchNamespace(t *testing.T) {
+	cfg, err := validatePureConfig(envMap(baseEnv()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.watchNamespace != "cbse-system" {
+		t.Fatalf("watchNamespace = %q; want cbse-system", cfg.watchNamespace)
+	}
+}
+
+// TestValidatePureConfigRejectsMissingWatchNamespace pins the v0.1
+// single-namespace contract: an absent SCENARIO_MANAGER_WATCH_NAMESPACE is a
+// fatal startup error (no cluster-wide fallback).
+func TestValidatePureConfigRejectsMissingWatchNamespace(t *testing.T) {
+	env := baseEnv()
+	delete(env, config.WatchNamespaceEnv)
+	if _, err := validatePureConfig(envMap(env)); err == nil {
+		t.Fatal("missing watch namespace: want error")
+	}
+}
+
+// TestValidatePureConfigRejectsMalformedWatchNamespace pins the fatal startup
+// handling for malformed watch-namespace values.
+func TestValidatePureConfigRejectsMalformedWatchNamespace(t *testing.T) {
+	for _, bad := range []string{"CBSE-SYSTEM", "cbse_system", "-cbse", "cbse "} {
+		env := baseEnv()
+		env[config.WatchNamespaceEnv] = bad
+		if _, err := validatePureConfig(envMap(env)); err == nil {
+			t.Fatalf("malformed watch namespace %q: want error", bad)
+		}
 	}
 }
 
