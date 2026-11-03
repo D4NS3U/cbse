@@ -13,22 +13,59 @@
 // limitations under the License.
 
 // Package config parses Scenario Manager startup configuration from the
-// environment. The single tunable is the number of concurrent runner-start
-// workers. The observation scheduler uses a fixed four workers and is not
-// configurable. A malformed, zero, negative, or out-of-range worker count is a
-// fatal startup error: it must fail SM startup before scenario selection or
-// runner-start discovery begins.
+// environment. The two tunables are the number of concurrent runner-start
+// workers and the single release/experiment watch namespace. The observation
+// scheduler uses a fixed four workers and is not configurable. A malformed,
+// zero, negative, or out-of-range worker count, or an absent or malformed
+// watch namespace, is a fatal startup error: it must fail SM startup before
+// scenario selection, runner-start discovery, or any namespace-scoped
+// authorization check begins.
 package config
 
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 )
 
 // RunnerStartWorkersEnv names the environment variable that configures the
 // runner-start worker count.
 const RunnerStartWorkersEnv = "SCENARIO_MANAGER_RUNNER_START_WORKERS"
+
+// WatchNamespaceEnv names the environment variable that fixes the single
+// release/experiment namespace the Scenario Manager watches. v0.1 is a
+// single-namespace installation: the release namespace is both the
+// control-plane namespace and the only experiment namespace, so the value is
+// required (an absent or malformed value is a fatal startup error) and is
+// used to scope the startup authorization checks and the experiment informer
+// cache. The manifest smoke stack already injects the variable via the
+// downward API, so consuming it is compatible with the existing manifests.
+const WatchNamespaceEnv = "SCENARIO_MANAGER_WATCH_NAMESPACE"
+
+// watchNamespaceLabelRe is a DNS label: the only shape a Kubernetes namespace
+// can take.
+var watchNamespaceLabelRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// WatchNamespace reads SCENARIO_MANAGER_WATCH_NAMESPACE from the process
+// environment and validates it.
+func WatchNamespace() (string, error) {
+	return ParseWatchNamespace(os.Getenv(WatchNamespaceEnv))
+}
+
+// ParseWatchNamespace validates a raw watch-namespace value. An empty value
+// (absent variable) is a fatal startup error: v0.1 has no cluster-wide
+// fallback. The value must be a single lowercase DNS label of at most 63
+// characters with no surrounding whitespace; anything else is malformed.
+func ParseWatchNamespace(value string) (string, error) {
+	if value == "" {
+		return "", fmt.Errorf("%s is not set", WatchNamespaceEnv)
+	}
+	if len(value) > 63 || !watchNamespaceLabelRe.MatchString(value) {
+		return "", fmt.Errorf("%s is malformed: %q is not a DNS label", WatchNamespaceEnv, value)
+	}
+	return value, nil
+}
 
 // MinRunnerStartWorkers and MaxRunnerStartWorkers bound the accepted worker
 // count. The contract accepts 1, 4, and 64; 0, negatives, and values above 64

@@ -15,6 +15,10 @@
 package core
 
 import (
+	"context"
+	"log"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -41,6 +45,8 @@ func baseEnv() map[string]string {
 		// (absent resolves to default; set explicitly to "" is invalid)
 		// NATS authentication-free.
 		natsURLEnv: "nats://nats:4222",
+		// Single release/experiment watch namespace (v0.1 required).
+		config.WatchNamespaceEnv: "cbse-system",
 		// Core DB credentials present (form only; not opened by these tests).
 		coreDBDSNEnv:      "postgres://db:5432/cbse",
 		coreDBUserEnv:     "cbse",
@@ -95,6 +101,42 @@ func TestValidatePureConfigRejectsNonCanonicalStreamName(t *testing.T) {
 	env[edsStreamNameEnv] = "wrong_stream_name"
 	if _, err := validatePureConfig(envMap(env)); err == nil {
 		t.Fatal("non-canonical stream name: want error")
+	}
+}
+
+// TestValidatePureConfigAcceptsWatchNamespace pins that a valid watch
+// namespace passes the pure configuration phase and is carried through to
+// component construction.
+func TestValidatePureConfigAcceptsWatchNamespace(t *testing.T) {
+	cfg, err := validatePureConfig(envMap(baseEnv()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.watchNamespace != "cbse-system" {
+		t.Fatalf("watchNamespace = %q; want cbse-system", cfg.watchNamespace)
+	}
+}
+
+// TestValidatePureConfigRejectsMissingWatchNamespace pins the v0.1
+// single-namespace contract: an absent SCENARIO_MANAGER_WATCH_NAMESPACE is a
+// fatal startup error (no cluster-wide fallback).
+func TestValidatePureConfigRejectsMissingWatchNamespace(t *testing.T) {
+	env := baseEnv()
+	delete(env, config.WatchNamespaceEnv)
+	if _, err := validatePureConfig(envMap(env)); err == nil {
+		t.Fatal("missing watch namespace: want error")
+	}
+}
+
+// TestValidatePureConfigRejectsMalformedWatchNamespace pins the fatal startup
+// handling for malformed watch-namespace values.
+func TestValidatePureConfigRejectsMalformedWatchNamespace(t *testing.T) {
+	for _, bad := range []string{"CBSE-SYSTEM", "cbse_system", "-cbse", "cbse "} {
+		env := baseEnv()
+		env[config.WatchNamespaceEnv] = bad
+		if _, err := validatePureConfig(envMap(env)); err == nil {
+			t.Fatalf("malformed watch namespace %q: want error", bad)
+		}
 	}
 }
 
@@ -166,5 +208,114 @@ func TestBuildCoreDBConnStringMergesCredentials(t *testing.T) {
 func TestBuildCoreDBConnStringRejectsMalformed(t *testing.T) {
 	if _, err := buildCoreDBConnString("://bad", "u", "p"); err == nil {
 		t.Fatal("malformed DSN: want error")
+	}
+}
+
+// transitionRecorder records readiness transitions in a shared event slice
+// so a test can order them against log output.
+type transitionRecorder struct {
+	events *[]string
+}
+
+func (r *transitionRecorder) Ready() {
+	*r.events = append(*r.events, "ready")
+}
+
+func (r *transitionRecorder) NotReady() {
+	*r.events = append(*r.events, "notready")
+}
+
+// orderedLogSink is an io.Writer that records each written log line in the
+// shared event slice as "log:<line>", so a test can order log output against
+// readiness transitions.
+type orderedLogSink struct {
+	events *[]string
+}
+
+func (o *orderedLogSink) Write(p []byte) (int, error) {
+	for _, line := range strings.Split(string(p), "\n") {
+		if line == "" {
+			continue
+		}
+		*o.events = append(*o.events, "log:"+line)
+	}
+	return len(p), nil
+}
+
+// TestMarkReadyTransitionsReadinessBeforeReadyLog pins the ready
+// transition ordering: markReady flips the explicit readiness state to ready
+// strictly before emitting the existing "Scenario Manager is ready" log, so
+// the /readyz 200 answer can never trail the ready log. RunScenarioManager
+// calls markReady only after the last component start; this test pins the
+// transition point itself.
+func TestMarkReadyTransitionsReadinessBeforeReadyLog(t *testing.T) {
+	var events []string
+	recorder := &transitionRecorder{events: &events}
+	previous := log.Writer()
+	log.SetOutput(&orderedLogSink{events: &events})
+	defer log.SetOutput(previous)
+
+	markReady(recorder)
+
+	if len(events) != 2 {
+		t.Fatalf("events = %#v, want exactly [ready, log:*Scenario Manager is ready]", events)
+	}
+	if events[0] != "ready" {
+		t.Fatalf("events = %#v, want Ready() strictly before the ready log", events)
+	}
+	if !strings.HasSuffix(events[1], " Scenario Manager is ready") || !strings.HasPrefix(events[1], "log:") {
+		t.Fatalf("events = %#v, want the ready log line after Ready()", events)
+	}
+}
+
+// TestMarkReadyAllowsNilReporter pins that a nil readiness reporter disables
+// the transition without breaking the ready log emission.
+func TestMarkReadyAllowsNilReporter(t *testing.T) {
+	previous := log.Writer()
+	sink := &orderedLogSink{events: &[]string{}}
+	log.SetOutput(sink)
+	defer log.SetOutput(previous)
+
+	markReady(nil)
+
+	if len(*sink.events) != 1 || !strings.HasSuffix((*sink.events)[0], " Scenario Manager is ready") || !strings.HasPrefix((*sink.events)[0], "log:") {
+		t.Fatalf("events = %#v, want exactly the ready log line", *sink.events)
+	}
+}
+
+// TestRunScenarioManagerStartupFailureSkipsReadyTransition pins the
+// ready-after-start ordering from the failure side: a startup configuration
+// failure exits fatal in the first validation class, before any informer,
+// consumer, selector, or scheduler starts, so neither the ready log nor the
+// readiness transition may happen. The fatal path runs in a re-executed
+// child of this test binary because log.Fatalf exits the process.
+func TestRunScenarioManagerStartupFailureSkipsReadyTransition(t *testing.T) {
+	// Child mode: exercise the fatal startup path in-process. The invalid
+	// worker count fails the first startup validation class; log.Fatalf
+	// exits the child.
+	if os.Getenv("CBSE_SM_READY_ORDER_PROBE") != "" {
+		RunScenarioManager(context.Background(), nil)
+		return
+	}
+	// Inherit the environment without any SCENARIO_MANAGER_* setting so the
+	// injected malformed worker count is the only startup input.
+	var env []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "SCENARIO_MANAGER_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestRunScenarioManagerStartupFailureSkipsReadyTransition")
+	cmd.Env = append(env, "CBSE_SM_READY_ORDER_PROBE=1", "SCENARIO_MANAGER_RUNNER_START_WORKERS=0")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("child exited cleanly; want a fatal startup failure")
+	}
+	if !strings.Contains(string(out), "startup configuration error") {
+		t.Fatalf("child output = %q, want the startup configuration failure class", out)
+	}
+	if strings.Contains(string(out), "Scenario Manager is ready") {
+		t.Fatal("ready log emitted although startup validation failed")
 	}
 }

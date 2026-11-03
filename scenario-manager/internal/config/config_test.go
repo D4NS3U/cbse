@@ -17,6 +17,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -125,5 +126,53 @@ func TestRunnerStartWorkersReadsEnvironment(t *testing.T) {
 				t.Fatalf("RunnerStartWorkers() = %d; want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestParseWatchNamespaceAcceptsDNSLabel pins the accepted watch-namespace
+// shapes: lowercase DNS labels of 1 to 63 characters.
+func TestParseWatchNamespaceAcceptsDNSLabel(t *testing.T) {
+	for _, want := range []string{"cbse-system", "a", "ns-2", "x9-abc", "a" + strings.Repeat("b", 62)} {
+		got, err := ParseWatchNamespace(want)
+		if err != nil {
+			t.Fatalf("ParseWatchNamespace(%q) = _, %v; want ok", want, err)
+		}
+		if got != want {
+			t.Fatalf("ParseWatchNamespace(%q) = %q; want unchanged", want, got)
+		}
+	}
+}
+
+// TestParseWatchNamespaceRejectsMalformed pins the fatal startup handling for
+// every malformed watch-namespace shape: absent, empty, non-DNS-label, and
+// over-length values.
+func TestParseWatchNamespaceRejectsMalformed(t *testing.T) {
+	for _, bad := range []string{
+		"",                            // absent / empty
+		"CBSE-SYSTEM",                 // uppercase
+		"cbse_system",                 // underscore
+		"-cbse",                       // leading hyphen
+		"cbse-",                       // trailing hyphen
+		"cbse system",                 // whitespace inside
+		" cbse",                       // leading whitespace
+		"cbse ",                       // trailing whitespace
+		"a" + strings.Repeat("b", 63), // 64 characters
+	} {
+		if _, err := ParseWatchNamespace(bad); err == nil {
+			t.Fatalf("ParseWatchNamespace(%q) = ok; want error", bad)
+		}
+	}
+}
+
+// TestWatchNamespaceReadsProcessEnv pins that WatchNamespace consumes
+// SCENARIO_MANAGER_WATCH_NAMESPACE from the process environment.
+func TestWatchNamespaceReadsProcessEnv(t *testing.T) {
+	t.Setenv(WatchNamespaceEnv, "cbse-system")
+	got, err := WatchNamespace()
+	if err != nil {
+		t.Fatalf("WatchNamespace() = _, %v; want ok", err)
+	}
+	if got != "cbse-system" {
+		t.Fatalf("WatchNamespace() = %q; want cbse-system", got)
 	}
 }

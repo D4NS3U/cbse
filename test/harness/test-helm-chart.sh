@@ -122,7 +122,17 @@ grep -q '^kind: CustomResourceDefinition$' "${rendered}" || fail "rendered outpu
 grep -q '^  name: simulationexperiments.experiment.cbse.terministic.de$' "${rendered}" || fail "rendered CRD name mismatch"
 cbse_alpha4_versions="$(grep -c '^    name: alpha4$' "${rendered}")"
 [[ "${cbse_alpha4_versions}" -eq 1 ]] || fail "rendered CRD must serve exactly one version (alpha4), found ${cbse_alpha4_versions}"
-[[ "$(grep -c '^    name: ' "${rendered}")" -eq 1 ]] || fail "rendered CRD must define a single version entry"
+# Count version entries inside the CRD document only: workload templates
+# render their own 4-space indented name: list items (e.g. RoleBinding
+# subjects), so the count must be scoped to the CustomResourceDefinition
+# document, not the full multi-document render.
+cbse_crd_version_entries="$(awk '
+  /^---$/ { in_crd = 0 }
+  /^kind: CustomResourceDefinition$/ { in_crd = 1 }
+  in_crd && /^    name: / { n++ }
+  END { print n + 0 }
+' "${rendered}")"
+[[ "${cbse_crd_version_entries}" -eq 1 ]] || fail "rendered CRD must define a single version entry"
 grep -q 'served: true' "${rendered}" || fail "rendered CRD must mark alpha4 served"
 grep -q 'storage: true' "${rendered}" || fail "rendered CRD must mark alpha4 storage"
 

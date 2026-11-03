@@ -1,0 +1,25 @@
+# Namespaced Role for the Experiment Operator: exactly the controller
+# operations proven by the smoke stack, scoped to the release namespace.
+# v0.1 watches one namespace, so no ClusterRole is rendered.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "cbse.name.experimentOperator" . }}
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "serviceaccounts", "services", "pods"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps/finalizers", "secrets/finalizers", "serviceaccounts/finalizers", "services/finalizers"]
+    verbs: ["update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+  - apiGroups: ["experiment.cbse.terministic.de"]
+    resources: ["simulationexperiments", "simulationexperiments/finalizers", "simulationexperiments/status"]
+    verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]

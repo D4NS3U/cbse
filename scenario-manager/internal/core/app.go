@@ -19,9 +19,11 @@
 // JetStream, reconciles streams and consumers, constructs the experiment
 // informer, the four NATS adapters, the selection loop, the evaluation-request
 // publication loop, the PPS-evaluation consumer, and the runner-start,
-// observation, and aggregate schedulers, starts them, emits the existing
-// "Scenario Manager is ready" log only after every component has started,
-// blocks on the context, and joins every started component on shutdown.
+// observation, and aggregate schedulers, starts them, flips the explicit
+// readiness reporter to ready at the same point immediately before emitting
+// the existing "Scenario Manager is ready" log, blocks on the context, flips
+// the reporter back to not ready, and joins every started component on
+// shutdown.
 //
 // It owns no domain logic; it only constructs and starts the components owned by
 // the informer, natsadapter, selection, ready, evaluationpub, verdict,
@@ -80,25 +82,39 @@ const (
 // RunScenarioManager uses to construct components.
 type startupConfig struct {
 	workers                int
+	watchNamespace         string
 	natsURL                string
 	maxAttempts            int
 	publishRecoveryTimeout time.Duration
 }
 
+// readinessReporter is the explicit-dependency readiness state that
+// RunScenarioManager transitions at the ready and shutdown boundaries. The
+// production value is the internal/health.Readiness wired by cmd/main.go; a
+// nil reporter disables the transition (tests that do not exercise the
+// readiness endpoint). There is deliberately no package-global mutable
+// readiness state.
+type readinessReporter interface {
+	Ready()
+	NotReady()
+}
+
 // RunScenarioManager is the Scenario Manager composition entry point invoked
 // by cmd/main.go. It performs startup validation in the SM startup
 // failure-class order (runner-start worker count, messaging subject/stream
-// canonicality, Core DB schema, Kubernetes authorization, authentication-free
-// NATS), connects to NATS and JetStream and reconciles streams and consumers,
-// constructs and starts the experiment informer, the four NATS adapters, the
-// selection loop, the evaluation-request publication loop, the PPS-evaluation
-// consumer, and the runner-start, observation, and aggregate schedulers,
-// emits the
-// ready log only after every component has started, blocks on ctx, and joins
-// every started component on shutdown. Any startup configuration failure is
-// fatal and terminates the process before any informer, consumer, selector, or
-// scheduler starts.
-func RunScenarioManager(ctx context.Context) {
+// canonicality, single release/experiment watch namespace, Core DB schema,
+// namespaced Kubernetes authorization, authentication-free NATS), connects to
+// NATS and JetStream and reconciles streams and consumers, constructs and
+// starts the experiment informer (scoped to the watch namespace), the four
+// NATS adapters, the selection loop, the evaluation-request publication loop,
+// the PPS-evaluation consumer, and the runner-start, observation, and
+// aggregate schedulers, and only after every component has started flips the
+// explicit readiness reporter to ready at the same point immediately before
+// emitting the ready log. It blocks on ctx, flips the reporter back to not
+// ready before the shutdown join, and joins every started component on
+// shutdown. Any startup configuration failure is fatal and terminates the
+// process before any informer, consumer, selector, or scheduler starts.
+func RunScenarioManager(ctx context.Context, readiness readinessReporter) {
 	cfg, err := validatePureConfig(os.Getenv)
 	if err != nil {
 		log.Fatalf("Scenario Manager startup configuration error: %v", err)
@@ -120,7 +136,7 @@ func RunScenarioManager(ctx context.Context) {
 
 	// Kubernetes: build the in-cluster REST config, the controller-runtime
 	// client, and the client-go clientset. rbac.Verify rejects a denied
-	// required cluster-wide authorization check before any component starts.
+	// required namespaced authorization check before any component starts.
 	restCfg, err := loadRESTConfig()
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: kubernetes config: %v", err)
@@ -137,7 +153,7 @@ func RunScenarioManager(ctx context.Context) {
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: kubernetes clientset: %v", err)
 	}
-	if _, err := rbac.Verify(ctx, clientset); err != nil {
+	if _, err := rbac.Verify(ctx, clientset, cfg.watchNamespace); err != nil {
 		log.Fatalf("Scenario Manager startup: authorization: %v", err)
 	}
 
@@ -160,7 +176,7 @@ func RunScenarioManager(ctx context.Context) {
 	// Construct the components.
 	msgCleaner := nats.NewNATSDeletionClient(js)
 	dispatch := informer.NewProductionDispatcher(k8sClient, store, msgCleaner)
-	inf, err := informer.NewInformer(informer.Config{RESTConfig: restCfg, Scheme: k8sScheme}, dispatch)
+	inf, err := informer.NewInformer(informer.Config{RESTConfig: restCfg, Scheme: k8sScheme, Namespace: cfg.watchNamespace}, dispatch)
 	if err != nil {
 		log.Fatalf("Scenario Manager startup: informer: %v", err)
 	}
@@ -234,7 +250,7 @@ func RunScenarioManager(ctx context.Context) {
 	// and installs finalizers; the NATS consumers then consume on the
 	// reconciled durables; the selection and evaluation-publication loops and
 	// schedulers then discover DB rows. Only after every component has started
-	// is the ready log emitted.
+	// is the ready transition performed and the ready log emitted.
 	if err := inf.Start(ctx); err != nil {
 		log.Fatalf("Scenario Manager startup: informer start: %v", err)
 	}
@@ -262,9 +278,19 @@ func RunScenarioManager(ctx context.Context) {
 	observationScheduler.Start()
 	aggregateScheduler.Start()
 
-	log.Println("Scenario Manager is ready")
+	// The readiness endpoint flips to 200 at exactly this point — the same
+	// point immediately before the ready log, after every component start —
+	// and no earlier. markReady is the single transition point shared by the
+	// /readyz answer and the ready log.
+	markReady(readiness)
 
 	<-ctx.Done()
+
+	// The readiness endpoint returns to 503 before the shutdown join so the
+	// Pod is not ready while components are joining.
+	if readiness != nil {
+		readiness.NotReady()
+	}
 
 	// Join every started component that owns a join handle. The NATS consumers
 	// stop when the connection closes; the informer and schedulers have explicit
@@ -287,10 +313,24 @@ func RunScenarioManager(ctx context.Context) {
 	log.Printf("Scenario Manager shutdown complete: %v", ctx.Err())
 }
 
+// markReady flips the explicit readiness state to ready and emits the
+// existing "Scenario Manager is ready" log. It is the single point where the
+// /readyz 200 transition and the ready log agree: RunScenarioManager calls
+// it only after the last component start, so both become true at exactly the
+// same point, and the log never leads the readiness answer.
+func markReady(readiness readinessReporter) {
+	if readiness != nil {
+		readiness.Ready()
+	}
+	log.Println("Scenario Manager is ready")
+}
+
 // validatePureConfig performs the startup configuration checks that need no
-// external dependency: the runner-start worker count and the messaging subject
-// template / stream name canonicality. It is factored out so the configuration
-// failure classes can be tested in isolation without a DB, Kubernetes, or NATS.
+// external dependency: the runner-start worker count, the messaging subject
+// template / stream name canonicality, and the single release/experiment
+// watch namespace (v0.1 has no cluster-wide fallback). It is factored out so
+// the configuration failure classes can be tested in isolation without a DB,
+// Kubernetes, or NATS.
 func validatePureConfig(getenv func(string) string) (startupConfig, error) {
 	workers, err := config.ParseRunnerStartWorkers(getenv(config.RunnerStartWorkersEnv))
 	if err != nil {
@@ -302,7 +342,11 @@ func validatePureConfig(getenv func(string) string) (startupConfig, error) {
 	if err := nats.ValidateStreamNames(getenv); err != nil {
 		return startupConfig{}, err
 	}
-	return startupConfig{workers: workers}, nil
+	watchNamespace, err := config.ParseWatchNamespace(getenv(config.WatchNamespaceEnv))
+	if err != nil {
+		return startupConfig{}, err
+	}
+	return startupConfig{workers: workers, watchNamespace: watchNamespace}, nil
 }
 
 // validateNATSConfig validates the NATS URL and legacy credential env vars. The
