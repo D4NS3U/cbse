@@ -18,9 +18,16 @@
 # Deletes the ephemeral namespace cbse-e2e-<RUN_ID> and, if this run still holds
 # it, the cbse-smoke-lock Lease in cbse-test-system. The namespace is only
 # deleted when its cbse.terministic.de/managed-run ownership label equals RUN_ID,
-# so a stale or foreign namespace can never be removed by mistake. Both the
-# namespace and the Lease deletion are idempotent: an already-absent resource is
-# a no-op rather than an error.
+# so a stale or foreign namespace can never be removed by mistake. Before the
+# namespace deletion, every SimulationExperiment in the namespace is deleted
+# with --wait (up to 120s for the Scenario Manager cleanup finalizer to
+# clear): deleting the namespace first would cascade the Scenario Manager
+# Deployment and the CRs together, and a dead SM cannot release its own
+# finalizer, so the CR (and with it the whole namespace) would wedge in
+# Terminating forever. A CR deletion wait timeout is non-fatal: the deletions
+# have been issued, and the namespace deletion proceeds best-effort after.
+# Both the namespace and the Lease deletion are idempotent: an already-absent
+# resource is a no-op rather than an error.
 #
 # Inputs / environment:
 #   KUBECTL    (required) path to the pinned kubectl binary.
@@ -29,14 +36,17 @@
 #              and is checked against the namespace ownership label.
 #
 # Exit codes:
-#   0  Namespace deleted (or absent) and Lease released if held.
+#   0  Namespace deleted (or absent), CRs deleted first (or absent), and
+#      Lease released if held.
 #   2  RUN_ID is not a valid DNS label, or the namespace ownership label does
 #      not match RUN_ID (refused deletion).
 #   Other non-zero from kubectl via set -e.
 #
 # Side effects:
-#   Deletes namespace cbse-e2e-<RUN_ID> (with --wait --timeout=180s) and the
-#   cbse-smoke-lock Lease (--wait=false). Read-only otherwise.
+#   Deletes every SimulationExperiment in cbse-e2e-<RUN_ID> (--wait
+#   --timeout=120s, only when the CRD exists), the namespace (--wait
+#   --timeout=180s), and the cbse-smoke-lock Lease (--wait=false). Read-only
+#   otherwise.
 set -euo pipefail
 
 kubectl_bin="${KUBECTL:?KUBECTL is required}"
@@ -48,12 +58,22 @@ run_id="${RUN_ID:?RUN_ID is required}"
 }
 namespace="cbse-e2e-${run_id}"
 
+crd_name="simulationexperiments.experiment.cbse.terministic.de"
 if "${kubectl_bin}" --kubeconfig "${kubeconfig}" get namespace "${namespace}" >/dev/null 2>&1; then
   managed="$(${kubectl_bin} --kubeconfig "${kubeconfig}" get namespace "${namespace}" -o jsonpath='{.metadata.labels.cbse\.terministic\.de/managed-run}')"
   [[ "${managed}" == "${run_id}" ]] || {
     echo "Refusing to delete namespace ${namespace}: ownership label does not match ${run_id}" >&2
     exit 2
   }
+  # CRs-first: delete every SimulationExperiment and wait for the Scenario
+  # Manager cleanup finalizer to clear while the SM is still alive. If the
+  # CRD is absent there can be no CRs; a wait timeout is non-fatal (the
+  # deletions have been issued) so the namespace deletion still proceeds.
+  if "${kubectl_bin}" --kubeconfig "${kubeconfig}" get crd "${crd_name}" >/dev/null 2>&1; then
+    "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete simulationexperiment --all \
+      -n "${namespace}" --wait=true --timeout=120s ||
+      echo "SimulationExperiment deletion wait timed out; proceeding with namespace deletion" >&2
+  fi
   "${kubectl_bin}" --kubeconfig "${kubeconfig}" delete namespace "${namespace}" --wait=true --timeout=180s
 fi
 

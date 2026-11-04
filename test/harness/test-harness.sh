@@ -22,11 +22,15 @@
 # set); build-images nested layout, locked build args, default vs. custom
 # components, and rejection of unknown/duplicate tokens and locked-image
 # overrides; registry-cleanup annotation verification and unsafe-repo refusal;
-# diagnose on an absent namespace; acquire-lock Lease contention; and clean
-# idempotency. It also grep-checks repo-structure invariants (Makefile
-# defaults, nested tag layout, lock loading, pull-secret name). Run by the
-# verification gate and `make test-fast` to keep the harness internally
-# consistent.
+# diagnose on an absent namespace; acquire-lock Lease contention; clean
+# idempotency and the H4 CRs-first ordering (CR delete before namespace
+# delete, Lease still released); generate-helm-values.sh positive receipt
+# (mode 0600, exactly five components, locked auxiliary images, no private
+# repository on stdout) plus tag/malformed/missing/OUTPUT-location negatives;
+# and helm-lifecycle.sh required-input validation before any cluster access.
+# It also grep-checks repo-structure invariants (Makefile defaults, nested tag
+# layout, lock loading, pull-secret name). Run by the verification gate and
+# `make test-fast` to keep the harness internally consistent.
 #
 # Inputs / environment:
 #   (none required) all binaries are stubbed in a temp dir; PATH is extended
@@ -186,6 +190,18 @@ if env "${common[@]}" PPS_GO_BUILDER_IMAGE=override "${root}/test/harness/prefli
 fi
 if env "${common[@]}" PPS_GO_VERSION=override "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
   echo "preflight accepted a PPS locked source-version environment override" >&2; exit 1
+fi
+if env "${common[@]}" NATS_IMAGE=override "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a NATS locked source-image environment override" >&2; exit 1
+fi
+if env "${common[@]}" NATS_VERSION=override "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a NATS locked source-version environment override" >&2; exit 1
+fi
+if env "${common[@]}" HELM_HOOK_KUBECTL_IMAGE=override "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a hook kubectl locked source-image environment override" >&2; exit 1
+fi
+if env "${common[@]}" HELM_HOOK_KUBECTL_VERSION=override "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a hook kubectl locked source-version environment override" >&2; exit 1
 fi
 
 # build-images.sh: flat shared components, nested Detail DB, locked build args.
@@ -424,6 +440,142 @@ fi
 KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit "${root}/test/harness/clean.sh"
 KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=unit "${root}/test/harness/clean.sh"
 
+# clean.sh CRs-first ordering (H4): with an owned namespace and the CRD
+# present, the SimulationExperiment deletion must be issued before the
+# namespace deletion, and the Lease must still be released afterwards.
+clean_log="${tmp}/clean-calls.log"
+rm -f "${clean_log}"
+cat >"${tmp}/kubectl-clean-order" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${FAKE_CLEAN_LOG:?}"
+case "$*" in
+  *"get namespace cbse-e2e-clean-order -o jsonpath"*) printf '%s' clean-order ;;
+  *"get namespace cbse-e2e-clean-order"*) exit 0 ;;
+  *"get crd simulationexperiments"*) exit 0 ;;
+  *"delete simulationexperiment --all -n cbse-e2e-clean-order --wait=true --timeout=120s"*) exit 0 ;;
+  *"delete namespace cbse-e2e-clean-order --wait=true --timeout=180s"*) exit 0 ;;
+  *"get lease cbse-smoke-lock"*) printf '%s' clean-order ;;
+  *"delete lease cbse-smoke-lock"*) exit 0 ;;
+  *) echo "unexpected clean-order fake kubectl call: $*" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "${tmp}/kubectl-clean-order"
+KUBECTL="${tmp}/kubectl-clean-order" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=clean-order \
+  FAKE_CLEAN_LOG="${clean_log}" "${root}/test/harness/clean.sh"
+cr_line="$(grep -n 'delete simulationexperiment' "${clean_log}" | head -n1 | cut -d: -f1)"
+ns_line="$(grep -n 'delete namespace cbse-e2e-clean-order' "${clean_log}" | head -n1 | cut -d: -f1)"
+[[ -n "${cr_line}" ]] || { echo "clean.sh did not delete the SimulationExperiments" >&2; exit 1; }
+[[ -n "${ns_line}" ]] || { echo "clean.sh did not delete the namespace" >&2; exit 1; }
+(( cr_line < ns_line )) || { echo "clean.sh deleted the namespace before the SimulationExperiments (CRs-first order violated)" >&2; exit 1; }
+grep -Fq 'delete lease cbse-smoke-lock' "${clean_log}" || { echo "clean.sh did not release the smoke Lease" >&2; exit 1; }
+
+# generate-helm-values.sh (H4): positive receipt, mode 0600, exact five
+# components, locked auxiliary images, and stdout hygiene (no private
+# repository values). The fake images.env uses a private-looking host to
+# prove the generator never prints repositories on success.
+gen_env="${tmp}/gen-images.env"
+gen_values="${tmp}/gen-values.yaml"
+gen_op_digest="sha256:$(printf '6%.0s' {1..64})"
+gen_sm_digest="sha256:$(printf '7%.0s' {1..64})"
+printf '%s\n%s\n%s\n' \
+  "OPERATOR_IMAGE=registry.private.example.test/cbse/exop@${gen_op_digest}" \
+  "SM_IMAGE=registry.private.example.test/cbse/sm@${gen_sm_digest}" \
+  "EXTRA_KEY=ignored" >"${gen_env}"
+gen_stdout="$(IMAGES_ENV="${gen_env}" OUTPUT="${gen_values}" "${root}/test/harness/generate-helm-values.sh")"
+[[ -f "${gen_values}" ]] || { echo "generator did not write the values file" >&2; exit 1; }
+gen_mode="$(stat -f '%Lp' "${gen_values}" 2>/dev/null || stat -c '%a' "${gen_values}")"
+[[ "${gen_mode}" == "600" ]] || { echo "generator output is not mode 0600 (${gen_mode})" >&2; exit 1; }
+[[ "${gen_stdout}" == "helm image values written: ${gen_values} (5 components)" ]] || {
+  echo "generator success output must be only the path and component count: ${gen_stdout}" >&2
+  exit 1
+}
+if printf '%s' "${gen_stdout}" | grep -Fq 'registry.private.example.test'; then
+  echo "generator printed a private repository value to stdout" >&2; exit 1
+fi
+for expected in \
+  'operator:' \
+  '  image:' \
+  "    repository: \"registry.private.example.test/cbse/exop\"" \
+  "    digest: \"${gen_op_digest}\"" \
+  '  kubectlImage:' \
+  '    repository: "docker.io/alpine/k8s"' \
+  '    repository: "docker.io/library/nats"' \
+  '    repository: "docker.io/library/postgres"'; do
+  grep -Fqx "${expected}" "${gen_values}" || { echo "generated values missing line: ${expected}" >&2; exit 1; }
+done
+[[ "$(grep -c '^    repository:' "${gen_values}")" -eq 5 ]] || { echo "generated values must map exactly five components" >&2; exit 1; }
+[[ "$(grep -c '^    digest:' "${gen_values}")" -eq 5 ]] || { echo "generated values must carry exactly five digests" >&2; exit 1; }
+
+# generate-helm-values.sh negatives: tags, malformed digests, duplicate @,
+# empty values, missing keys, malformed lines, unreadable input, and OUTPUT
+# inside a tracked repository path outside the ignored artifacts/ directory.
+# Every negative must fail before writing the output file.
+gen_neg() {
+  local description="$1" file="$2" output="$3" rc=0
+  IMAGES_ENV="${file}" OUTPUT="${output}" "${root}/test/harness/generate-helm-values.sh" >/dev/null 2>&1 || rc=$?
+  [[ "${rc}" -ne 0 ]] || { echo "generator accepted ${description}" >&2; exit 1; }
+  [[ ! -f "${output}" ]] || { echo "generator wrote output for ${description}" >&2; exit 1; }
+}
+printf '%s\n' "OPERATOR_IMAGE=registry.private.example.test/cbse/exop:latest@${gen_op_digest}" "SM_IMAGE=x@${gen_sm_digest}" >"${tmp}/gen-tagged.env"
+gen_neg "a tag-bearing reference" "${tmp}/gen-tagged.env" "${tmp}/gen-neg.yaml"
+printf '%s\n' "OPERATOR_IMAGE=registry.private.example.test/cbse/exop@sha256:$(printf '6%.0s' {1..63})" "SM_IMAGE=x@${gen_sm_digest}" >"${tmp}/gen-short.env"
+gen_neg "a short digest" "${tmp}/gen-short.env" "${tmp}/gen-neg.yaml"
+printf '%s\n' "OPERATOR_IMAGE=registry.private.example.test/cbse/exop@SHA256:$(printf '6%.0s' {1..64})" "SM_IMAGE=x@${gen_sm_digest}" >"${tmp}/gen-case.env"
+gen_neg "an uppercase digest prefix" "${tmp}/gen-case.env" "${tmp}/gen-neg.yaml"
+printf '%s\n' "OPERATOR_IMAGE=registry.private.example.test/cbse/exop@sha256:a@${gen_op_digest}" "SM_IMAGE=x@${gen_sm_digest}" >"${tmp}/gen-dup.env"
+gen_neg "a duplicate @ reference" "${tmp}/gen-dup.env" "${tmp}/gen-neg.yaml"
+printf '%s\n' "OPERATOR_IMAGE=${gen_op_digest}" "SM_IMAGE=x@${gen_sm_digest}" >"${tmp}/gen-noat.env"
+gen_neg "a reference without a digest separator" "${tmp}/gen-noat.env" "${tmp}/gen-neg.yaml"
+printf '%s\n' "OPERATOR_IMAGE=registry.private.example.test/cbse/exop@${gen_op_digest}" "SM_IMAGE=" >"${tmp}/gen-empty.env"
+gen_neg "an empty reference value" "${tmp}/gen-empty.env" "${tmp}/gen-neg.yaml"
+printf '%s\n' "OPERATOR_IMAGE=registry.private.example.test/cbse/exop@${gen_op_digest}" >"${tmp}/gen-missing.env"
+gen_neg "a file missing SM_IMAGE" "${tmp}/gen-missing.env" "${tmp}/gen-neg.yaml"
+printf '%s\n' "OPERATOR_IMAGE=registry.private.example.test/cbse/exop@${gen_op_digest}" "SM_IMAGE=x@${gen_sm_digest}" "not-a-pair" >"${tmp}/gen-malformed.env"
+gen_neg "a malformed images.env line" "${tmp}/gen-malformed.env" "${tmp}/gen-neg.yaml"
+gen_neg "an unreadable images.env" "${tmp}/does-not-exist.env" "${tmp}/gen-neg.yaml"
+# OUTPUT inside the tracked repository is refused unless under artifacts/.
+rc=0
+IMAGES_ENV="${gen_env}" OUTPUT="${root}/private-values.yaml" "${root}/test/harness/generate-helm-values.sh" >/dev/null 2>&1 || rc=$?
+[[ "${rc}" -ne 0 ]] || { echo "generator accepted OUTPUT inside a tracked repository path" >&2; exit 1; }
+[[ ! -f "${root}/private-values.yaml" ]] || { echo "generator wrote into the tracked repository" >&2; exit 1; }
+rc=0
+IMAGES_ENV="${gen_env}" OUTPUT="${root}/test/harness/values-out.yaml" "${root}/test/harness/generate-helm-values.sh" >/dev/null 2>&1 || rc=$?
+[[ "${rc}" -ne 0 ]] || { echo "generator accepted OUTPUT inside a tracked test path" >&2; exit 1; }
+# The ignored artifacts/ directory is an accepted in-repo destination.
+mkdir -p "${root}/artifacts/gen-selftest"
+IMAGES_ENV="${gen_env}" OUTPUT="${root}/artifacts/gen-selftest/values.yaml" \
+  "${root}/test/harness/generate-helm-values.sh" >/dev/null
+rm -rf "${root}/artifacts/gen-selftest"
+
+# helm-lifecycle.sh (H4): required inputs are validated before any cluster
+# access or artifact side effect.
+lifecycle_env_test() {
+  local description="$1" expected_message="$2"
+  shift 2
+  local out rc=0
+  # env -i: a controlled environment so ambient KUBECTL/HELM/KUBECONFIG/
+  # RUN_ID/HELM_IMAGES_EXPORTS can never satisfy or leak into the harness.
+  out="$(env -i PATH="${PATH}" HOME="${HOME}" "$@" "${root}/test/harness/helm-lifecycle.sh" 2>&1)" || rc=$?
+  [[ "${rc}" -ne 0 ]] || { echo "lifecycle harness accepted ${description}" >&2; exit 1; }
+  printf '%s' "${out}" | grep -Fq "${expected_message}" || {
+    echo "lifecycle harness missing expected message for ${description}: ${out}" >&2
+    exit 1
+  }
+}
+lifecycle_env_test "a missing KUBECTL" "KUBECTL is required" \
+  HELM="${tmp}/helm" KUBECONFIG="${tmp}/kubeconfig" HELM_IMAGES_ENV="${gen_env}"
+lifecycle_env_test "a missing HELM" "HELM is required" \
+  KUBECTL="${tmp}/kubectl" KUBECONFIG="${tmp}/kubeconfig" HELM_IMAGES_ENV="${gen_env}"
+lifecycle_env_test "a missing KUBECONFIG" "KUBECONFIG must point to the dedicated test-cluster config" \
+  KUBECTL="${tmp}/kubectl" HELM="${tmp}/helm" HELM_IMAGES_ENV="${gen_env}"
+lifecycle_env_test "a missing HELM_IMAGES_ENV" "HELM_IMAGES_ENV must point to a readable digest-pinned images.env" \
+  KUBECTL="${tmp}/kubectl" HELM="${tmp}/helm" KUBECONFIG="${tmp}/kubeconfig"
+lifecycle_env_test "an invalid RUN_ID" "RUN_ID must be 1-30 lowercase DNS-label characters" \
+  KUBECTL="${tmp}/kubectl" HELM="${tmp}/helm" KUBECONFIG="${tmp}/kubeconfig" HELM_IMAGES_ENV="${gen_env}" RUN_ID=Bad_ID
+lifecycle_env_test "an unreadable HELM_IMAGES_ENV" "HELM_IMAGES_ENV is not readable" \
+  KUBECTL="${tmp}/kubectl" HELM="${tmp}/helm" KUBECONFIG="${tmp}/kubeconfig" HELM_IMAGES_ENV="${tmp}/no-such-images.env"
+
 # install-helm.sh: pinned Helm installer. A stub curl serves a real tarball
 # bundle; the checksum-failure and download-failure paths are caught, and the
 # success path installs only the checksum-verified binary. No real
@@ -499,6 +651,14 @@ grep -Fqx 'HELM ?= $(ROOT)/bin/helm-$(HELM_VERSION)' "${root}/Makefile"
 grep -Fq 'HELM_VERSION=$(HELM_VERSION) OUTPUT=$@ $(TEST_DIR)/harness/install-helm.sh' "${root}/Makefile"
 grep -Fq 'HELM="$(HELM)" $(TEST_DIR)/harness/test-helm-chart.sh' "${root}/Makefile"
 grep -Fq '$(MAKE) test-helm-chart' "${root}/Makefile"
+grep -Fqx 'test-helm-lifecycle: test-tools helm-tools' "${root}/Makefile"
+grep -Fq 'KUBECTL="$(KUBECTL)" HELM="$(HELM)" $(TEST_DIR)/harness/helm-lifecycle.sh' "${root}/Makefile"
+grep -Fqx 'helm-image-values:' "${root}/Makefile"
+grep -Fq 'IMAGES_ENV="$(IMAGES_ENV)" OUTPUT="$(OUTPUT)" $(TEST_DIR)/harness/generate-helm-values.sh' "${root}/Makefile"
+grep -Fq 'test-helm-lifecycle' "${root}/Makefile"
+grep -Fq 'test-helm-lifecycle KUBECONFIG' "${root}/Makefile"
+grep -Fq 'helm-image-values IMAGES_ENV' "${root}/Makefile"
+grep -Fq 'test-helm-lifecycle helm-image-values' "${root}/Makefile"
 grep -Fq 'pinned_helm="${HELM:-}"' "${root}/test/harness/test-helm-chart.sh"
 grep -Fq 'cbse_helm_run_discovered' "${root}/test/harness/test-helm-chart.sh"
 grep -Fq 'assert-helpers.sh' "${root}/test/harness/test-helm-chart.sh"
