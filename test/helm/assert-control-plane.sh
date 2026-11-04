@@ -37,7 +37,12 @@
 #   * stable selectors (app label + H1 selector labels) and full label sets;
 #   * restricted security contexts: runAsNonRoot, seccomp RuntimeDefault,
 #     drop ALL capabilities, no privilege escalation, read-only root
-#     filesystem, and the SM numeric UID/GID 1000 with no root UID anywhere.
+#     filesystem, and the SM numeric UID/GID 1000 with no root UID anywhere;
+#   * F-R1 consolidation: the full-render document and Secret-reference
+#     counts are scoped to the H2-owned documents (fixed names
+#     experiment-operator, scenario-manager, scenario-manager-config) so the
+#     H3 data plane can render alongside without changing the exact H2
+#     counts.
 #
 # No cluster mutation and no network access; everything renders locally.
 set -euo pipefail
@@ -302,8 +307,27 @@ full_render="${tmp}/full.yaml"
 "${CBSE_HELM_BIN}" template cbse "${CBSE_HELM_CHART}" \
   --namespace cbse-system -f "${CBSE_HELM_VALUES}" >"${full_render}"
 
-cbse_helm_assert_eq "rendered control-plane document count" \
-  "$(grep -c '^kind: ' "${full_render}")" 9
+# F-R1 scoped consolidation: the H3 data plane now renders alongside the
+# H2 control plane in the same chart. h2_docs selects exactly the H2-owned
+# documents (the fixed names experiment-operator, scenario-manager, and
+# scenario-manager-config) from the full render; the H2-owned counts below
+# stay exact and strict, so an H3 document can never mask a changed H2
+# count. The focused per-template inspections above remain the H2 proof of
+# the operator/SM resources.
+h2_docs() {
+  awk '
+    function flush() { if (keep) printf "%s", buf; buf = ""; keep = 0 }
+    /^---$/ { flush(); next }
+    {
+      buf = buf $0 "\n"
+      if ($0 ~ /^  name: (experiment-operator|scenario-manager|scenario-manager-config)$/) keep = 1
+    }
+    END { flush() }
+  ' "$1"
+}
+
+cbse_helm_assert_eq "rendered H2 control-plane document count" \
+  "$(h2_docs "${full_render}" | grep -c '^kind: ' || true)" 9
 cbse_helm_assert_line_count "no ClusterRole in the rendered control plane" \
   "$(grep -c '^kind: ClusterRole' "${full_render}" || true)" 0
 cbse_helm_assert_line_count "no ClusterRoleBinding in the rendered control plane" \
@@ -323,15 +347,17 @@ if grep -E '^[[:space:]]*image:[[:space:]]' "${full_render}" |
   grep -Ev '^[[:space:]]*image: [^ ]+@sha256:[a-f0-9]{64}$' >/dev/null; then
   cbse_helm_fail "rendered control plane contains a tag-based image reference"
 fi
-# The registry pull Secret reference appears exactly once per ServiceAccount
-# (twice in the control plane) and exactly one RBAC resourceNames constraint
-# binds the SM to the named Secret. The Helm-managed Core DB credentials
-# Secret is referenced exactly once, by the scenario-manager envFrom.
-cbse_helm_assert_line_count "cbse-registry-auth pull Secret references in the control plane" \
-  "$(grep -cF '  - name: cbse-registry-auth' "${full_render}")" 2
+# The registry pull Secret reference appears exactly once per H2
+# ServiceAccount (twice in the H2-owned documents) and exactly one RBAC
+# resourceNames constraint binds the SM to the named Secret. The
+# Helm-managed Core DB credentials Secret is referenced exactly once by
+# the scenario-manager envFrom; the counts are scoped to the H2-owned
+# documents (F-R1) so H3 data-plane references cannot change them.
+cbse_helm_assert_line_count "cbse-registry-auth pull Secret references in the H2 control plane" \
+  "$(h2_docs "${full_render}" | grep -cF '  - name: cbse-registry-auth' || true)" 2
 cbse_helm_assert_line_count "cbse-registry-auth named-Secret RBAC constraint" \
   "$(grep -cF 'resourceNames: ["cbse-registry-auth"]' "${full_render}")" 1
-cbse_helm_assert_line_count "core-db-credentials Secret references in the control plane" \
-  "$(grep -cF '                name: core-db-credentials' "${full_render}")" 1
+cbse_helm_assert_line_count "core-db-credentials Secret references in the H2 control plane" \
+  "$(h2_docs "${full_render}" | grep -cF '                name: core-db-credentials' || true)" 1
 
 echo "assert-control-plane: all H2 control-plane contract assertions passed."
