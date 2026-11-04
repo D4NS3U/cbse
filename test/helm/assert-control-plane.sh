@@ -349,14 +349,16 @@ if grep -E '^[[:space:]]*image:[[:space:]]' "${full_render}" |
 fi
 # The registry pull Secret reference appears exactly once per H2
 # ServiceAccount (twice in the H2-owned documents) and exactly one RBAC
-# resourceNames constraint binds the SM to the named Secret. The
+# resourceNames constraint binds the SM to the named Secret within the H2
+# control plane (scoped like F-R1: the H4 hook Role carries its own
+# named-Secret get rule, asserted by assert-lifecycle.sh). The
 # Helm-managed Core DB credentials Secret is referenced exactly once by
 # the scenario-manager envFrom; the counts are scoped to the H2-owned
-# documents (F-R1) so H3 data-plane references cannot change them.
+# documents (F-R1) so H3/H4 additions cannot change them.
 cbse_helm_assert_line_count "cbse-registry-auth pull Secret references in the H2 control plane" \
   "$(h2_docs "${full_render}" | grep -cF '  - name: cbse-registry-auth' || true)" 2
-cbse_helm_assert_line_count "cbse-registry-auth named-Secret RBAC constraint" \
-  "$(grep -cF 'resourceNames: ["cbse-registry-auth"]' "${full_render}")" 1
+cbse_helm_assert_line_count "cbse-registry-auth named-Secret RBAC constraint in the H2 control plane" \
+  "$(h2_docs "${full_render}" | grep -cF 'resourceNames: ["cbse-registry-auth"]' || true)" 1
 cbse_helm_assert_line_count "core-db-credentials Secret references in the H2 control plane" \
   "$(h2_docs "${full_render}" | grep -cF '                name: core-db-credentials' || true)" 1
 

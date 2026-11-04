@@ -157,9 +157,10 @@ done
   exit 2
 }
 
-# Source-image lock: load and validate the five locked source images and their
-# provenance versions before any registry or cluster mutation. Rejects
-# duplicates, unknown keys, environment overrides, and malformed digests.
+# Source-image lock: load and validate the seven locked source images and
+# their provenance versions (including the NATS and Helm-hook kubectl pairs)
+# before any registry or cluster mutation. Rejects duplicates, unknown keys,
+# environment overrides, and malformed digests.
 # shellcheck disable=SC1091
 source "${root}/test/harness/image-lock.sh"
 load_image_lock "${lock_file}"
