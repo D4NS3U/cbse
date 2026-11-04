@@ -1,0 +1,34 @@
+# Ingress-only NetworkPolicy for the internal NATS server, rendered when
+# networkPolicies.enabled (default). TCP 4222 is allowed from any Pod in
+# the release namespace (the Scenario Manager, EDS, Translator, and PPS
+# all use NATS); TCP 8222 (monitor) is allowed only from CBSE-owned Pods.
+# No egress policy, no namespaceSelector, no cross-namespace peer, and no
+# cluster CIDR in v0.1; kubelet probe behavior is not modeled as an
+# ingress peer.
+{{- if .Values.networkPolicies.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sm-eds-nats-ingress
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ include "cbse.name.natsService" . }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 4222
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: cbse
+      ports:
+        - protocol: TCP
+          port: 8222
+{{- end }}

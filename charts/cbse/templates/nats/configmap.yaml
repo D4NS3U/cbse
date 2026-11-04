@@ -1,0 +1,23 @@
+# NATS/JetStream configuration (non-secret). v0.1 NATS is
+# authentication-free per the alpha4 runtime contract (D9 ruling): the
+# Scenario Manager, EDS, Translator, and PPS all reject credential-bearing
+# configuration, so this config carries no user, password, token, TLS, or
+# account blocks and no NATS credentials Secret exists in the chart. Ports
+# and the JetStream store layout match the smoke-proven stack baseline; the
+# store directory is the mounted data volume, and the store limits come
+# from the H1 values surface.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+data:
+  nats-server.conf: |
+    port: 4222
+    http_port: 8222
+    jetstream {
+      store_dir: "/data/jetstream"
+      max_mem_store: {{ .Values.nats.jetstream.maxMemoryStore }}
+      max_file_store: {{ .Values.nats.jetstream.maxFileStore }}
+    }
