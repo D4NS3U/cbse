@@ -9,8 +9,8 @@ This is the durable routing ledger for [FEATURE.md](FEATURE.md). Slice states us
 | H1 — chart skeleton and contract tests | **complete** | Landed on feature branch `D4NS3U/helm-control-plane-installation` via merge commit `bcc6d87` (reviewed implementation HEAD `2ac80718fa87208c562b7d8d49dd2987806c5af0`; commits `82a64ef`, `2ac8071`) | none |
 | H2 — Operator and Scenario Manager workloads | **complete** | Landed on feature branch via merge commit `6969513` (reviewed implementation HEAD `c0d06668a1bf984a23906e75123c24f6ae6e1036`; commits `eeb592a`, `c0d0666`) | none |
 | H3 — internal NATS and Core DB | **complete** | Landed on feature branch via merge commit `e465775` (reviewed implementation HEAD `60b9a3efdf000df6ea8f4b0e25cdf39fa593573a`); F-R1 closed | none |
-| H4 — lifecycle safety | incomplete | H2+H3 and W2 merged-feature gates satisfied | manager/user decision to start H4 |
-| H5 — Helm smoke integration | incomplete | waits for H4 | — |
+| H4 — lifecycle safety | **complete** | Landed on feature branch via merge commit `b453fff` (reviewed corrected HEAD `0d4800c2edc72554b5869e5d771e07b1778bb150`); fresh lifecycle and 15/15 smoke independently rerun | none |
+| H5 — Helm smoke integration | incomplete | H4 settled; H5 unblocked | manager/user decision to start H5 |
 | H6 — documentation | incomplete | waits for H5 | — |
 
 ## H1 settlement (2026-11-02)
@@ -104,10 +104,46 @@ The W2 run proves manifest-path compatibility of the H2 application/image change
 3. `js-enabled-only=true` verifies runtime JetStream readiness when the chart enables JetStream; it is not a generic assertion that config enabled JetStream.
 4. F-R1 deliberately scopes H2 Secret-reference counts; equivalent strict H3-side assertions preserve combined coverage.
 
+## H4 settlement (2026-11-04)
+
+- **Run:** `run_027bd9caedc7`
+- **Implementation:** task `task_10c941a7c8ae`, dispatch `ctx_c610b8a40a7c`, runtime attestation `ai.forge/qwen3.8-27b-nvfp4`; whitespace-only correction task `task_1bb82b4e9a5c`, dispatch `ctx_9dfd83e19d89`, corrected HEAD `0d4800c2edc72554b5869e5d771e07b1778bb150`.
+- **Independent review:** task `task_d94fe39521f9`, dispatch `ctx_e30bf75255fd`, runtime attestation `ai.forge/glm`, verdict **approve** on exact corrected HEAD.
+- **Landing:** feature-branch merge commit `b453fff`; `main` was not touched.
+- **Reports (untracked, feature checkout):** `artifacts/orchestration/helm-H4-implementation-report.md`, `artifacts/orchestration/helm-H4-review.md`.
+
+### Verified static and fast gates
+
+- Shell syntax, harness self-tests, generator positive/negative matrix, cleaner ordering, image-lock/preflight validations: rc=0.
+- `make test-helm-chart`: rc=0 with H1–H4 assertion suites and CRD lockstep.
+- `make test-fast`: rc=0 from implementation and independent review.
+- Generator output is atomic mode 0600, digest-only, five-component, rejects tracked destinations/malformed refs, and does not print repository values.
+- Hooks have deterministic ordering, read-only least-privilege RBAC, payload-safe registry validation, exact guard recovery guidance, restricted numeric-1000 security, no pull Secret bootstrap dependency, and no destructive command.
+- `clean.sh` deletes experiments with wait before namespace deletion while preserving ownership refusal and Lease release.
+
+### Hook-image amendment
+
+The ruled distroless source cannot execute the required validation and recovery logic. Manager ruling `msg_60f9e1779a93` replaces it with a single public, digest-pinned kubectl-plus-POSIX-shell image at Kubernetes v1.32.5; no third image was added. Independent review verified public pull, linux/amd64, exact kubectl version, `/bin/sh`, immutable digest, and UID 1000/read-only/drop-ALL/no-new-privileges execution. The hook ServiceAccount still has no `imagePullSecrets`.
+
+### Fresh independent live gates
+
+- **Lifecycle:** reviewer run `20261104093529-9ce91c`, rc=0. Expected missing-Secret install failure, successful install, marker survival across Core DB/NATS Pod restarts, stable credential hashes/PVC identities across upgrade, expected guarded uninstall failure with shared workloads Ready, finalizer-safe CR deletion, successful final uninstall, retained CRD/PVCs/Core DB credential Secret, and installation-owner registry Secret non-ownership all proven.
+- **Manifest smoke:** reviewer run `20261104093746-238904`, **15/15 passed**, rc=0, 531 seconds.
+- Implementation live runs `20261104090633-0258a2` (lifecycle) and `20261104091352-c5d95d` (15/15 smoke) also passed.
+- All four evidence directories are preserved under `artifacts/test/` and remain untracked.
+- Teardown verified after reviewer gates: namespaces absent, smoke Lease absent, zero `SimulationExperiment` resources, shared CRD intact.
+
+### Reviewer observations (non-blocking)
+
+1. The implementation report describes the registry Secret copy mechanism imprecisely; code correctly uses the established payload-safe `kubectl get ... | jq metadata scrub | kubectl apply` pipe and does not persist/log the payload.
+2. Guard count word-splitting is safe because Kubernetes object names contain no whitespace; names are never printed.
+3. The pre-existing preflight artifact includes the cluster API endpoint; H4 did not introduce or change that behavior. H5 documentation/artifact review should avoid reproducing operational endpoints.
+
 ## Next wave
 
-H4 — lifecycle safety — is unblocked:
+H5 — Helm smoke integration — is unblocked:
 
-- implement the pre-delete experiment guard, hook bootstrap RBAC/ServiceAccount, retained credential/PVC behavior, and CRs-first cleanup correction;
-- receive independent review and land only on this feature branch;
-- keep H5 responsible for both manifest and Helm 15/15 smoke modes, including the two live chart-runtime observations above.
+- add the `manifest|helm` installer mode to the unchanged 15-spec suite and generate private release values through the H4 contract;
+- prove both manifest and Helm modes at **15/15**, including live NATS read-only-root and Core DB `PGDATA` behavior;
+- retain H4 lifecycle contracts rather than rewriting them;
+- receive independent review and land only on this feature branch.
