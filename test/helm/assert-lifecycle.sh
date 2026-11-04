@@ -174,7 +174,7 @@ fi
 cbse_helm_assert_line_count "registry value variable used only by capture and empty test" \
   "$(printf '%s' "${validate_args}" | grep -c 'value' || true)" 2
 cbse_helm_assert_contains "value captured from the scoped jsonpath only" \
-  "${validate_args}" 'value="$(kubectl get secret "' 
+  "${validate_args}" 'value="$(kubectl get secret "'
 cbse_helm_assert_contains "validation missing-Secret error line" "${validate_args}" \
   "the installation-owner Secret cbse-registry-auth is missing from namespace"
 cbse_helm_assert_contains "validation wrong-type error line" "${validate_args}" \
