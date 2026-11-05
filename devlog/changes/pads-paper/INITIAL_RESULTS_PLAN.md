@@ -64,6 +64,8 @@ With `c=2`, the eight offered-load points are:
 | 8 | 5 | 0.80 |
 | 10 | 5 | 1.00 |
 
+Here `ρ=1` is the nominal service-capacity boundary, not a stability boundary. Exponential abandonment stabilizes the steady-state Erlang-A queue even above nominal service capacity; the experiment crosses `ρ=1` to observe how excess demand appears in waiting and abandonment. Whitt's Erlang-A sensitivity analysis ([DOI 10.1287/opre.1050.0257](https://doi.org/10.1287/opre.1050.0257)) further motivates varying `λ` and `μ` while holding `c` and `θ` fixed, but the paper must not treat its large-system results as quantitative predictions for CBSE's finite-horizon two-server simulation.
+
 Scenario settings:
 
 - initial `number_of_reps`: 20;

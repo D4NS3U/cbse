@@ -41,7 +41,23 @@ Accessible model overview:
 
 > A. Mandelbaum and S. Zeltyn, “Service Engineering in Action: The Palm/Erlang-A Queue, with Applications to Call Centers,” in *Advances in Services Innovations*, pp. 17–45. DOI: [10.1007/978-3-540-29860-1_2](https://doi.org/10.1007/978-3-540-29860-1_2).
 
+Additional experiment-interpretation source:
+
+> W. Whitt, “Sensitivity of Performance in the Erlang-A Queueing Model to Changes in the Model Parameters,” *Operations Research*, vol. 54, no. 2, pp. 247–260, 2006. DOI: [10.1287/opre.1050.0257](https://doi.org/10.1287/opre.1050.0257).
+
+#### Literature and model semantics
+
+In `M/M/c+M`, the first `M` denotes Poisson arrivals (equivalently, exponential interarrival times), the second denotes exponential service requirements, and `c` is the number of parallel servers. The `+M` adds an independent exponential patience clock for each waiting customer: a customer whose clock expires before service begins abandons the queue. This Markovian impatient-customer model is commonly called Erlang-A or the Palm queue.
+
+Abandonment materially changes overload behavior. Without abandonment, an unlimited-waiting-room M/M/c queue has no steady state when `λ >= cμ`; offered work then exceeds nominal service capacity and the queue can grow without bound. In Erlang-A, if `q` customers are waiting, their aggregate abandonment rate is `qθ`. That state-dependent departure pressure grows with the queue and makes the steady-state model stable for any finite `λ` when `θ > 0`. Thus `ρ = λ/(cμ) = 1` remains a useful *service-capacity* reference, but is not an Erlang-A stability boundary: beyond it, excess demand is increasingly expressed through waiting and abandonment rather than an unbounded steady-state queue.
+
+The sources play complementary roles. Garnett, Mandelbaum, and Reiman analyze the unlimited-waiting-room M/M/N+M call-center model with exponential patience. Mandelbaum and Zeltyn provide an accessible Palm/Erlang-A service-engineering treatment. Whitt studies the sensitivity of Erlang-A performance measures to `λ`, `μ`, `c`, and `θ`, finding much stronger sensitivity to arrival and service rates than to the abandonment rate in the regimes studied. That result motivates CBSE's initial response-surface experiment: vary `λ` and `μ`, hold `c=2` and `θ=1` fixed, and interpret the resulting wait and abandonment measures around the nominal `ρ=1` boundary. It is qualitative support for the experiment design, not a claim that the finite-horizon two-server simulation reproduces Whitt's large-system numerical results.
+
+The bibliographic metadata above was checked against the Crossref DOI records and publisher landing pages: [Garnett et al. (2002)](https://pubsonline.informs.org/doi/10.1287/msom.4.3.208.7753), [Mandelbaum and Zeltyn](https://link.springer.com/chapter/10.1007/978-3-540-29860-1_2), and [Whitt (2006)](https://pubsonline.informs.org/doi/10.1287/opre.1050.0257).
+
 The paper should cite both the queueing-model literature and SimPy as the implementation framework. It should describe the CBSE model as an independently parameterized Erlang-A implementation inspired by the published SimPy reneging pattern, not as an unmodified upstream benchmark.
+
+The distinction from the executable anchor is exact: upstream Bank Renege has one `Resource` slot and draws patience from a uniform distribution, whereas `erlang_a_v1` uses two servers and exponential patience with rate `θ=1`. Bank Renege demonstrates the SimPy request-versus-timeout event pattern; it is not itself the CBSE Erlang-A model.
 
 ## Candidate comparison
 
