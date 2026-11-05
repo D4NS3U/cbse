@@ -123,6 +123,6 @@ diff -r "$TMP/component-templates/translator/runner-base" \
 git ls-tree -r "$BASELINE" -- component-templates/ | awk '$1 != "100644"'
 find pads-paper -type f -perm -111
 
-# 6) Result Database stays README-only.
-[ "$(cd pads-paper/result-database && find . -type f)" = "README.md" ]
+# 6) Result Database stays README-only: deterministic sorted file list.
+[ "$(cd pads-paper/result-database && find . -type f | LC_ALL=C sort)" = "./README.md" ]
 ```
