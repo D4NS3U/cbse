@@ -1,0 +1,22 @@
+# Hash-locked Python dependencies for the CBSE alpha4 runner base image.
+#
+# These are the only packages installed into the shared runner base. They are
+# pinned by version AND by content hash and installed through
+# `pip --require-hashes`, so any tampered or replaced wheel fails the build.
+# The hashes target the linux/amd64 Python 3.14 (cp314) platform: simpy and
+# psycopg are pure-Python wheels, while psycopg-binary is the precompiled
+# cp314 manylinux x86_64 wheel that supplies the libpq wrapper psycopg
+# imports at runtime. Updating any version or hash is a later explicit
+# specification change that updates the paired version and hash together.
+#
+# Psycopg 3.3.4 has no required runtime dependencies on CPython 3.14 / linux
+# (typing-extensions is only required for python_version < 3.13 and tzdata
+# only for win32), so these three entries form the complete dependency
+# closure for the runner base.
+
+simpy==4.1.2 \
+    --hash=sha256:43071f84b6512c9b4fcb33ef057f240ccb1d1f3b263f9b4f9229d072e310b372
+psycopg==3.3.4 \
+    --hash=sha256:b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a
+psycopg-binary==3.3.4 \
+    --hash=sha256:8c0056529e68dbe9184cd4019a1f3d8f3a4ead2f6fc7a5afcf27d3314edd1277

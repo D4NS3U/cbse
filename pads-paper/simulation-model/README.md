@@ -8,6 +8,9 @@ construction that turns its outputs into the JSONB row the runner persists.
 
 `component-templates/translator/internal/generator/runnermod/`
 
+P3A imported the six selected canonical files into [`src/`](src/), byte-identical
+to the [template baseline provenance](../TEMPLATE_BASELINE.md).
+
 ## Template-reuse ruling (mandatory)
 
 > Reuse the already existing CBSE templates and extend them only with the parts
@@ -81,5 +84,9 @@ model-version documentation; changing one requires a new model version.
 
 ## Status
 
-**foundation only — implementation begins in P3 or later.** This directory is
-an ownership placeholder; it currently contains no model code and no tests.
+**P3A baseline import complete — behavior unchanged.** [`src/`](src/) contains
+the six selected baseline model files — the current M/M/1 model, seed,
+result, and test contracts — byte-identical to the [recorded baseline](../TEMPLATE_BASELINE.md).
+No code in this directory is built, selected, or executed by any harness
+yet, and the Erlang-A event logic is not implemented; P3B replaces the
+single-server queue in `src/model.py` and extends `src/result.py` in place.

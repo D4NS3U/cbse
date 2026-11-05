@@ -52,6 +52,9 @@ documentation or packaging actually required.
 
 ## Status
 
-**foundation only — implementation begins in P3 or later.** This directory is
-an ownership placeholder; it currently contains no schema, migration, or
-image inputs.
+**P3A performed no code import by design.** P3A imported no source into this
+directory because the settled baseline is the official PostgreSQL image with
+no repository-owned initialization schema; the directory remains an ownership
+placeholder with no schema, migration, or image inputs. See the Result
+Database exception in the [template baseline
+provenance](../TEMPLATE_BASELINE.md).

@@ -7,7 +7,9 @@ scenario-specific runner Dockerfile.
 ## Baseline
 
 `component-templates/translator/runner-base/` and the generated-runner
-Dockerfile contract produced by the Translator generator.
+Dockerfile contract produced by the Translator generator. P3A imported the
+baseline `runner-base/` tree byte-identically into [`base/`](base/); see the
+[template baseline provenance](../../TEMPLATE_BASELINE.md).
 
 ## Template-reuse ruling (mandatory)
 
@@ -60,6 +62,9 @@ image, the hash lock, and the generated Dockerfile shape remain unchanged.
 
 ## Status
 
-**foundation only — implementation begins in P3 or later.** This directory is
-an ownership placeholder; it currently contains no Dockerfile and no image
-inputs.
+**P3A baseline import complete — behavior unchanged.** [`base/`](base/) contains
+the byte-identical baseline `runner-base/` tree (Dockerfile and
+`requirements.lock`) recorded in the [template baseline
+provenance](../../TEMPLATE_BASELINE.md). The imported Dockerfile is a dormant
+source snapshot: no paper-local image is built, selected, or deployed in P3A,
+and the standalone paper application Dockerfile belongs to P3B.

@@ -1,0 +1,285 @@
+<!doctype html>
+<!-- Copyright 2025-2026 Daniel Seufferth
+     Licensed under the Apache License, Version 2.0 (the "License");
+     you may not use this file except in compliance with the License.
+     You may obtain a copy of the License at
+         http://www.apache.org/licenses/LICENSE-2.0
+     Unless required by applicable law or agreed to in writing, software
+     distributed under the License is distributed on an "AS IS" BASIS,
+     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+     See the License for the specific language governing permissions and
+     limitations under the License. -->
+<!--
+  The reference ExperimentalDesignService UI: a thin Facade over the JSON
+  API (every button maps to exactly one endpoint; the e2e drives the same
+  API). The four-step flow: Design, Save Experiment, Start Experiment,
+  Finish Experiment (the finalization batch, irrevocable — after a
+  successful Finish the Start and Finish controls are disabled).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CBSE Experimental Design Service</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 900px; color: #222; }
+  h1 { font-size: 1.4rem; }
+  section { border: 1px solid #ccc; border-radius: 6px; padding: 1rem; margin: 1rem 0; }
+  h2 { font-size: 1.1rem; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .5rem 0; font-size: .9rem; }
+  th, td { border-bottom: 1px solid #eee; padding: .25rem .5rem; text-align: left; }
+  button { padding: .35rem .9rem; margin: .25rem .25rem .25rem 0; border-radius: 4px; border: 1px solid #888; background: #f5f5f5; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  input, select { margin-right: .5rem; padding: .25rem; }
+  #status { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: .85rem; background: #f8f8f8; border: 1px solid #ddd; border-radius: 4px; padding: .5rem; min-height: 2rem; }
+  .err { color: #b00020; }
+  .ok { color: #006000; }
+  .badge { display: inline-block; padding: .1rem .5rem; border-radius: 9px; background: #e8e8e8; font-size: .8rem; margin-right: .3rem; }
+  .badge.on { background: #d8f0d8; }
+</style>
+</head>
+<body>
+<h1>CBSE Experimental Design Service</h1>
+<p>Design the experiment, save it into the Detail DB, start it (the scenario batch to the Scenario Manager), and finish it (the finalization batch — irrevocable).</p>
+
+<div id="status"></div>
+
+<section id="flow">
+  <h2>Flow state</h2>
+  <span class="badge" id="badge-saved">saved: no</span>
+  <span class="badge" id="badge-started">started: no</span>
+  <span class="badge" id="badge-finalized">finalized: no</span>
+  <div id="handshake"></div>
+  <div id="publish"></div>
+</section>
+
+<section>
+  <h2>1 &middot; Design — parameter entries</h2>
+  <p>Add a value for one of the four varyable parameters (EDS-assigned id &ge; 5).</p>
+  <form id="entry-form">
+    <select name="parameter">
+      <option value="arrival_rate">arrival_rate</option>
+      <option value="service_rate">service_rate</option>
+      <option value="run_duration">run_duration</option>
+      <option value="seed_policy">seed_policy</option>
+    </select>
+    <input name="value" type="number" min="0" step="1" required>
+    <button type="submit">Add entry</button>
+  </form>
+  <table id="entries-table">
+    <thead><tr><th>id</th><th>parameter</th><th>value</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>1 &middot; Design — recipes (one locator row per scenario's parameter set)</h2>
+  <p>Compose one recipe from entries assigned in this process.</p>
+  <form id="recipe-form">
+    <input name="arrival_rate_id" type="number" min="5" step="1" title="arrival_rate entry id">
+    <input name="service_rate_id" type="number" min="5" step="1" title="service_rate entry id">
+    <input name="run_duration_id" type="number" min="5" step="1" title="run_duration entry id">
+    <input name="seed_policy_id" type="number" min="5" step="1" title="seed_policy entry id">
+    <button type="submit">Add recipe</button>
+  </form>
+  <table id="recipes-table">
+    <thead><tr><th>parameterset_id</th><th>arrival_rate_id</th><th>service_rate_id</th><th>run_duration_id</th><th>seed_policy_id</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>1 &middot; Design — scenarios</h2>
+  <p>Each scenario: priority, number_of_reps, confidence_metric, and its recipe.</p>
+  <form id="scenario-form">
+    <input name="priority" type="number" min="1" step="1" title="priority" required>
+    <input name="number_of_reps" type="number" min="1" max="100000" step="1" title="number_of_reps" required>
+    <input name="confidence_metric" type="number" step="any" min="0.0001" title="confidence_metric" required>
+    <input name="parameterset_id" type="number" min="5" step="1" title="recipe parameterset_id" required>
+    <button type="submit">Add scenario</button>
+  </form>
+  <table id="scenarios-table">
+    <thead><tr><th>index</th><th>priority</th><th>number_of_reps</th><th>confidence_metric</th><th>parameterset_id</th><th>published</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<section>
+  <h2>2 &middot; Save Experiment</h2>
+  <p>Persist the entries and recipes into the Detail DB (one transaction).</p>
+  <button id="btn-save">Save Experiment</button>
+</section>
+
+<section>
+  <h2>3 &middot; Start Experiment</h2>
+  <p>Pre-flight (every referenced parameterset_id resolves), the availability handshake, and the batch publish of the not-yet-published scenarios.</p>
+  <button id="btn-start">Start Experiment</button>
+</section>
+
+<section>
+  <h2>4 &middot; Finish Experiment</h2>
+  <p>Publish the finalization batch (scenarios [], final true). Irrevocable: once finished, no further Start.</p>
+  <button id="btn-finish">Finish Experiment</button>
+</section>
+
+<section>
+  <h2>Detail DB &mdash; simulation_parameters view</h2>
+  <table id="db-table">
+    <thead><tr><th>parameterset_id</th><th>arrival_rate</th><th>service_rate</th><th>run_duration</th><th>seed_policy</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
+<script>
+"use strict";
+const statusEl = document.getElementById("status");
+
+function status(msg, cls) {
+  statusEl.textContent = msg || "";
+  statusEl.className = cls || "";
+}
+
+async function api(path, method, body) {
+  const opts = { method: method || "GET" };
+  if (body !== undefined) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  const data = res.status === 204 ? null : await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data && data.error) || ("HTTP " + res.status));
+  }
+  return data;
+}
+
+function fillTable(id, header, rows, render) {
+  const tbody = document.querySelector("#" + id + " tbody");
+  tbody.innerHTML = "";
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    for (const cell of render(row)) {
+      const td = document.createElement("td");
+      if (cell && cell.html !== undefined) {
+        td.innerHTML = cell.html;
+      } else {
+        td.textContent = cell === undefined ? "" : String(cell);
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+function badge(id, on, label) {
+  const el = document.getElementById(id);
+  el.textContent = label + ": " + (on ? "yes" : "no");
+  el.className = "badge" + (on ? " on" : "");
+}
+
+function setFinalUI(finalized) {
+  document.getElementById("btn-start").disabled = finalized;
+  document.getElementById("btn-finish").disabled = finalized;
+}
+
+async function refresh() {
+  const st = await api("/api/state");
+  const d = st.design, f = st.flow;
+  badge("badge-saved", f.saved, "saved");
+  badge("badge-started", f.started, "started");
+  badge("badge-finalized", f.finalized, "finalized");
+  setFinalUI(f.finalized);
+  document.getElementById("handshake").textContent = f.last_handshake
+    ? "last handshake: " + f.last_handshake.status + (f.last_handshake.reason ? " (" + f.last_handshake.reason + ")" : "") + (f.last_handshake.batch_subject ? " -> " + f.last_handshake.batch_subject : "")
+    : "last handshake: -";
+  document.getElementById("publish").textContent = f.last_publish
+    ? "last publish: " + f.last_publish.status + (f.last_publish.reason ? " (" + f.last_publish.reason + ")" : "")
+    : "last publish: -";
+  fillTable("entries-table", null, d.entries, (e) => [e.id, e.parameter, e.value]);
+  fillTable("recipes-table", null, d.recipes, (r) => [r.parameterset_id, r.arrival_rate_id, r.service_rate_id, r.run_duration_id, r.seed_policy_id]);
+  fillTable("scenarios-table", null, d.scenarios, (s) => [
+    s.index, s.priority, s.number_of_reps, s.confidence_metric, s.parameterset_id,
+    s.published ? "yes" : "no",
+    s.published ? "" : { html: '<button data-del="' + s.index + '">delete</button>' },
+  ]);
+  fillTable("db-table", null, st.db_rows, (r) => [r.parameterset_id, r.arrival_rate, r.service_rate, r.run_duration, r.seed_policy]);
+  document.querySelectorAll("button[data-del]").forEach((btn) => {
+    btn.onclick = async () => {
+      try {
+        await api("/api/scenarios/" + btn.dataset.del, "DELETE");
+        status("scenario deleted", "ok");
+        await refresh();
+      } catch (e) {
+        status(e.message, "err");
+      }
+    };
+  });
+}
+
+document.getElementById("entry-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  try {
+    const r = await api("/api/entries", "POST", { parameter: f.parameter.value, value: Number(f.value.value) });
+    status("entry id " + r.id + " assigned", "ok");
+    await refresh();
+  } catch (e) { status(e.message, "err"); }
+};
+
+document.getElementById("recipe-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  try {
+    const r = await api("/api/recipes", "POST", {
+      arrival_rate_id: Number(f.arrival_rate_id.value),
+      service_rate_id: Number(f.service_rate_id.value),
+      run_duration_id: Number(f.run_duration_id.value),
+      seed_policy_id: Number(f.seed_policy_id.value),
+    });
+    status("recipe parameterset_id " + r.parameterset_id + " assigned", "ok");
+    await refresh();
+  } catch (e) { status(e.message, "err"); }
+};
+
+document.getElementById("scenario-form").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  try {
+    const r = await api("/api/scenarios", "POST", {
+      priority: Number(f.priority.value),
+      number_of_reps: Number(f.number_of_reps.value),
+      confidence_metric: Number(f.confidence_metric.value),
+      parameterset_id: Number(f.parameterset_id.value),
+    });
+    status("scenario appended at index " + r.index, "ok");
+    await refresh();
+  } catch (e) { status(e.message, "err"); }
+};
+
+document.getElementById("btn-save").onclick = async () => {
+  try {
+    const r = await api("/api/save", "POST", {});
+    status("saved: entries=" + r.saved_entries + " recipes=" + r.saved_recipes, "ok");
+    await refresh();
+  } catch (e) { status(e.message, "err"); }
+};
+
+document.getElementById("btn-start").onclick = async () => {
+  try {
+    const r = await api("/api/start", "POST", {});
+    status("started: batch " + r.batch_id + " published " + r.published + " scenarios", "ok");
+    await refresh();
+  } catch (e) { status(e.message, "err"); }
+};
+
+document.getElementById("btn-finish").onclick = async () => {
+  try {
+    const r = await api("/api/finish", "POST", {});
+    status("finished: finalization batch " + r.batch_id + " published (irrevocable)", "ok");
+    await refresh();
+  } catch (e) { status(e.message, "err"); }
+};
+
+refresh().catch((e) => status("initial state load failed: " + e.message, "err"));
+</script>
+</body>
+</html>

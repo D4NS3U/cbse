@@ -15,7 +15,11 @@ baseline tree at that commit and **preserve source provenance**: each paper-loca
 copy must remain recognizably derived from its named baseline, institution
 attribution and existing license headers must survive the import, and every
 deviation from the baseline must be traceable to an explicit requirement in the
-normative documents below.
+normative documents below. P3A imported the named baseline trees into the
+paper-local implementation directories; the exact source-to-destination
+mappings, the selected canonical model files, the Result Database exception,
+and the reproducible parity checks are recorded in
+[TEMPLATE_BASELINE.md](TEMPLATE_BASELINE.md).
 
 ## Template-reuse ruling (mandatory)
 
@@ -70,8 +74,14 @@ planned experiments.
 
 ## Status
 
-**foundation only — implementation begins in P3 or later.** This directory is
-an ownership boundary with provenance documentation. The subdirectories are
-placeholders, **not runnable components**: they contain no code, containers,
-Dockerfiles, or generated content, and this document makes no
+**P3A baseline import complete — behavior unchanged.** The P2 ownership
+boundary and provenance documentation remain the foundation of this
+directory. P3A imported the named baseline trees byte-identically into the
+`component/` directories, `simulation-model/src/`, and
+`simulation-model/container/base/`; the record is
+[TEMPLATE_BASELINE.md](TEMPLATE_BASELINE.md). The imported trees are **dormant
+source snapshots**: no paper-local module is registered in `go.work`, no
+imported Dockerfile is built or selected by any manifest, harness, or
+deployment path, and the Erlang-A implementation does not yet exist.
+Behavioral work begins in P3B; this document makes no
 implementation-complete claim.

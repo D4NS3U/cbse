@@ -5,7 +5,9 @@ and the paper Translator reads.
 
 ## Baseline
 
-`component-templates/scenario-detail-database/`
+`component-templates/scenario-detail-database/`. P3A imported the baseline
+tree byte-identically into [`component/`](component/); see the [template
+baseline provenance](../TEMPLATE_BASELINE.md).
 
 ## Template-reuse ruling (mandatory)
 
@@ -55,5 +57,9 @@ projection, the grants, and the baseline rows are not extension points.
 
 ## Status
 
-**foundation only — implementation begins in P3 or later.** This directory is
-an ownership placeholder; it currently contains no SQL and no image inputs.
+**P3A baseline import complete — behavior unchanged.** [`component/`](component/)
+contains the byte-identical baseline tree (Dockerfile, initialization SQL,
+README) recorded in the [template baseline
+provenance](../TEMPLATE_BASELINE.md). The imported files are a dormant source
+snapshot: no harness or manifest builds or selects them; later slices extend
+this component in place.

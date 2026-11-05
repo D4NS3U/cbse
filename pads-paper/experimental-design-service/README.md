@@ -5,7 +5,9 @@ designs and delivers the PADS paper experiments.
 
 ## Baseline
 
-`component-templates/experimental-design-service/`
+`component-templates/experimental-design-service/`. P3A imported the baseline
+tree byte-identically into [`component/`](component/); see the [template
+baseline provenance](../TEMPLATE_BASELINE.md).
 
 ## Template-reuse ruling (mandatory)
 
@@ -60,5 +62,8 @@ policy) deliberately do not appear in the EDS.
 
 ## Status
 
-**foundation only — implementation begins in P3 or later.** This directory is
-an ownership placeholder; it currently contains no service code.
+**P3A baseline import complete — behavior unchanged.** [`component/`](component/)
+contains the byte-identical baseline service tree recorded in the [template
+baseline provenance](../TEMPLATE_BASELINE.md). The imported module is a
+dormant source snapshot: it is not registered in `go.work` and no harness or
+manifest builds or selects it; later slices extend it in place.
