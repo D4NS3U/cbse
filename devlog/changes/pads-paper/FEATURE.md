@@ -232,7 +232,7 @@ These are ensemble/invariant tests, not claims that every individual random repl
 | Slice | Dependency | Result | State |
 |---|---|---|---|
 | P1 — model selection and initial-results documentation | none | Selected model, citations, parameter/result contract, experiment plan | **complete** |
-| P2 — paper component workspace foundation | P1 | `pads-paper/` ownership tree, component placeholders, baseline provenance, and explicit template-reuse instructions | incomplete |
+| P2 — paper component workspace foundation | P1 | `pads-paper/` ownership tree, component placeholders, baseline provenance, and explicit template-reuse instructions | **complete — approved and landed at `1d5ad77`** |
 | P3 — template import and `erlang_a_v1` model | P2 | Paper-local template copies plus pure SimPy model/container with injected RNG, warm-up/drain, abandonment, accounting/utilization metrics, and tests | incomplete |
 | P4 — generated result and component integration | P3 | Translator generation, additive result contract, EDS/Detail DB/PPS compatibility, fixtures/goldens, and component-local tests | incomplete |
 | P5 — end-to-end acceptance | P4 | Fresh immutable images, EDS-driven scenarios, richer result assertions, adaptive PPS rounds, recorded-effective-seed replay, and smoke evidence | incomplete |
