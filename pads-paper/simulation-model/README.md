@@ -117,7 +117,7 @@ exits non-zero with empty stdout.
 | Surface | Status | Role |
 |---|---|---|
 | Host CLI (`src/cli.py`) | implemented in P3B1 | Credential-free one-replication replay from an explicit effective seed; one JSON object to stdout |
-| Standalone model container | P3B2 (not implemented) | Immutable-base, credential-free application image wrapping the accepted CLI; still no database access |
+| Standalone model container | implemented in P3B2 | Immutable-base, credential-free application image wrapping the accepted CLI ([container/app](container/app/)); still no database access |
 | PostgreSQL production runner | P4 (not implemented) | Translator-generated runner: baked scenario parameters, hostname-derived effective seed, and the single JSONB result insert into the Result DB |
 
 ## Reproducibility limitation
@@ -191,5 +191,9 @@ the canonical `erlang_a_v1` implementation (original Erlang-A event logic),
 the strict `result.py` builder, the unchanged `seed.py`, and the
 credential-free deterministic `cli.py` with unit/invariant/ensemble tests.
 Independent review and landing on `PADS-paper` are pending; the standalone
-container (P3B2) and the Translator-synchronized production runner (P4) are
-not part of this directory yet.
+model container is implemented in P3B2 under
+[container/app](container/app/) (two-stage local build chain on the
+paper-local runner-base; see
+[container/README](container/README.md)), and the
+Translator-synchronized production runner (P4) is not part of this
+directory yet.
