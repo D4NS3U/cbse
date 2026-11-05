@@ -253,7 +253,7 @@ These are ensemble/invariant tests, not claims that every individual random repl
 | P3B1 — canonical `erlang_a_v1` model and CLI | P3A | Original pure SimPy implementation, deterministic credential-free host CLI, warm-up/drain, abandonment, accounting/utilization metrics, and unit/invariant tests | **complete — approved and landed at `dbadcd8`** |
 | P3B2 — standalone model container | P3B1 | Immutable-base credential-free application image for the accepted CLI; local build/run and mandatory image/smoke verification | **complete — approved and landed at `8d79b3b`; settlement smoke `20261105122418-e0acf4` 15/15** |
 | P4 — Translator synchronization and component integration | P3B2 | Automated canonical-model parity, scenario parameterization, generated production runner/result contract, EDS/Detail DB/PPS compatibility, fixtures/goldens, and component-local tests | **complete — approved and landed at `462f1fc`** |
-| P5 — end-to-end acceptance | P4 | Fresh immutable images, EDS-driven scenarios, richer result assertions, adaptive PPS rounds, recorded-effective-seed replay, and smoke evidence | incomplete |
+| P5 — end-to-end acceptance | P4 | Fresh immutable images, EDS-driven scenarios, richer result assertions, adaptive PPS rounds, recorded-effective-seed replay, and smoke evidence | **complete — approved and landed at `bd6a1fb` + evidence `608b01a`; live run `pads-20261105154051-121fcd` met, 5/5 replay; smoke `20261105152950-6d0ee4` 15/15** |
 | P6 — paper-result bundle | P5 | Sanitized experiment inputs/results, analysis/plots, provenance manifest, and limitations | incomplete |
 
 P2 has a dedicated normative slice and Pi-worker dispatch prompt. Later slice specifications are authored only after the preceding boundary is settled.
