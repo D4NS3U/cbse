@@ -45,9 +45,11 @@
 #
 # Exit codes:
 #   0  image built and pushed; digest-pinned line written.
-#   1  the build did not report a containerimage.digest.
-#   2  missing required environment, missing docker/jq, bad
-#      TEST_IMAGE_VERSION, unreadable auth file, or missing Dockerfile.
+#   1  missing required environment (the three :? refusals), a locked
+#      source image override or lock-load failure, a failed build, or the
+#      build did not report a containerimage.digest.
+#   2  bad TEST_IMAGE_VERSION, missing docker/jq, unreadable auth file,
+#      or missing Dockerfile.
 #
 # Side effects:
 #   Pushes the paper-local Translator to the registry (canonical and

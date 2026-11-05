@@ -433,7 +433,7 @@ until [[ "${state}" == "Finished" ]]; do
   sleep 15
 done
 
-# Export: Core DB scenario record (all 21 columns, computed-replication and
+# Export: Core DB scenario record (all 20 columns, computed-replication and
 # evaluation fields as the schema defines them).
 scenario_export_sql="SELECT json_agg(row_to_json(s) ORDER BY s.id) FROM scenario_status s JOIN project p ON p.id = s.project_id WHERE p.project_namespace = '${namespace}' AND p.project_name = '${project}'"
 scenario_rows="$(psql_core "${scenario_export_sql}")"
