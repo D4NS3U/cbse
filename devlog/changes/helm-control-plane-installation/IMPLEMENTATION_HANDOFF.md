@@ -1,6 +1,6 @@
 # Implementation handoff — Helm control-plane installation
 
-This is the durable routing ledger for [FEATURE.md](FEATURE.md). Slice states use `complete` / `incomplete` / `verification-blocked`. Specifications remain normative and read-only to workers.
+This is the durable routing ledger for [FEATURE.md](FEATURE.md). Slice states use `complete` / `incomplete` / `verification-blocked`. Specifications remain normative and read-only to workers. The current parked-branch summary and resume procedure are in [PAUSE_CHECKPOINT.md](PAUSE_CHECKPOINT.md).
 
 ## Current state
 
