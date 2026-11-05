@@ -16,6 +16,8 @@ Initial paper experiment and figure plan: [INITIAL_RESULTS_PLAN.md](INITIAL_RESU
 
 ### In scope
 
+- create one repository-root `pads-paper/` source tree that contains every paper-specific component implementation and its local documentation;
+- retain the existing `component-templates/**` implementations as the reusable baseline and extend copied paper-local variants rather than rewriting components from scratch;
 - replace the generated runner's current M/M/1 model with `erlang_a_v1` on the `PADS-paper` branch;
 - retain the existing EDS four-parameter design and recipe contract;
 - retain `mean_wait_time` as the PPS primary metric and add richer result fields;
@@ -48,7 +50,12 @@ Kubernetes compatibility remains the repository baseline (Kubernetes ≥ 1.30, a
 | Existing parameter mapping | `arrival_rate = λ`, `service_rate = μ` per server, `run_duration = T`, `seed_policy = deterministic seed base` |
 | Primary PPS metric | Preserve `mean_wait_time` and its existing fixed-width 95% confidence-interval stopping rule |
 | Model complexity | Parallel resources, queueing, abandonment through condition events, warm-up, drain, and multiple response metrics |
-| First implementation scope | Translator-generated runner model/result contract and tests; paper-specific fixtures and documentation |
+| Paper-specific source root | All paper-owned code lives under repository-root `pads-paper/`; existing shared templates remain unchanged baselines |
+| Template reuse | Copy the relevant existing template into its paper-local component directory, preserve its contracts/tests, and add only Erlang-A-required changes; clean rewrites are forbidden |
+| Paper component set | SimPy model/container, EDS, Translator, PPS, Scenario Detail Database, and Result Database |
+| Shared framework | Experiment Operator and Scenario Manager remain shared and unchanged unless a later, explicitly approved contradiction proves a paper-local change necessary |
+| Result DB baseline | No repository-owned Result DB template currently exists; preserve the existing official-PostgreSQL/no-init-schema contract and add only paper-local packaging or documentation actually required |
+| First implementation scope | Establish the paper source tree and provenance first; model and component behavior follow in ordered slices |
 
 ## Why this model fits CBSE
 
@@ -88,6 +95,9 @@ No additional pattern is licensed. In particular, a runtime Strategy registry fo
 - Obey root `AGENTS.md`; Go/test-harness/Dockerfile changes require `make test-fast`, and image/manifest/integration changes require the repository smoke tier.
 - Specifications and citations are read-only inputs for implementation workers.
 - Keep the EDS parameter names/domains, recipe schema, Detail DB view, Scenario Manager messages, and PPS `mean_wait_time` contract unchanged.
+- Put all paper-specific implementation files below `pads-paper/`; do not modify `component-templates/**` to implement the paper model.
+- **Template-reuse ruling:** every paper-local EDS, Translator, PPS, and Scenario Detail Database starts from the corresponding existing `component-templates/**` implementation and extends it only with behavior necessary for `erlang_a_v1`. Preserve existing tests, security contracts, health/readiness behavior, database wiring, and container construction unless this specification explicitly changes them. No clean-room replacement, parallel framework, or speculative abstraction is allowed.
+- The paper-local simulation model starts from the existing Translator `runnermod` and `runner-base` contracts. The Result Database starts from the existing official-PostgreSQL/no-repository-init contract because no standalone repository Result DB template exists.
 - Use the runner's injected local RNG only; never use Python module-global random state.
 - One replication writes one finite JSON result row or exits non-zero; no partial/NaN/Inf results.
 - No event-level logs, credentials, private registry values, endpoints, or local paths in tracked artifacts.
@@ -160,25 +170,37 @@ Preserve the fields currently consumed by CBSE and add paper metrics:
 
 The PPS continues reading only `mean_wait_time`; additive JSON fields do not require a Result DB schema change.
 
-## Scope for the later implementation
+## Paper-specific source tree
 
-Expected implementation surfaces:
+The implementation root is:
 
-- `component-templates/translator/internal/generator/runnermod/model.py`
-- `component-templates/translator/internal/generator/runnermod/result.py`
-- associated generator/model/result tests and golden fixtures
-- Translator README/model documentation
-- paper-specific e2e or acceptance fixtures that assert the richer result fields
+```text
+pads-paper/
+├── README.md
+├── simulation-model/
+│   ├── README.md
+│   └── container/
+├── experimental-design-service/
+├── translator/
+├── post-processing-service/
+├── scenario-detail-database/
+└── result-database/
+```
 
-Expected unchanged surfaces:
+The foundation slice creates this ownership boundary and per-directory provenance documentation. Later slices populate the directories from these baselines:
 
-- EDS API/UI and its four parameter names
-- Scenario Detail Database schema and recipes
-- Scenario Manager wire and state machine
-- PPS wire and statistical stopping algorithm
-- alpha4 CRD
+| Paper directory | Required baseline |
+|---|---|
+| `simulation-model/` | `component-templates/translator/internal/generator/runnermod/` plus `component-templates/translator/runner-base/` |
+| `experimental-design-service/` | `component-templates/experimental-design-service/` |
+| `translator/` | `component-templates/translator/` |
+| `post-processing-service/` | `component-templates/post-processing-service/` |
+| `scenario-detail-database/` | `component-templates/scenario-detail-database/` |
+| `result-database/` | Existing official PostgreSQL image contract: no repository initialization SQL; runner-created `scenario_<id>_results` tables |
 
-Any discovered need to modify those unchanged surfaces is a design contradiction and requires a new documented decision before implementation.
+Expected paper-local implementation surfaces include the copied Translator runner model/result contract, generator/model/result tests and fixtures, component READMEs, database packaging, and paper-specific e2e acceptance. The original templates remain unchanged so the repository retains its general reference implementation.
+
+Expected unchanged shared surfaces are the Experiment Operator, Scenario Manager, alpha4 CRD, EDS parameter/wire contract, Detail DB view shape, and PPS statistical stopping algorithm. Any discovered need to modify these surfaces is a design contradiction and requires a new documented user decision before implementation.
 
 ## Scientific validity checks
 
@@ -210,12 +232,13 @@ These are ensemble/invariant tests, not claims that every individual random repl
 | Slice | Dependency | Result | State |
 |---|---|---|---|
 | P1 — model selection and initial-results documentation | none | Selected model, citations, parameter/result contract, experiment plan | **complete** |
-| P2 — `erlang_a_v1` runner model | P1 | Pure SimPy model with injected RNG, warm-up/drain, abandonment, accounting/utilization metrics, unit/invariant tests | incomplete |
-| P3 — generated result and Translator integration | P2 | Additive result contract, generated-runner fixtures/goldens, README updates, PPS compatibility proof | incomplete |
-| P4 — end-to-end acceptance | P3 | Fresh immutable images, EDS-driven scenarios, richer result assertions, adaptive PPS rounds, recorded-effective-seed replay, smoke evidence | incomplete |
-| P5 — paper-result bundle | P4 | Sanitized experiment inputs/results, analysis/plots, provenance manifest, limitations | incomplete |
+| P2 — paper component workspace foundation | P1 | `pads-paper/` ownership tree, component placeholders, baseline provenance, and explicit template-reuse instructions | incomplete |
+| P3 — template import and `erlang_a_v1` model | P2 | Paper-local template copies plus pure SimPy model/container with injected RNG, warm-up/drain, abandonment, accounting/utilization metrics, and tests | incomplete |
+| P4 — generated result and component integration | P3 | Translator generation, additive result contract, EDS/Detail DB/PPS compatibility, fixtures/goldens, and component-local tests | incomplete |
+| P5 — end-to-end acceptance | P4 | Fresh immutable images, EDS-driven scenarios, richer result assertions, adaptive PPS rounds, recorded-effective-seed replay, and smoke evidence | incomplete |
+| P6 — paper-result bundle | P5 | Sanitized experiment inputs/results, analysis/plots, provenance manifest, and limitations | incomplete |
 
-Detailed worker slices and dispatch prompts will be authored only after the user accepts this documentation draft.
+P2 has a dedicated normative slice and Pi-worker dispatch prompt. Later slice specifications are authored only after the preceding boundary is settled.
 
 ## Verification gates
 
