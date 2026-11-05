@@ -4,7 +4,9 @@
 **Feature branch:** `D4NS3U/helm-control-plane-installation`  
 **Implementation checkpoint:** `319893592eab4ab784859b5c613489713d6d478d`
 
-This checkpoint records the feature state before returning the repository-root checkout to `main`. The feature has **not** been merged into `main`; final landing remains user-approved work after H5, H6, and final settlement.
+**Remote synchronization:** the local feature branch and `origin/D4NS3U/helm-control-plane-installation` were synchronized after recording this pause checkpoint.
+
+This checkpoint records the feature state before returning the repository-root checkout to `main`. The feature has **not** been merged into `main`; final landing remains user-approved work after H5, H6, and final settlement. The repository-root checkout is parked on `main` while the feature is paused.
 
 ## Slice state
 
