@@ -249,9 +249,10 @@ These are ensemble/invariant tests, not claims that every individual random repl
 |---|---|---|---|
 | P1 — model selection and initial-results documentation | none | Selected model, citations, parameter/result contract, experiment plan | **complete** |
 | P2 — paper component workspace foundation | P1 | `pads-paper/` ownership tree, component placeholders, baseline provenance, and explicit template-reuse instructions | **complete — approved and landed at `1d5ad77`** |
-| P3A — exact template import | P2 | Paper-local `component/` copies and simulation-model baseline import, with source/destination byte-parity evidence and no behavioral changes | incomplete |
-| P3B — canonical `erlang_a_v1` model and CLI container | P3A | Original pure SimPy implementation, deterministic credential-free CLI/container, warm-up/drain, abandonment, accounting/utilization metrics, and unit/invariant tests | incomplete |
-| P4 — Translator synchronization and component integration | P3B | Automated canonical-model parity, scenario parameterization, generated production runner/result contract, EDS/Detail DB/PPS compatibility, fixtures/goldens, and component-local tests | incomplete |
+| P3A — exact template import | P2 | Paper-local `component/` copies and simulation-model baseline import, with source/destination byte-parity evidence and no behavioral changes | **complete — approved and landed at `2b3fdb4`** |
+| P3B1 — canonical `erlang_a_v1` model and CLI | P3A | Original pure SimPy implementation, deterministic credential-free host CLI, warm-up/drain, abandonment, accounting/utilization metrics, and unit/invariant tests | incomplete |
+| P3B2 — standalone model container | P3B1 | Immutable-base credential-free application image for the accepted CLI; local build/run and mandatory image/smoke verification | incomplete |
+| P4 — Translator synchronization and component integration | P3B2 | Automated canonical-model parity, scenario parameterization, generated production runner/result contract, EDS/Detail DB/PPS compatibility, fixtures/goldens, and component-local tests | incomplete |
 | P5 — end-to-end acceptance | P4 | Fresh immutable images, EDS-driven scenarios, richer result assertions, adaptive PPS rounds, recorded-effective-seed replay, and smoke evidence | incomplete |
 | P6 — paper-result bundle | P5 | Sanitized experiment inputs/results, analysis/plots, provenance manifest, and limitations | incomplete |
 
