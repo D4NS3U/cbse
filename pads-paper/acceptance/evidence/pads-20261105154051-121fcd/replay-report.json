@@ -1,0 +1,40 @@
+{
+  "model_id": "erlang_a_v1",
+  "simpy_version": "4.1.2",
+  "python_version": "3.14.8",
+  "rows_total": 5,
+  "rows_passed": 5,
+  "all_passed": true,
+  "rows": [
+    {
+      "index": 0,
+      "effective_seed": 8792410797934245022,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 1,
+      "effective_seed": 1378246065525362542,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 2,
+      "effective_seed": 644588285143667656,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 3,
+      "effective_seed": 7485412550776699865,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 4,
+      "effective_seed": 7155758788558798467,
+      "passed": true,
+      "mismatches": []
+    }
+  ]
+}
