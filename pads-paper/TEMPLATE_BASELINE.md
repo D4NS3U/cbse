@@ -126,3 +126,35 @@ find pads-paper -type f -perm -111
 # 6) Result Database stays README-only: deterministic sorted file list.
 [ "$(cd pads-paper/result-database && find . -type f | LC_ALL=C sort)" = "./README.md" ]
 ```
+
+## Ruled divergence from P4
+
+Slice P4 (Translator synchronization and component integration,
+[slice specification](../devlog/changes/pads-paper/slices/P4-translator-synchronization.md))
+introduces the first licensed extensions after the P3A import. Exactly the
+following paper-local Translator files diverge from the baseline:
+
+1. the six synchronized `runnermod` files (`model.py`, `result.py`,
+   `seed.py`, `test_model.py`, `test_result.py`, `test_seed.py`) in
+   [`translator/component/internal/generator/runnermod/`](translator/component/internal/generator/runnermod/),
+   now byte-identical to the canonical model source in
+   [`simulation-model/src/`](simulation-model/src/) and enforced by the parity
+   test;
+2. `runnermod/main.py`, the production entrypoint adapted to the canonical
+   `model.run` metrics dict and
+   `result.build_result(scenario, metrics, effective_seed)` API;
+3. `internal/generator/parity_test.go`, the new automated canonical-parity
+   test;
+4. the `internal/sqldoc/sqldoc_test.go` reference-path activation, pointing
+   the Detail DB schema guard at the paper-local
+   `scenario-detail-database/component/10-simulation-parameters.sql`;
+5. the `README.md` PADS integration section, including the repair of the
+   `docs/CLUSTER_REQUIREMENTS.md` relative link to resolve in the paper-local
+   layout.
+
+From P4 onward the paper-local translator component tree is expected to
+diverge from the baseline; later slices extend the paper-local copy under
+their own rulings rather than restoring byte parity with
+`component-templates/translator/`. The P3A verification block above remains
+valid as dated import evidence: it records the exact state of the baseline
+import at the baseline commit, not the post-P4 state of the translator tree.

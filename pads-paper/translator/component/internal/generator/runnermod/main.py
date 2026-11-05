@@ -12,13 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runner entrypoint for the reference example generator.
+"""Runner entrypoint for the PADS paper-local generator.
 
 Reads the baked scenario parameters and Result DB connection, derives a local
-PRNG seed from the seed policy and the runtime hostname, runs the single-server
-queue, and inserts one JSONB result. It starts the baked scenario without
-command, arguments, or environment variables from SM and obtains its Pod
-hostname from the container runtime with socket.gethostname().
+PRNG seed from the seed policy and the runtime hostname, runs one replication
+of the synchronized ``erlang_a_v1`` model, builds the strict result record,
+and inserts one JSONB result. It starts the baked scenario without command,
+arguments, or environment variables from SM and obtains its Pod hostname from
+the container runtime with socket.gethostname().
+
+This module is Translator-owned production glue, not a synchronized file:
+model.py, result.py, seed.py, and their test suites are byte-identical copies
+of the canonical model source in pads-paper/simulation-model/src/. The
+inserted record carries exactly the five baked scenario fields,
+``effective_seed``, and the nine ``erlang_a_v1`` metric fields (the
+``result.RESULT_FIELDS`` order); it carries no ``scenario_id`` (the
+table/partition key), no credentials, and no event-level logging.
 """
 
 import json
@@ -48,19 +57,29 @@ def main():
     effective_seed = derive_seed(scenario["seed_policy"], hostname)
     rng = random.Random(effective_seed)
 
-    completed, mean_wait = model.run(
-        scenario["arrival_rate"],
-        scenario["service_rate"],
-        scenario["run_duration"],
-        rng,
-    )
-
-    result_record = result.build_result(scenario, completed, mean_wait, effective_seed)
-
     try:
+        metrics = model.run(
+            scenario["arrival_rate"],
+            scenario["service_rate"],
+            scenario["run_duration"],
+            rng,
+        )
+        # build_result accepts exactly the five baked scenario fields; the
+        # scenario_id stays out of the record (it is the table key).
+        result_record = result.build_result(
+            {
+                "parameterset_id": scenario["parameterset_id"],
+                "arrival_rate": scenario["arrival_rate"],
+                "service_rate": scenario["service_rate"],
+                "run_duration": scenario["run_duration"],
+                "seed_policy": scenario["seed_policy"],
+            },
+            metrics,
+            effective_seed,
+        )
         resultdb.insert(scenario["scenario_id"], result_record, db_config)
-    except Exception as exc:  # noqa: BLE001 - any DB failure must fail the Pod
-        sys.stderr.write("result db insert failed: {}\n".format(exc))
+    except Exception as exc:  # noqa: BLE001 - any run or DB failure must fail the Pod
+        sys.stderr.write("runner failed: {}\n".format(exc))
         sys.exit(1)
 
 

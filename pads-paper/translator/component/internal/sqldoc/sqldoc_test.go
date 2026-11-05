@@ -35,8 +35,10 @@ import (
 
 // scenarioDetailSQLPath is the repository-owned reference Scenario Detail
 // Database initialization SQL. Resolved relative to the package dir so the
-// test runs under `go test` without a symlink.
-const scenarioDetailSQLPath = "../../../scenario-detail-database/10-simulation-parameters.sql"
+// test runs under `go test` without a symlink. The paper-local layout
+// carries the reference image under
+// pads-paper/scenario-detail-database/component/.
+const scenarioDetailSQLPath = "../../../../scenario-detail-database/component/10-simulation-parameters.sql"
 
 func readSQL(t *testing.T) string {
 	t.Helper()

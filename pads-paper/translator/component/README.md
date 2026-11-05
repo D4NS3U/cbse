@@ -150,7 +150,7 @@ Kubernetes 1.30–1.32, disabled by default; GA in 1.33). On a cluster where the
 gate is off, the API server strips `hostUsers: false` and `buildkitd` fails at
 startup with `can't enable NoProcessSandbox without Rootless`. Enabling the gate
 and the experiment-namespace Pod Security it needs is a one-time cluster-admin
-operation; see [`docs/CLUSTER_REQUIREMENTS.md`](../../docs/CLUSTER_REQUIREMENTS.md)
+operation; see [`docs/CLUSTER_REQUIREMENTS.md`](../../../docs/CLUSTER_REQUIREMENTS.md)
 for the exact K3s enablement steps, the kernel/containerd prerequisites, the
 verification procedure, and the namespace Pod Security label. The sidecar uses
 no privileged mode, host networking, host paths, host runtime sockets, or
@@ -269,6 +269,80 @@ positive integer `parameterset_id` carried in `recipe_info`. `recipe_info` must
 be exactly one JSON object containing one positive integer `parameterset_id` and
 no other fields; any deviation is a permanent `RecipeError` that the framework
 treats as a confirmed empty-image outcome.
+
+## PADS paper integration (`erlang_a_v1`)
+
+This paper-local copy is licensed to diverge from the baseline template from
+slice P4 (Translator synchronization and component integration) onward; the
+baseline sections above remain the template documentation, and the ruled
+divergence ledger lives in [`../../TEMPLATE_BASELINE.md`](../../TEMPLATE_BASELINE.md).
+The paper-local Translator now generates `erlang_a_v1` production runners
+through the same replaceable-generator boundary (see the [PADS feature
+specification](../../../devlog/changes/pads-paper/FEATURE.md)).
+
+### Synchronized canonical model
+
+`internal/generator/runnermod/` carries synchronized byte-identical copies of
+exactly six canonical production model files from
+`pads-paper/simulation-model/src/`:
+
+1. `model.py`
+2. `result.py`
+3. `seed.py`
+4. `test_model.py`
+5. `test_result.py`
+6. `test_seed.py`
+
+The paper-local Translator never edits these copies by hand; drift is resolved
+by re-copying from canonical. `internal/generator/parity_test.go`
+(`TestCanonicalParity`) fails `go test` whenever an embedded copy drifts from
+the canonical source — or when the canonical directory or any ruled file is
+missing on either side — so the canonical source remains the single source of
+truth. The standalone-CLI-only `cli.py` and `test_cli.py` are not part of the
+synchronized surface and do not enter `runnermod`.
+
+### Production entrypoint (`main.py`)
+
+`runnermod/main.py` is Translator-owned production glue (not a synchronized
+file), adapted to the canonical model API:
+
+- `metrics = model.run(scenario["arrival_rate"], scenario["service_rate"],
+  scenario["run_duration"], rng)` returns the exact `METRIC_FIELDS` dict;
+- `result_record = result.build_result(scenario, metrics, effective_seed)`
+  builds the strict JSONB result record;
+- seed derivation from the baked `seed_policy` and the runtime hostname
+  (`derive_seed` plus `socket.gethostname()`), JSON loading of the baked
+  `scenario.json`/`resultdb.json`, the single-transaction Result DB insert
+  (`resultdb.insert`), and the failure exit behavior (error to stderr, non-zero
+  exit, consumed Pod attempt) are unchanged;
+- the runner still starts without command, arguments, or environment variables.
+
+The inserted JSONB record carries exactly, in `RESULT_FIELDS` order: the five
+baked scenario fields (`parameterset_id`, `arrival_rate`, `service_rate`,
+`run_duration`, `seed_policy`), `effective_seed`, and the nine `erlang_a_v1`
+metric fields (`model_id`, `completed_customers`, `served_customers`,
+`abandoned_customers`, `total_customers`, `mean_wait_time`,
+`abandonment_probability`, `throughput`, `server_utilization`). `scenario_id`
+stays out of the record (it remains the table/partition key only), no
+credentials or event-level logging enter the record or the module, the PPS
+continues reading only `mean_wait_time`, and `completed_customers` remains the
+compatibility alias for `served_customers`.
+
+### Unchanged framework path
+
+`scenario.json` parameterization, the Detail DB lookup, the BuildKit sidecar
+build, the authenticated push, digest/identity verification, and ready
+publication are unchanged. The Translator parameterizes the synchronized model
+through the same baked scenario and builds scenario-specific runner images on
+the existing path.
+
+### Link repair
+
+The imported baseline relative link `../../docs/CLUSTER_REQUIREMENTS.md`
+resolved from `component-templates/translator/` but not from
+`pads-paper/translator/component/`; it is repaired in this paper-local copy to
+`../../../docs/CLUSTER_REQUIREMENTS.md` so it resolves to the repository-root
+`docs/CLUSTER_REQUIREMENTS.md` in the paper-local layout.
 
 ## Deterministic tag and OCI identity annotations
 
