@@ -51,7 +51,11 @@ Kubernetes compatibility remains the repository baseline (Kubernetes ≥ 1.30, a
 | Primary PPS metric | Preserve `mean_wait_time` and its existing fixed-width 95% confidence-interval stopping rule |
 | Model complexity | Parallel resources, queueing, abandonment through condition events, warm-up, drain, and multiple response metrics |
 | Paper-specific source root | All paper-owned code lives under repository-root `pads-paper/`; existing shared templates remain unchanged baselines |
-| Template reuse | Copy the relevant existing template into its paper-local component directory, preserve its contracts/tests, and add only Erlang-A-required changes; clean rewrites are forbidden |
+| Template reuse | Copy the relevant existing template into its paper-local `component/` directory, preserve its contracts/tests, and add only Erlang-A-required changes; clean rewrites are forbidden |
+| Canonical model source | `pads-paper/simulation-model/src/` owns the original CBSE Erlang-A Python implementation; no third-party GitHub model source is copied |
+| Translator synchronization | The paper-local Translator receives a synchronized byte-identical copy of the canonical production model modules; an automated parity test prevents drift |
+| Standalone model container | Credential-free CLI image accepts scenario parameters plus an effective seed, runs one replication, and emits exactly one JSON object to stdout |
+| Production runner | The paper-local Translator parameterizes the synchronized model for one scenario, and its existing BuildKit sidecar builds and pushes an executable digest-resolved runner image; that runner writes one result to PostgreSQL |
 | Paper component set | SimPy model/container, EDS, Translator, PPS, Scenario Detail Database, and Result Database |
 | Shared framework | Experiment Operator and Scenario Manager remain shared and unchanged unless a later, explicitly approved contradiction proves a paper-local change necessary |
 | Result DB baseline | No repository-owned Result DB template currently exists; preserve the existing official-PostgreSQL/no-init-schema contract and add only paper-local packaging or documentation actually required |
@@ -97,7 +101,11 @@ No additional pattern is licensed. In particular, a runtime Strategy registry fo
 - Keep the EDS parameter names/domains, recipe schema, Detail DB view, Scenario Manager messages, and PPS `mean_wait_time` contract unchanged.
 - Put all paper-specific implementation files below `pads-paper/`; do not modify `component-templates/**` to implement the paper model.
 - **Template-reuse ruling:** every paper-local EDS, Translator, PPS, and Scenario Detail Database starts from the corresponding existing `component-templates/**` implementation and extends it only with behavior necessary for `erlang_a_v1`. Preserve existing tests, security contracts, health/readiness behavior, database wiring, and container construction unless this specification explicitly changes them. No clean-room replacement, parallel framework, or speculative abstraction is allowed.
-- The paper-local simulation model starts from the existing Translator `runnermod` and `runner-base` contracts. The Result Database starts from the existing official-PostgreSQL/no-repository-init contract because no standalone repository Result DB template exists.
+- The paper-local simulation model starts from the existing Translator `runnermod` API/security contracts and `runner-base` container contract, but the Erlang-A event logic is an original CBSE implementation: do not copy third-party GitHub model source.
+- `pads-paper/simulation-model/src/` is canonical. A later Translator integration may copy only the ruled production modules and must enforce byte parity automatically; independent hand-maintained model forks are forbidden.
+- The standalone model image is credential-free and writes exactly one finite JSON result to stdout. The Translator-generated production runner separately owns PostgreSQL Result Database insertion.
+- Preserve the existing Translator/BuildKit/registry flow: parameter lookup and baking, sidecar build, authenticated push, digest resolution/verification, and ready-message publication.
+- The Result Database starts from the existing official-PostgreSQL/no-repository-init contract because no standalone repository Result DB template exists.
 - Use the runner's injected local RNG only; never use Python module-global random state.
 - One replication writes one finite JSON result row or exits non-zero; no partial/NaN/Inf results.
 - No event-level logs, credentials, private registry values, endpoints, or local paths in tracked artifacts.
@@ -179,15 +187,23 @@ pads-paper/
 ├── README.md
 ├── simulation-model/
 │   ├── README.md
+│   ├── src/                    # canonical model source
 │   └── container/
+│       └── base/               # imported runner-base contract
 ├── experimental-design-service/
+│   └── component/              # imported and later extended template
 ├── translator/
+│   └── component/
 ├── post-processing-service/
+│   └── component/
 ├── scenario-detail-database/
+│   └── component/
 └── result-database/
 ```
 
-The foundation slice creates this ownership boundary and per-directory provenance documentation. Later slices populate the directories from these baselines:
+P2 created the ownership boundary and per-directory provenance documentation. P3A imports the baselines into the shown implementation directories without modifying their bytes; P3B then replaces only the canonical model behavior and adds the standalone CLI image. Later integration copies the ruled canonical production modules into the paper-local Translator and enforces parity.
+
+Baselines:
 
 | Paper directory | Required baseline |
 |---|---|
@@ -233,8 +249,9 @@ These are ensemble/invariant tests, not claims that every individual random repl
 |---|---|---|---|
 | P1 — model selection and initial-results documentation | none | Selected model, citations, parameter/result contract, experiment plan | **complete** |
 | P2 — paper component workspace foundation | P1 | `pads-paper/` ownership tree, component placeholders, baseline provenance, and explicit template-reuse instructions | **complete — approved and landed at `1d5ad77`** |
-| P3 — template import and `erlang_a_v1` model | P2 | Paper-local template copies plus pure SimPy model/container with injected RNG, warm-up/drain, abandonment, accounting/utilization metrics, and tests | incomplete |
-| P4 — generated result and component integration | P3 | Translator generation, additive result contract, EDS/Detail DB/PPS compatibility, fixtures/goldens, and component-local tests | incomplete |
+| P3A — exact template import | P2 | Paper-local `component/` copies and simulation-model baseline import, with source/destination byte-parity evidence and no behavioral changes | incomplete |
+| P3B — canonical `erlang_a_v1` model and CLI container | P3A | Original pure SimPy implementation, deterministic credential-free CLI/container, warm-up/drain, abandonment, accounting/utilization metrics, and unit/invariant tests | incomplete |
+| P4 — Translator synchronization and component integration | P3B | Automated canonical-model parity, scenario parameterization, generated production runner/result contract, EDS/Detail DB/PPS compatibility, fixtures/goldens, and component-local tests | incomplete |
 | P5 — end-to-end acceptance | P4 | Fresh immutable images, EDS-driven scenarios, richer result assertions, adaptive PPS rounds, recorded-effective-seed replay, and smoke evidence | incomplete |
 | P6 — paper-result bundle | P5 | Sanitized experiment inputs/results, analysis/plots, provenance manifest, and limitations | incomplete |
 
