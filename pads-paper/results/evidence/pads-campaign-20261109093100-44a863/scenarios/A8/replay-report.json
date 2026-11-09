@@ -1,0 +1,130 @@
+{
+  "model_id": "erlang_a_v1",
+  "simpy_version": "4.1.2",
+  "python_version": "3.14.8",
+  "rows_total": 20,
+  "rows_passed": 20,
+  "all_passed": true,
+  "rows": [
+    {
+      "index": 0,
+      "effective_seed": 914075694580478446,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 1,
+      "effective_seed": 8096234201286362897,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 2,
+      "effective_seed": 5329598610281758621,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 3,
+      "effective_seed": 1198689814990884785,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 4,
+      "effective_seed": 8491986217925173618,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 5,
+      "effective_seed": 8465884681742297284,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 6,
+      "effective_seed": 8156424948961961451,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 7,
+      "effective_seed": 4834960412333468180,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 8,
+      "effective_seed": 4534691678880839093,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 9,
+      "effective_seed": 5167358916787437116,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 10,
+      "effective_seed": 2050460059892062199,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 11,
+      "effective_seed": 1340684801093779942,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 12,
+      "effective_seed": 267604298138752148,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 13,
+      "effective_seed": 3466902230711505621,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 14,
+      "effective_seed": 6731964251909988532,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 15,
+      "effective_seed": 8226801429101944306,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 16,
+      "effective_seed": 3705032426439864348,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 17,
+      "effective_seed": 1391435410008191169,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 18,
+      "effective_seed": 4146957425138574314,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 19,
+      "effective_seed": 379172923944566885,
+      "passed": true,
+      "mismatches": []
+    }
+  ]
+}

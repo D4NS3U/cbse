@@ -1,0 +1,5 @@
+# Machine-generated deterministic figures (matplotlib SVG): font path data
+# lines end with a trailing space by construction of the pinned tool. Exclude
+# only these generated artifacts from the trailing-space hygiene check;
+# hand-edited files under this tree remain fully checked.
+**/figures/*.svg whitespace=-trailing-space

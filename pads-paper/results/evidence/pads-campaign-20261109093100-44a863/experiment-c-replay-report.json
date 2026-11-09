@@ -1,0 +1,970 @@
+{
+  "model_id": "erlang_a_v1",
+  "simpy_version": "4.1.2",
+  "python_version": "3.14.8",
+  "rows_total": 160,
+  "rows_passed": 160,
+  "all_passed": true,
+  "rows": [
+    {
+      "index": 0,
+      "effective_seed": 6133505232532773912,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 1,
+      "effective_seed": 8877909623579933372,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 2,
+      "effective_seed": 5094708406893019437,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 3,
+      "effective_seed": 5696413763737376094,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 4,
+      "effective_seed": 8643801212198996546,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 5,
+      "effective_seed": 8202518856590827602,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 6,
+      "effective_seed": 579268133556313791,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 7,
+      "effective_seed": 559985428594847501,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 8,
+      "effective_seed": 3124835529959899197,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 9,
+      "effective_seed": 1122478761999824510,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 10,
+      "effective_seed": 8297111665969214541,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 11,
+      "effective_seed": 186716001193585133,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 12,
+      "effective_seed": 1632797356196119235,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 13,
+      "effective_seed": 8666319254161324502,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 14,
+      "effective_seed": 3558992842098029793,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 15,
+      "effective_seed": 2982272192958675137,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 16,
+      "effective_seed": 5689076620150274739,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 17,
+      "effective_seed": 1900053166352053858,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 18,
+      "effective_seed": 4091882692792347437,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 19,
+      "effective_seed": 1642820767579754337,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 20,
+      "effective_seed": 1154794669988636112,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 21,
+      "effective_seed": 7693078846329036141,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 22,
+      "effective_seed": 6571680130267690380,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 23,
+      "effective_seed": 491189771788208553,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 24,
+      "effective_seed": 6172775852731317956,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 25,
+      "effective_seed": 5566257317668554441,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 26,
+      "effective_seed": 2862270105035331686,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 27,
+      "effective_seed": 6420453523750550092,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 28,
+      "effective_seed": 6033372401965995059,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 29,
+      "effective_seed": 6628441237365916791,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 30,
+      "effective_seed": 3584120011942369967,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 31,
+      "effective_seed": 3607854877338075483,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 32,
+      "effective_seed": 9144056205575680590,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 33,
+      "effective_seed": 3192119918969034715,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 34,
+      "effective_seed": 4341445084621230455,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 35,
+      "effective_seed": 4781785807488240398,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 36,
+      "effective_seed": 4341083460759287287,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 37,
+      "effective_seed": 7292368337201914514,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 38,
+      "effective_seed": 6078487591344219852,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 39,
+      "effective_seed": 58430265285618726,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 40,
+      "effective_seed": 459884410125655436,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 41,
+      "effective_seed": 2926654712924723461,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 42,
+      "effective_seed": 6591373565150448701,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 43,
+      "effective_seed": 2367328800899564124,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 44,
+      "effective_seed": 1042702805393632979,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 45,
+      "effective_seed": 4905723094145467710,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 46,
+      "effective_seed": 4587716631222673283,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 47,
+      "effective_seed": 2130505312444833565,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 48,
+      "effective_seed": 8560180772699401318,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 49,
+      "effective_seed": 7663093376836202122,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 50,
+      "effective_seed": 8102782460285099995,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 51,
+      "effective_seed": 427577300355541974,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 52,
+      "effective_seed": 3778111829014334720,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 53,
+      "effective_seed": 9170279246226112437,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 54,
+      "effective_seed": 7309618886199136204,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 55,
+      "effective_seed": 8823639405240869497,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 56,
+      "effective_seed": 8881460723183845219,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 57,
+      "effective_seed": 5026558403890786981,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 58,
+      "effective_seed": 5869753909071969569,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 59,
+      "effective_seed": 1095138329373029399,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 60,
+      "effective_seed": 6610376206338538280,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 61,
+      "effective_seed": 3395022498921085092,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 62,
+      "effective_seed": 7974993661480832153,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 63,
+      "effective_seed": 3463591289922713020,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 64,
+      "effective_seed": 3931178269128387293,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 65,
+      "effective_seed": 5800581636688139591,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 66,
+      "effective_seed": 5796290010444130206,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 67,
+      "effective_seed": 5050734948345473904,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 68,
+      "effective_seed": 9220914506823803015,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 69,
+      "effective_seed": 6754972463119819721,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 70,
+      "effective_seed": 4616125526524519008,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 71,
+      "effective_seed": 2840797386401615389,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 72,
+      "effective_seed": 1195554440010994618,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 73,
+      "effective_seed": 6207824772995930705,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 74,
+      "effective_seed": 8577425990401428761,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 75,
+      "effective_seed": 5240130063721686677,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 76,
+      "effective_seed": 9078928736061532987,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 77,
+      "effective_seed": 3348178286414903715,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 78,
+      "effective_seed": 4623659791324071775,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 79,
+      "effective_seed": 8273569187036031404,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 80,
+      "effective_seed": 3262679952154688391,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 81,
+      "effective_seed": 3468140942710456501,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 82,
+      "effective_seed": 2345197645844471534,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 83,
+      "effective_seed": 5579696324822850522,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 84,
+      "effective_seed": 4642837020805281475,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 85,
+      "effective_seed": 3335347533739478706,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 86,
+      "effective_seed": 7812576579286021697,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 87,
+      "effective_seed": 3073801533584103237,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 88,
+      "effective_seed": 2660676677318146805,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 89,
+      "effective_seed": 3880085293347449080,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 90,
+      "effective_seed": 2469123756224456890,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 91,
+      "effective_seed": 8692380247843024881,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 92,
+      "effective_seed": 8731254136900781934,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 93,
+      "effective_seed": 2303339658523282364,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 94,
+      "effective_seed": 9127044761626062997,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 95,
+      "effective_seed": 4854690016214621574,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 96,
+      "effective_seed": 6800001638311069182,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 97,
+      "effective_seed": 6275644894293321545,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 98,
+      "effective_seed": 556778447554946868,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 99,
+      "effective_seed": 3812739674306487683,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 100,
+      "effective_seed": 5904782513538787099,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 101,
+      "effective_seed": 157657311935711662,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 102,
+      "effective_seed": 3368400806293659074,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 103,
+      "effective_seed": 1964317677797149538,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 104,
+      "effective_seed": 7962402205657763406,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 105,
+      "effective_seed": 3270833046042832593,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 106,
+      "effective_seed": 76769653173062762,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 107,
+      "effective_seed": 8659227430412740039,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 108,
+      "effective_seed": 7118146387687106549,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 109,
+      "effective_seed": 2461228869699244949,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 110,
+      "effective_seed": 6345140075641028939,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 111,
+      "effective_seed": 8773307928988903810,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 112,
+      "effective_seed": 7635459659668501974,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 113,
+      "effective_seed": 7093362557988949737,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 114,
+      "effective_seed": 818968167766060824,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 115,
+      "effective_seed": 4834466001781728306,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 116,
+      "effective_seed": 8820410237319896411,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 117,
+      "effective_seed": 7058777136600487718,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 118,
+      "effective_seed": 5255176003609008842,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 119,
+      "effective_seed": 4662274850327829079,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 120,
+      "effective_seed": 5710935332714067680,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 121,
+      "effective_seed": 3561000227338709896,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 122,
+      "effective_seed": 4042166376152880026,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 123,
+      "effective_seed": 9093608986796030488,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 124,
+      "effective_seed": 7601256546764633888,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 125,
+      "effective_seed": 6827589154258280198,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 126,
+      "effective_seed": 2339454105373565802,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 127,
+      "effective_seed": 805750718979552347,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 128,
+      "effective_seed": 538880893342346646,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 129,
+      "effective_seed": 8359988101894191299,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 130,
+      "effective_seed": 138421122782725910,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 131,
+      "effective_seed": 636043228354328919,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 132,
+      "effective_seed": 8035725421515214952,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 133,
+      "effective_seed": 7824051191597362254,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 134,
+      "effective_seed": 8383977908117749627,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 135,
+      "effective_seed": 1382170908236557004,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 136,
+      "effective_seed": 7187634697401457968,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 137,
+      "effective_seed": 4018581460435047965,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 138,
+      "effective_seed": 249303465264743255,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 139,
+      "effective_seed": 6301593509228637798,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 140,
+      "effective_seed": 914075694580478446,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 141,
+      "effective_seed": 8096234201286362897,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 142,
+      "effective_seed": 5329598610281758621,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 143,
+      "effective_seed": 1198689814990884785,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 144,
+      "effective_seed": 8491986217925173618,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 145,
+      "effective_seed": 8465884681742297284,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 146,
+      "effective_seed": 8156424948961961451,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 147,
+      "effective_seed": 4834960412333468180,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 148,
+      "effective_seed": 4534691678880839093,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 149,
+      "effective_seed": 5167358916787437116,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 150,
+      "effective_seed": 2050460059892062199,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 151,
+      "effective_seed": 1340684801093779942,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 152,
+      "effective_seed": 267604298138752148,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 153,
+      "effective_seed": 3466902230711505621,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 154,
+      "effective_seed": 6731964251909988532,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 155,
+      "effective_seed": 8226801429101944306,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 156,
+      "effective_seed": 3705032426439864348,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 157,
+      "effective_seed": 1391435410008191169,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 158,
+      "effective_seed": 4146957425138574314,
+      "passed": true,
+      "mismatches": []
+    },
+    {
+      "index": 159,
+      "effective_seed": 379172923944566885,
+      "passed": true,
+      "mismatches": []
+    }
+  ]
+}
