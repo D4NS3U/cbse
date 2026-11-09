@@ -573,7 +573,7 @@ if [[ -n "${design_path}" ]]; then
   # scenario fails the campaign), under the campaign timeout.
   states_sql="SELECT s.state FROM scenario_status s JOIN project p ON p.id = s.project_id WHERE p.project_namespace = '${namespace}' AND p.project_name = '${project}' ORDER BY s.id"
   finished_deadline=$((SECONDS + campaign_timeout_s))
-  until :; do
+  while :; do
     states="$(psql_core "${states_sql}" || true)"
     read -r state_count finished_count failed_count <<<"$(printf '%s\n' "${states}" | awk '{ total++; if ($1 == "Finished") finished++; if ($1 == "Failed") failed++ } END { print total + 0, finished + 0, failed + 0 }')"
     if (( failed_count > 0 )); then

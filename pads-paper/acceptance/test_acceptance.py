@@ -942,7 +942,41 @@ def main():
         sql = rest[rest.index("-c") + 1]
         with open(os.path.join(stub_dir, "state.json"), "r", encoding="utf-8") as fh:
             state = json.load(fh)
-        if sql.startswith("SELECT s.state"):
+        sequence = state.get("state_sequence")
+        if sequence is not None:
+            # Delayed terminal states (settlement regression guard): the
+            # scenario-state query serves one per-row snapshot from
+            # state_sequence per invocation (the state-query-count counter
+            # file persists across invocations), and the Core DB export
+            # returns the pre-translation rows (non_terminal_rows: Created,
+            # translation_attempts 0, empty container_image — the shape the
+            # live settlement campaigns exported) until the current snapshot
+            # is fully terminal.
+            count_path = os.path.join(stub_dir, "state-query-count")
+            count = 0
+            if os.path.isfile(count_path):
+                with open(count_path, "r", encoding="utf-8") as fh:
+                    count = int(fh.read().strip() or 0)
+            snapshot = sequence[count] if count < len(sequence) else sequence[-1]
+            if sql.startswith("SELECT s.state"):
+                with open(count_path, "w", encoding="utf-8") as fh:
+                    fh.write(str(count + 1))
+                for row_state in snapshot:
+                    out(row_state)
+            elif sql.startswith("SELECT json_agg(row_to_json(s)"):
+                if all(row_state == "Finished" for row_state in snapshot):
+                    out(json.dumps(state["scenario_rows"]))
+                else:
+                    out(json.dumps(state["non_terminal_rows"]))
+            elif "SELECT json_agg(result" in sql:
+                match = re.search(r"scenario_(\d+)_results", sql)
+                out(json.dumps(state["rows_by_scenario_id"][match.group(1)]))
+            else:
+                sys.stderr.write(
+                    "stub kubectl: unknown SQL under state_sequence: " + sql + "\n"
+                )
+                sys.exit(1)
+        elif sql.startswith("SELECT s.state"):
             for row in state["scenario_rows"]:
                 out(row["state"])
         elif sql.startswith("SELECT json_agg(row_to_json(s)"):
@@ -1600,6 +1634,143 @@ class TestDesignModeStubDryRun(StubDryRunBase):
                 self.assertIn("pads-campaign-", run_md)
                 self.assertNotIn("stub-registry.example", run_md)
                 self.assert_teardown_ordered(stub_dir)
+            finally:
+                self.cleanup_run_outputs(run_id)
+
+    def test_campaign_dry_run_polls_until_terminal_states(self):
+        # Regression lock for the settlement defect (live campaigns
+        # pads-campaign-20261109091004-f0f630 and
+        # pads-campaign-20261109091436-3a21cb): the campaign wait loop was
+        # ``until :; do``, whose body never executes, so the driver polled
+        # zero times, exported the pre-translation Core DB states (all
+        # eleven scenarios Created, translation_attempts 0), and failed
+        # the per-scenario generated-runner check within a minute. The stub
+        # Core DB here serves the non-terminal Created snapshot to the
+        # scenario-state queries and only the terminal Finished rows after
+        # the driver has polled again; the export returns the
+        # pre-translation rows (empty container_image) until the state
+        # queries reach the terminal snapshot. A driver that stops polling
+        # before the terminal states exports the Created rows and fails the
+        # campaign; only a wait loop that actually executes its body until
+        # every scenario is Finished completes it.
+        with tempfile.TemporaryDirectory() as tmp:
+            import datetime
+
+            design = load_campaign_design()
+            plan = campaign.plan(design)
+            psid_by_recipe = {
+                recipe["label"]: 5 + index for index, recipe in enumerate(plan["recipes"])
+            }
+            rows_by_label = self._expected_rows_by_label(plan)
+            base = datetime.datetime(2026, 11, 9, 10, 0, 0, tzinfo=datetime.timezone.utc)
+            records = []
+            non_terminal_records = []
+            rows_by_id = {}
+            for index, scenario in enumerate(plan["scenarios"]):
+                label = scenario["label"]
+                n = rows_by_label[label]
+                psid = psid_by_recipe[scenario["recipe"]]
+                created = base + datetime.timedelta(seconds=7 * index)
+                published = created + datetime.timedelta(seconds=2.5 + 0.1 * index)
+                updated = published + datetime.timedelta(seconds=20 + 2 * index)
+                record = {
+                    "id": index + 1,
+                    "project_id": 1,
+                    "state": "Finished",
+                    "created_at": created.isoformat(),
+                    "updated_at": updated.isoformat(),
+                    "priority": scenario["priority"],
+                    "number_of_reps": scenario["number_of_reps"],
+                    "number_of_computed_reps": n,
+                    "translation_attempts": 1,
+                    "translation_publish_started_at": (
+                        published - datetime.timedelta(milliseconds=3)
+                    ).isoformat(),
+                    "translation_request_published_at": published.isoformat(),
+                    "recipe_info": {"parameterset_id": psid},
+                    "container_image": "stub-registry.example/cbse-test-runner@sha256:"
+                    + format(index, "x").rjust(64, "a"),
+                    "confidence_metric": scenario["confidence_metric"],
+                    "runner_round": 2 if label in ("A3", "A4") else 1,
+                    "round_reps": 5 if label in ("A3", "A4") else n,
+                    "round_computed_reps": 5 if label in ("A3", "A4") else n,
+                    "evaluation_attempts": 1,
+                    "evaluation_publish_started_at": (
+                        updated - datetime.timedelta(milliseconds=700)
+                    ).isoformat(),
+                    "evaluation_request_published_at": (
+                        updated - datetime.timedelta(milliseconds=600)
+                    ).isoformat(),
+                }
+                records.append(record)
+                pre_translation = dict(record)
+                pre_translation["state"] = "Created"
+                pre_translation["translation_attempts"] = 0
+                pre_translation["number_of_computed_reps"] = 0
+                pre_translation["container_image"] = None
+                pre_translation["updated_at"] = created.isoformat()
+                non_terminal_records.append(pre_translation)
+                rows = []
+                for k in range(n):
+                    seed = self.derived_seed("campaign-stub:" + label, k)
+                    rows.append(
+                        self.build_row(
+                            seed,
+                            psid,
+                            scenario["arrival_rate"],
+                            scenario["service_rate"],
+                            scenario["run_duration"],
+                            scenario["seed_policy"],
+                        )
+                    )
+                rows_by_id[str(index + 1)] = rows
+            state = {
+                "scenario_rows": records,
+                "non_terminal_rows": non_terminal_records,
+                "state_sequence": [
+                    ["Created"] * len(records),
+                    ["Finished"] * len(records),
+                ],
+                "rows_by_scenario_id": rows_by_id,
+            }
+            stub_dir, kubectl = write_stub(tmp)
+            with open(os.path.join(stub_dir, "state.json"), "w", encoding="utf-8") as fh:
+                json.dump(state, fh)
+            env = driver_env(tmp, stub_dir, kubectl)
+            proc = run_driver(["--design", CAMPAIGN_DESIGN_JSON], env, timeout=1800)
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            self.assertIn("PADS campaign run", proc.stdout)
+            # The wait loop body must have executed: at least one
+            # non-terminal (Created) state response before the terminal
+            # Finished response. A loop that never runs its body
+            # (``until :; do``) polls zero times and fails on the
+            # pre-translation export instead.
+            state_queries = [
+                call for call in kubectl_calls(stub_dir) if "SELECT s.state" in call
+            ]
+            self.assertGreaterEqual(
+                len(state_queries),
+                2,
+                "the campaign wait loop must re-poll the scenario states until "
+                "every scenario is terminal; a loop that never runs its body "
+                "polls zero times (settlement: until :; do)",
+            )
+            last = proc.stdout.strip().splitlines()[-1]
+            run_id = last.split(" ")[3]
+            self.assertRegex(run_id, r"^pads-campaign-[0-9]{14}-[0-9a-f]{6}$")
+            evidence_dir = os.path.join(RESULTS_EVIDENCE_DIR, run_id)
+            try:
+                # The exported records are the terminal rows, not the
+                # pre-translation Created rows.
+                with open(
+                    os.path.join(evidence_dir, "scenario-status.json"),
+                    "r",
+                    encoding="utf-8",
+                ) as fh:
+                    records_out = json.load(fh)
+                self.assertEqual(len(records_out), len(records))
+                self.assertTrue(all(r["state"] == "Finished" for r in records_out))
+                self.assertTrue(all(r["container_image"] for r in records_out))
             finally:
                 self.cleanup_run_outputs(run_id)
 
