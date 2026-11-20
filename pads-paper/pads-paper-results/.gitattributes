@@ -1,0 +1,2 @@
+# Matplotlib-generated SVG font paths contain intentional trailing spaces.
+**/figures/*.svg whitespace=-trailing-space
