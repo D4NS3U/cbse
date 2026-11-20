@@ -1,0 +1,8 @@
+# PADS paper analysis/plotting environment (P6-R3).
+#
+# Installed into a temporary, untracked venv; never a repository artifact.
+# ``analyze.py`` and ``campaign.py`` are pure stdlib; ``plot-figures.py``
+# requires exactly this pinned matplotlib (with its numpy dependency pinned
+# for byte-stable deterministic SVG output).
+matplotlib==3.11.2
+numpy==2.5.4

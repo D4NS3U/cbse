@@ -1,0 +1,2 @@
+assert-results: PASS - 10 rows, exact 15-field contract, internal consistency, design values, 10 distinct effective seeds, count matches computed replications (10)
+assert-results: verdict summary - sample_mean=0.18495366722731538 half_width=0.008035197046423088 recomputed_verdict=met
