@@ -18,7 +18,9 @@
 # Gathers the run namespace's resources, events, pod descriptions,
 # SimulationExperiment YAML, per-pod container images, and per-pod logs
 # (current and previous container instances) so a failed smoke run can be
-# triaged from the artifacts alone. It is read-only against the cluster and
+# triaged from the artifacts alone. For Helm-installed runs it additionally
+# writes the release status with resources, the release history, and the
+# StatefulSet/PVC inventory. It is read-only against the cluster and
 # idempotent: if the target namespace does not exist it writes a note to
 # cluster-state.txt and exits 0. Typically invoked from smoke.sh's finish
 # trap after a run, success or failure.
@@ -29,6 +31,9 @@
 #   RUN_ID     (required) 1-30 lowercase DNS-label chars.
 #   CBSE_TEST_NAMESPACE (default cbse-e2e-<RUN_ID>) namespace to inspect.
 #   CBSE_ARTIFACT_DIR   (default <root>/artifacts/test/<RUN_ID>) output dir.
+#   HELM       (optional) pinned helm binary; defaults to bin/helm-v3.18.4
+#              under the repository root. The Helm diagnostics run only when
+#              the binary can see the release cbse in the namespace.
 #
 # Exit codes:
 #   0  diagnostics written, or the namespace is absent.
@@ -37,7 +42,11 @@
 # Side effects:
 #   Creates <artifact_dir>/logs/ and writes cluster-state.txt, events.txt,
 #   pod-descriptions.txt, simulationexperiments.yaml, images.txt, and
-#   logs/<pod>.log + logs/<pod>-previous.log. No cluster mutation.
+#   logs/<pod>.log + logs/<pod>-previous.log. For Helm runs it additionally
+#   writes helm-status-resources.txt, helm-history-diagnose.txt, and
+#   statefulsets-pvcs.txt. The Helm output never contains Secret data, the
+#   Helm manifest, or a decoded release Secret (status --show-resources lists
+#   deployed resource names only). No cluster mutation.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -68,6 +77,20 @@ fi
 "${kubectl_bin}" --kubeconfig "${kubeconfig}" get pods -n "${namespace}" \
   -o custom-columns='NAME:.metadata.name,IMAGE:.spec.containers[*].image,PHASE:.status.phase' \
   >"${artifact_dir}/images.txt" 2>&1 || true
+
+# Helm diagnostics (H5): written only when the pinned helm binary can see the
+# release cbse in the namespace. Status-with-resources lists deployed resource
+# names only (no manifests), and the history carries revisions/descriptions;
+# Secret data and the decoded release Secret are never written.
+helm_bin="${HELM:-${root}/bin/helm-${HELM_VERSION:-v3.18.4}}"
+if [[ -x "${helm_bin}" ]] && "${helm_bin}" status cbse -n "${namespace}" >/dev/null 2>&1; then
+  "${helm_bin}" status cbse -n "${namespace}" --show-resources \
+    >"${artifact_dir}/helm-status-resources.txt" 2>&1 || true
+  "${helm_bin}" history cbse -n "${namespace}" \
+    >"${artifact_dir}/helm-history-diagnose.txt" 2>&1 || true
+  "${kubectl_bin}" --kubeconfig "${kubeconfig}" get statefulsets,pvc -n "${namespace}" \
+    >"${artifact_dir}/statefulsets-pvcs.txt" 2>&1 || true
+fi
 
 while IFS= read -r pod; do
   [[ -n "${pod}" ]] || continue

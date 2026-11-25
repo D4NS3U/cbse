@@ -15,24 +15,42 @@
 
 # Shared source-image lock loader for the CBSE test harness.
 #
-# test/e2e/images.lock.env pins the five locked source images (BuildKit,
-# Python, PostgreSQL, the Translator Go builder, and the PPS Go builder)
-# and their provenance versions. They are immutable repository inputs with no
-# environment override: this function
-# reads the file verbatim, rejects duplicates and unknown keys, rejects any
-# externally supplied value for the same key, and validates that each image
-# entry is <name>@sha256:<64-lowercase-hex> with no tag. On success the ten
-# lock variables (BUILDER_IMAGE, BUILDER_VERSION, PYTHON_BASE_IMAGE,
-# PYTHON_BASE_VERSION, POSTGRES_IMAGE, POSTGRES_VERSION,
-# TRANSLATOR_GO_BUILDER_IMAGE, TRANSLATOR_GO_VERSION, PPS_GO_BUILDER_IMAGE,
-# PPS_GO_VERSION) are set in the caller's shell. The function returns
-# non-zero on any validation failure.
+# test/e2e/images.lock.env pins the seven locked source images (BuildKit,
+# the public Helm-hook kubectl shell image, NATS, Python, PostgreSQL, the
+# Translator Go builder, and the PPS Go builder) and their provenance
+# versions. They are immutable repository inputs with no environment
+# override: this function reads the file verbatim, rejects duplicates and
+# unknown keys, rejects any externally supplied value for the same key, and
+# validates that each image entry is <name>@sha256:<64-lowercase-hex> with
+# no tag. On success the fourteen lock variables (BUILDER_IMAGE,
+# BUILDER_VERSION, HELM_HOOK_KUBECTL_IMAGE, HELM_HOOK_KUBECTL_VERSION,
+# NATS_IMAGE, NATS_VERSION, PYTHON_BASE_IMAGE, PYTHON_BASE_VERSION,
+# POSTGRES_IMAGE, POSTGRES_VERSION, TRANSLATOR_GO_BUILDER_IMAGE,
+# TRANSLATOR_GO_VERSION, PPS_GO_BUILDER_IMAGE, PPS_GO_VERSION) are set in
+# the caller's shell. The function returns non-zero on any validation
+# failure.
+#
+# Lock provenance (H4 amendment, manager-ruled):
+#   NATS_IMAGE resolves the supported source docker.io/library/nats:2.11-alpine
+#   (tag 2.11.17-alpine3.22) to its immutable linux/amd64 manifest digest.
+#   HELM_HOOK_KUBECTL_IMAGE resolves the public kubectl+POSIX-shell source
+#   docker.io/alpine/k8s:1.32.5 (kubectl client v1.32.5, matching the
+#   repository KUBECTL_VERSION; /bin/sh present; no image-level USER, so the
+#   hook Pod's numeric UID 1000 restricted profile applies) to its immutable
+#   linux/amd64 manifest digest. The distroless registry.k8s.io/kubectl
+#   image is not usable for the hook Jobs: it carries no shell, and the
+#   registry validator must capture the .dockerconfigjson presence and
+#   non-empty state without ever decoding or printing it.
 load_image_lock() {
   local lock_file="$1"
   local key value line s
   local -a seen=()
-  for key in BUILDER_IMAGE BUILDER_VERSION PYTHON_BASE_IMAGE PYTHON_BASE_VERSION \
-            POSTGRES_IMAGE POSTGRES_VERSION TRANSLATOR_GO_BUILDER_IMAGE TRANSLATOR_GO_VERSION \
+  for key in BUILDER_IMAGE BUILDER_VERSION \
+            HELM_HOOK_KUBECTL_IMAGE HELM_HOOK_KUBECTL_VERSION \
+            NATS_IMAGE NATS_VERSION \
+            PYTHON_BASE_IMAGE PYTHON_BASE_VERSION \
+            POSTGRES_IMAGE POSTGRES_VERSION \
+            TRANSLATOR_GO_BUILDER_IMAGE TRANSLATOR_GO_VERSION \
             PPS_GO_BUILDER_IMAGE PPS_GO_VERSION; do
     [[ -z "${!key:-}" ]] || { echo "locked source image ${key} must not be overridden via the environment" >&2; return 1; }
   done
@@ -48,7 +66,7 @@ load_image_lock() {
     done
     seen+=("${key}")
     case "${key}" in
-      BUILDER_IMAGE|BUILDER_VERSION|PYTHON_BASE_IMAGE|PYTHON_BASE_VERSION|POSTGRES_IMAGE|POSTGRES_VERSION|TRANSLATOR_GO_BUILDER_IMAGE|TRANSLATOR_GO_VERSION|PPS_GO_BUILDER_IMAGE|PPS_GO_VERSION)
+      BUILDER_IMAGE|BUILDER_VERSION|HELM_HOOK_KUBECTL_IMAGE|HELM_HOOK_KUBECTL_VERSION|NATS_IMAGE|NATS_VERSION|PYTHON_BASE_IMAGE|PYTHON_BASE_VERSION|POSTGRES_IMAGE|POSTGRES_VERSION|TRANSLATOR_GO_BUILDER_IMAGE|TRANSLATOR_GO_VERSION|PPS_GO_BUILDER_IMAGE|PPS_GO_VERSION)
         printf -v "${key}" '%s' "${value}"
         ;;
       *)
@@ -56,7 +74,7 @@ load_image_lock() {
         ;;
     esac
   done <"${lock_file}"
-  for key in BUILDER_IMAGE PYTHON_BASE_IMAGE POSTGRES_IMAGE TRANSLATOR_GO_BUILDER_IMAGE PPS_GO_BUILDER_IMAGE; do
+  for key in BUILDER_IMAGE HELM_HOOK_KUBECTL_IMAGE NATS_IMAGE PYTHON_BASE_IMAGE POSTGRES_IMAGE TRANSLATOR_GO_BUILDER_IMAGE PPS_GO_BUILDER_IMAGE; do
     [[ "${!key}" =~ ^[^@:]+@sha256:[0-9a-f]{64}$ ]] || {
       echo "${key} must be <name>@sha256:<64-lowercase-hex> with no tag: ${!key}" >&2
       return 1

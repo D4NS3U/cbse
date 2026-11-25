@@ -1,0 +1,26 @@
+# Namespaced Role for the Helm lifecycle hooks. Least privilege, no
+# wildcards:
+#   * get on the single named installation-owner Secret cbse-registry-auth
+#     (read-only validation; the chart never owns, mutates, or deletes it);
+#   * list on SimulationExperiments (the pre-delete guard checks whether any
+#     experiment remains in the release namespace and never touches them).
+# Hook weight -10 places this Role before the hook Jobs (weight 0) in every
+# hook phase.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cbse-helm-hooks
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: "pre-install,pre-upgrade,pre-delete"
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: "before-hook-creation,hook-succeeded"
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["cbse-registry-auth"]
+    verbs: ["get"]
+  - apiGroups: ["experiment.cbse.terministic.de"]
+    resources: ["simulationexperiments"]
+    verbs: ["list"]

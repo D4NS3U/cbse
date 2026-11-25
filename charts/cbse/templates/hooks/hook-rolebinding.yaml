@@ -1,0 +1,21 @@
+# RoleBinding that scopes the hook Role to the dedicated hook
+# ServiceAccount in the release namespace. Hook weight -10 places it before
+# the hook Jobs (weight 0).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cbse-helm-hooks
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: "pre-install,pre-upgrade,pre-delete"
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: "before-hook-creation,hook-succeeded"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cbse-helm-hooks
+subjects:
+  - kind: ServiceAccount
+    name: cbse-helm-hooks
+    namespace: {{ .Release.Namespace }}

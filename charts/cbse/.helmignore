@@ -1,0 +1,15 @@
+# Git
+.git
+.gitignore
+*.tar.gz
+*.tgz
+
+# Temp files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS files
+.DS_Store
+._*

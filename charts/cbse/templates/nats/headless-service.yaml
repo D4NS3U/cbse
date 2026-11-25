@@ -1,0 +1,22 @@
+# Headless governing Service for the sm-eds-nats StatefulSet. clusterIP
+# None gives the single replica its stable per-Pod DNS name;
+# publishNotReadyAddresses is not enabled, so clients only resolve ready
+# addresses. The ports mirror the client Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cbse.name.natsService" . }}-headless
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app: {{ include "cbse.name.natsService" . }}
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitor
+      port: 8222
+      targetPort: monitor

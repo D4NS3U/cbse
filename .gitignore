@@ -8,3 +8,4 @@ scenario-manager/.gocache/
 __pycache__/
 .DS_Store
 /.pi/
+/bin/helm-*

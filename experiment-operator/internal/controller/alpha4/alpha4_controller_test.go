@@ -770,6 +770,12 @@ func TestAlpha4HappyPathProvisioning(t *testing.T) {
 	if !hasMount(ppsCtr, "resultdb-connection", true) {
 		t.Fatalf("pps missing read-only resultdb-connection mount: %+v", ppsCtr.VolumeMounts)
 	}
+	// Kubelet image-pull authorization: exactly one cbse-registry-auth pull
+	// Secret reference; the registry Secret is never mounted or injected.
+	if len(ppsDep.Spec.Template.Spec.ImagePullSecrets) != 1 ||
+		ppsDep.Spec.Template.Spec.ImagePullSecrets[0].Name != "cbse-registry-auth" {
+		t.Fatalf("pps imagePullSecrets = %#v, want exactly [cbse-registry-auth]", ppsDep.Spec.Template.Spec.ImagePullSecrets)
+	}
 	// The exact alpha4 PPS env contract: five fixed values plus the three
 	// downward-API identity vars, nothing else.
 	if len(ppsCtr.Env) != 8 {
@@ -1412,7 +1418,9 @@ func TestAlpha4EDSProvisioningContract(t *testing.T) {
 		t.Fatalf("eds security context = %#v, want the restricted profile (UID/GID 1000, non-root, no escalation, runtime-default seccomp, drop ALL)", sc)
 	}
 	// The detaildb connection Secret is the only volume, mounted read-only at
-	// /detaildb-connection. No registry-auth surface: the EDS pulls nothing.
+	// /detaildb-connection. No registry-auth mount or env surface: no
+	// credentials are injected into the EDS; only the kubelet pull-Secret
+	// reference below is present.
 	if len(dep.Spec.Template.Spec.Volumes) != 1 {
 		t.Fatalf("eds Deployment volumes = %#v, want exactly [detaildb-connection]", dep.Spec.Template.Spec.Volumes)
 	}
@@ -1423,8 +1431,9 @@ func TestAlpha4EDSProvisioningContract(t *testing.T) {
 	if len(ctr.VolumeMounts) != 1 || ctr.VolumeMounts[0].Name != "detaildb-connection" || ctr.VolumeMounts[0].MountPath != "/detaildb-connection" || !ctr.VolumeMounts[0].ReadOnly {
 		t.Fatalf("eds mounts = %#v, want exactly [detaildb-connection at /detaildb-connection, read-only]", ctr.VolumeMounts)
 	}
-	if len(dep.Spec.Template.Spec.ImagePullSecrets) != 0 {
-		t.Fatalf("eds imagePullSecrets = %#v, want none (the EDS pulls nothing)", dep.Spec.Template.Spec.ImagePullSecrets)
+	if len(dep.Spec.Template.Spec.ImagePullSecrets) != 1 ||
+		dep.Spec.Template.Spec.ImagePullSecrets[0].Name != "cbse-registry-auth" {
+		t.Fatalf("eds imagePullSecrets = %#v, want exactly [cbse-registry-auth]", dep.Spec.Template.Spec.ImagePullSecrets)
 	}
 	// The exact alpha4 EDS env contract: two fixed values plus the three
 	// downward-API identity vars, nothing else.

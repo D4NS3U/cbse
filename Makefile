@@ -7,6 +7,8 @@ GOCACHE ?= $(ROOT)/.cache/go-build
 export GOCACHE
 KUBECTL_VERSION ?= v1.32.5
 KUBECTL ?= $(ROOT)/bin/kubectl-$(KUBECTL_VERSION)
+HELM_VERSION ?= v3.18.4
+HELM ?= $(ROOT)/bin/helm-$(HELM_VERSION)
 RUN_ID ?=
 # CBSE_REGISTRY is required for the image-build and cluster targets. It is
 # environment-provided and has no default in this repository; see
@@ -16,19 +18,26 @@ CBSE_REGISTRY ?=
 TEST_IMAGE_VERSION ?= $(shell date -u +%-y.%-m.%-d)
 CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,eds,translator,runner-base,scenario-detail-database,pps
 
-.PHONY: help test-fast test-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools verify-generated
+.PHONY: help test-fast test-smoke test-helm-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools helm-tools helm-lint helm-render test-helm-chart test-helm-lifecycle helm-image-values verify-generated
 
 help:
 	@echo "CBSE test commands:"
 	@echo "  make test-fast"
 	@echo "  make publish-test-images TEST_IMAGE_VERSION=$(TEST_IMAGE_VERSION)"
 	@echo "  make test-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
+	@echo "  make test-helm-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
 	@echo "  make test-e2e-retained KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
 	@echo "  make test-diagnose RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 	@echo "  make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/config"
+	@echo "  make helm-lint"
+	@echo "  make helm-render"
+	@echo "  make test-helm-chart"
+	@echo "  make test-helm-lifecycle KUBECONFIG=/path/to/config HELM_IMAGES_ENV=/path/to/digest-images.env CBSE_EXPECTED_CONTEXT=<context>"
+	@echo "  make helm-image-values IMAGES_ENV=/path/to/digest-images.env OUTPUT=/path/to/private-values.yaml"
 
 test-fast: verify-generated
 	$(TEST_DIR)/harness/test-harness.sh
+	$(MAKE) test-helm-chart
 	@unformatted="$$(gofmt -l $$(find experiment-operator scenario-manager component-templates/translator component-templates/post-processing-service component-templates/experimental-design-service $(TEST_DIR)/e2e -name '*.go' -type f))"; \
 	if [[ -n "$${unformatted}" ]]; then echo "Unformatted Go files:"; echo "$${unformatted}"; exit 1; fi
 	cd experiment-operator && go vet ./...
@@ -58,6 +67,39 @@ test-tools: $(KUBECTL)
 $(KUBECTL):
 	KUBECTL_VERSION=$(KUBECTL_VERSION) OUTPUT=$@ $(TEST_DIR)/harness/install-kubectl.sh
 
+helm-tools: $(HELM)
+
+$(HELM):
+	HELM_VERSION=$(HELM_VERSION) OUTPUT=$@ $(TEST_DIR)/harness/install-helm.sh
+
+helm-lint: helm-tools
+	$(HELM) lint charts/cbse -f $(TEST_DIR)/helm/values-render.yaml
+
+helm-render: helm-tools
+	@tmp="$$(mktemp)"; \
+	$(HELM) template cbse charts/cbse --namespace cbse-system --include-crds -f $(TEST_DIR)/helm/values-render.yaml >"$$tmp"; \
+	echo "helm-render: $$(grep -c '^kind: ' "$$tmp") rendered Kubernetes document(s)"; \
+	rm -f "$$tmp"
+
+test-helm-chart: helm-tools
+	HELM="$(HELM)" $(TEST_DIR)/harness/test-helm-chart.sh
+
+# Helm lifecycle safety acceptance (H4): expected failed pre-install hook,
+# install with copied registry Secret, credential/PVC/StatefulSet stability
+# across restart and upgrade, blocked pre-delete guard with a live CR,
+# successful uninstall, CRD retention, and CRs-first teardown. Requires a
+# digest-pinned images.env (HELM_IMAGES_ENV) and the dedicated cluster.
+test-helm-lifecycle: test-tools helm-tools
+	KUBECTL="$(KUBECTL)" HELM="$(HELM)" $(TEST_DIR)/harness/helm-lifecycle.sh
+
+# Generate the private installation-owner image-values file (H6) from a
+# digest-pinned images.env plus the repository image lock. OUTPUT must be
+# outside the tracked repository or under the ignored artifacts/ directory.
+helm-image-values:
+	@test -n "$(IMAGES_ENV)" || { echo "IMAGES_ENV is required (digest-pinned images.env)" >&2; exit 2; }
+	@test -n "$(OUTPUT)" || { echo "OUTPUT is required (private values file destination)" >&2; exit 2; }
+	IMAGES_ENV="$(IMAGES_ENV)" OUTPUT="$(OUTPUT)" $(TEST_DIR)/harness/generate-helm-values.sh
+
 publish-test-images:
 	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }
 	CBSE_REGISTRY="$(CBSE_REGISTRY)" TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" \
@@ -69,6 +111,13 @@ test-smoke: test-tools
 	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }
 	KUBECTL="$(KUBECTL)" CBSE_REGISTRY="$(CBSE_REGISTRY)" \
 	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" $(TEST_DIR)/harness/smoke.sh
+
+# Helm-installed smoke (H5): the existing test-smoke recipe with the Helm
+# shared-stack installer selected (CBSE_STACK_INSTALLER=helm). The pinned
+# Helm binary comes from helm-tools; the private image values are generated
+# in-run from the run's own images.env plus the repository image lock.
+test-helm-smoke: helm-tools
+	CBSE_STACK_INSTALLER=helm $(MAKE) test-smoke TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)"
 
 test-e2e-retained: test-tools
 	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }

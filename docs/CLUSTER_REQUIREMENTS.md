@@ -1,6 +1,6 @@
 # CBSE cluster requirements
 
-This document states the runtime cluster requirements for installing and running CBSE. It is the single source that the future Helm chart's prerequisites and the user-facing install guide should reference. Build-time Go module versions and the smoke harness's locked source images are separate concerns; this page is about the cluster that runs CBSE.
+This document states the runtime cluster requirements for installing and running CBSE. It is the single source that the `cbse` Helm chart's prerequisites ([`charts/cbse/README.md`](../charts/cbse/README.md)) and the user-facing install guide ([`HELM_INSTALLATION.md`](HELM_INSTALLATION.md)) reference. Build-time Go module versions and the smoke harness's locked source images are separate concerns; this page is about the cluster that runs CBSE.
 
 ## Kubernetes version
 
@@ -83,12 +83,15 @@ CBSE's runner Job template allows the Kubernetes `native-sidecar` containers fea
 The mandatory smoke suite additionally requires:
 
 - At least one `Ready` node whose `kubernetes.io/arch` label is exactly `amd64` (the smoke image set is `linux/amd64` only). The node check does not inspect taints, allocatable capacity, or resource pressure.
-- A reachable `registry.unibw.de` Docker configuration (`CBSE_REGISTRY_AUTH_FILE`) authorizing pull/push and artifact list/read/delete in the Harbor project `i31bdase`. Outside the smoke profile the deployment owner supplies the `cbse-registry-auth` `kubernetes.io/dockerconfigjson` Secret independently; CBSE fixes its name and validation, not a production account.
+- A registry you control, reachable from the harness agent and the test nodes, configured through `CBSE_REGISTRY` (required, environment-provided, never defaulted in this repository) with a Docker configuration (`CBSE_REGISTRY_AUTH_FILE`) authorizing pull/push and artifact list/read/delete. Outside the smoke profile the deployment owner supplies the `cbse-registry-auth` `kubernetes.io/dockerconfigjson` Secret independently; CBSE fixes its name and validation, not a production account.
 
-## Summary for a future Helm chart
+## Summary for the Helm chart
 
 - Kubernetes >= 1.30.
 - `UserNamespacesSupport` feature gate enabled (kube-apiserver, kube-controller-manager, kubelet).
 - Experiment namespaces labeled `pod-security.kubernetes.io/enforce=privileged` (audit/warn may stay `restricted`).
-- A `cbse-registry-auth` Docker-config Secret in each experiment namespace.
+- A `cbse-registry-auth` Docker-config Secret in the release/experiment namespace (installation-owner managed; exactly one per release namespace).
+- A cluster default StorageClass or explicit chart `persistence.storageClass` values; one chart release per namespace.
 - The checked-in CRD serves and stores only `experiment.cbse.terministic.de/alpha4`; alpha2/alpha3 must not be served (the one-time breaking upgrade is a cluster-admin operation the chart must document, not perform automatically).
+
+The full installation workflow — including digest-pinned release values and the guarded uninstall — is in [`HELM_INSTALLATION.md`](HELM_INSTALLATION.md).

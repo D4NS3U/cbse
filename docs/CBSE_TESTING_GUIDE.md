@@ -7,7 +7,7 @@ This guide is the human-facing entry point for the current CBSE implementation a
 - **Module tier (fully public).** Pure Go toolchain, with no cluster and no registry involved. `make test-fast` — which includes `make verify-generated` — is the gate for every code change; the required-tier contract lives in [`AGENTS.md`](../AGENTS.md).
 - **Cluster tier (environment-gated).** The full-stack smoke suite is complete, but it runs only on infrastructure you provide: a conformant cluster ([`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md)), a registry you control (`CBSE_REGISTRY` — required, environment-provided, never defaulted in this repository), a dedicated Docker auth config (`CBSE_REGISTRY_AUTH_FILE`), and an explicit `KUBECONFIG`. The harness owns its ephemeral `cbse-e2e-<run-id>` namespace lifecycle and cleanup; it never deploys test resources to `default` or `kube-system`.
 
-> **Cluster requirements**: CBSE needs Kubernetes >= 1.30 with the `UserNamespacesSupport` feature gate enabled (for the reference Translator's rootless BuildKit sidecar) and experiment namespaces that permit the sidecar's unconfined seccomp/AppArmor profiles (Pod Security enforce `privileged`). See [`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md) for the exact enablement steps, prerequisites, and verification; it is the source a future Helm chart's prerequisites must reference.
+> **Cluster requirements**: CBSE needs Kubernetes >= 1.30 with the `UserNamespacesSupport` feature gate enabled (for the reference Translator's rootless BuildKit sidecar) and experiment namespaces that permit the sidecar's unconfined seccomp/AppArmor profiles (Pod Security enforce `privileged`). See [`CLUSTER_REQUIREMENTS.md`](CLUSTER_REQUIREMENTS.md) for the exact enablement steps, prerequisites, and verification; it is the source the `cbse` Helm chart's prerequisites reference, and [`HELM_INSTALLATION.md`](HELM_INSTALLATION.md) is the user-facing install guide.
 
 ## 1. What CBSE currently does
 
@@ -85,13 +85,65 @@ Component-local Go tests remain under `experiment-operator/test/` because that i
 | Command | Use it when | What it does not do |
 | --- | --- | --- |
 | `make test-fast` | Any Go, CRD, Dockerfile, manifest, or test-harness change | Does not contact a cluster or build/push images |
+| `make helm-lint` | Any chart template, values, or schema change | Does not contact a cluster or render to a file |
+| `make helm-render` | Any chart template change (render with `--include-crds` into a temp file) | Does not contact a cluster |
+| `make test-helm-chart` | Chart logic, values, schema, helper, or chart contract-test change | Does not contact a cluster or mutate anything |
 | `make publish-test-images` | You need new component test images in your `CBSE_REGISTRY` | Does not deploy to a cluster |
 | `make test-smoke` | Operator, Scenario Manager, mock, image, or Kubernetes integration change | Does not retain a namespace unless asked |
+| `make test-helm-smoke` | The full suite must run against a chart-installed shared stack | Is `test-smoke` with `CBSE_STACK_INSTALLER=helm`; same retention rules |
 | `make test-e2e-retained` | You need a smoke run retained unconditionally for active debugging | Retains its namespace by design — clean it with `make test-clean RUN_ID=<id>` |
+| `make test-helm-lifecycle` | You need chart install → upgrade → guarded-uninstall acceptance evidence | Does not build images; consumes digest-pinned images from `HELM_IMAGES_ENV` |
 | `make test-diagnose RUN_ID=<id>` | A retained failure needs fresh diagnostics | Does not change workloads |
 | `make test-clean RUN_ID=<id>` | `CBSE_KEEP_ON_FAILURE=1` retained a failed namespace | Does not delete the shared CRD or the harness's helper namespaces |
 
-`CBSE_REGISTRY` is required and environment-provided for `publish-test-images`, `test-smoke`, and `test-e2e-retained`; those targets fail fast when it is unset. Set `CBSE_KEEP_NAMESPACE=1` on `make test-smoke` to retain a successful run's namespace for manual inspection. To reuse already-published images instead of building, set `SKIP_BUILD=1` and supply every `*_IMAGE` reference as an immutable digest; a mutable (floating-tag) reference is rejected by preflight. Clean a retained namespace with the ownership-checked `make test-clean RUN_ID=<id>` command when finished.
+`CBSE_REGISTRY` is required and environment-provided for `publish-test-images`, `test-smoke`, `test-helm-smoke`, and `test-e2e-retained`; those targets fail fast when it is unset. Set `CBSE_KEEP_NAMESPACE=1` on `make test-smoke` to retain a successful run's namespace for manual inspection. To reuse already-published images instead of building, set `SKIP_BUILD=1` and supply every `*_IMAGE` reference as an immutable digest; a mutable (floating-tag) reference is rejected by preflight. Clean a retained namespace with the ownership-checked `make test-clean RUN_ID=<id>` command when finished.
+
+### Helm chart tiers
+
+The `cbse` chart (`charts/cbse/`) has its own verification tiers, all run with
+the repository's pinned Helm binary (`make helm-tools` installs it under the
+ignored root `bin/` directory):
+
+- **Static (hermetic):** `make helm-lint`, `make helm-render`, and
+  `make test-helm-chart` lint, render, and assert the chart contract (values
+  schema, fixed names, digest-only images, CRD lockstep, Secret hygiene)
+  against the public `example.invalid` fixture values — no cluster, no
+  network, no credentials.
+- **Lifecycle acceptance (dedicated cluster):**
+  ```bash
+  make test-helm-lifecycle \
+    KUBECONFIG=/path/to/kubeconfig \
+    HELM_IMAGES_ENV=/path/to/digest-images.env \
+    CBSE_EXPECTED_CONTEXT=<your-context>
+  ```
+  proves the expected missing-Secret install failure, a successful
+  `--wait --atomic` install, marker survival across NATS/Core DB Pod restarts,
+  credential/PVC stability across upgrade, the expected blocked uninstall while
+  an experiment remains, the CRs-first final uninstall, and the retained
+  CRD/PVC/credential-Secret behavior.
+- **Chart-installed smoke:** `make test-helm-smoke` runs the unchanged
+  15-spec suite with `CBSE_STACK_INSTALLER=helm` (the harness generates the
+  private digest values, installs the release with the pinned Helm, and never
+  creates `core-db-credentials` or patches the default ServiceAccount in Helm
+  mode). The same suite runs in `manifest` mode by default; any other
+  `CBSE_STACK_INSTALLER` value fails before cluster mutation. A retained
+  Helm-installed interactive stack is produced the same way as the manifest
+  one:
+  ```bash
+  CBSE_STACK_INSTALLER=helm make test-e2e-retained \
+    KUBECONFIG=/path/to/kubeconfig \
+    CBSE_REGISTRY=<your-registry> \
+    CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
+  ```
+
+Teardown is installer-aware and CRs-first in both modes: `SimulationExperiment`
+resources are deleted with wait while the Scenario Manager is alive, the Helm
+release is then uninstalled in Helm mode, then the namespace is deleted and
+the Lease released. `make test-clean RUN_ID=<id>` performs the same order for
+a retained or failed run and surfaces a failed release uninstall instead of
+ignoring it. Every example above uses placeholders; `KUBECONFIG` must point at
+the dedicated test cluster and the harness refuses any other cluster
+identity.
 
 The fast suite checks generated code, formatting, harness self-tests, vetting
 (operator, Scenario Manager, and the isolated Translator module), Scenario
@@ -159,7 +211,7 @@ Read artifacts in this order:
 3. `preflight.txt` — selected context, API server, server version, and safety checks.
 4. `images.env` — the exact digest-pinned images used by that run.
 5. `database.txt` — captured scenario rows before the final deletion assertion. A successful smoke run should show four deterministic `Created` scenario rows.
-6. `simulationexperiments.yaml`, `stack.yaml`, and `experiment.yaml` — sanitized resources used in the run; Secrets are intentionally excluded.
+6. `simulationexperiments.yaml`, `stack.yaml`, and `experiment.yaml` — sanitized resources used in the run; Secrets are intentionally excluded. In Helm mode the safe Helm artifacts replace `stack.yaml`: `stack-installer.txt`, `helm-values.yaml` (the generated private digest values), `helm-status.txt`, `helm-history.txt`, and `objects-inventory.txt` — never `helm get manifest` output or Secret data.
 7. `events.txt`, `cluster-state.txt`, and `pod-descriptions.txt` — the fastest way to locate scheduling, readiness, or image-pull failures.
 8. `logs/` — component logs, including Scenario Manager, operator, NATS, PostgreSQL, and experiment-owned workload logs.
 

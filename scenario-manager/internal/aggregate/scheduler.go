@@ -14,8 +14,9 @@
 
 // Package aggregate implements the scheduler-cadence scenario-aggregate
 // verdict pass of the Scenario Manager. Per tick it enumerates the
-// cluster-wide SimulationExperiments (the same namespace scope as the
-// informer's watch), gates each through lifecycle.AdmitExperiment, and for
+// SimulationExperiments of the single watched namespace (the same namespace
+// scope as the informer's watch), gates each through
+// lifecycle.AdmitExperiment, and for
 // every admitted, not-yet-reported experiment aggregates the scenario-state
 // counts over the Core DB and reports the verdict through the status
 // subresource.

@@ -33,16 +33,20 @@ import (
 // Config fixes the informer's Kubernetes surface. The scheme must know the
 // alpha4 SimulationExperiment and the built-in Kubernetes types. The REST
 // config is in-cluster in production; tests inject an envtest config.
+// Namespace is the single release/experiment namespace the informer watches:
+// v0.1 is a single-namespace installation, so it must be non-empty and no
+// cluster-wide or multi-namespace cache is supported.
 type Config struct {
 	Scheme     *runtime.Scheme
 	RESTConfig *rest.Config
+	Namespace  string
 }
 
-// Informer is the cluster-wide alpha4 SimulationExperiment informer. It owns
-// a controller-runtime cache and a Dispatcher. Start launches the cache,
-// attaches add/update/delete handlers, waits for the initial sync, and then
-// dispatches lifecycle events until ctx is cancelled. Shutdown joins the
-// dispatcher's in-flight actions.
+// Informer is the release-namespace alpha4 SimulationExperiment informer. It
+// owns a controller-runtime cache scoped to exactly the configured namespace
+// and a Dispatcher. Start launches the cache, attaches add/update/delete
+// handlers, waits for the initial sync, and then dispatches lifecycle events
+// until ctx is cancelled. Shutdown joins the dispatcher's in-flight actions.
 type Informer struct {
 	cfg      Config
 	dispatch *Dispatcher
@@ -52,15 +56,39 @@ type Informer struct {
 // NewInformer constructs an informer from a pre-built Dispatcher and a cache
 // config. The Dispatcher is built separately (NewProductionDispatcher or
 // NewDispatcher) so the cache wiring is decoupled from the dispatch
-// dependencies.
+// dependencies. The configured watch namespace must be non-empty: the v0.1
+// installation has no cluster-wide fallback.
 func NewInformer(cfg Config, dispatch *Dispatcher) (*Informer, error) {
 	if cfg.RESTConfig == nil {
 		return nil, fmt.Errorf("informer REST config must not be nil")
+	}
+	if cfg.Namespace == "" {
+		return nil, fmt.Errorf("informer watch namespace must not be empty")
 	}
 	if dispatch == nil {
 		return nil, fmt.Errorf("dispatcher must not be nil")
 	}
 	return &Informer{cfg: cfg, dispatch: dispatch}, nil
+}
+
+// cacheOptions returns the controller-runtime cache options for the
+// informer: the scheme (falling back to the standard alpha4 scheme when the
+// config carries none) plus exactly the configured release namespace, and
+// nothing else. It is the testable seam between the configured namespace and
+// the cache construction.
+func (i *Informer) cacheOptions() (crcache.Options, error) {
+	scheme := i.cfg.Scheme
+	if scheme == nil {
+		var err error
+		scheme, err = buildScheme()
+		if err != nil {
+			return crcache.Options{}, err
+		}
+	}
+	return crcache.Options{
+		Scheme:            scheme,
+		DefaultNamespaces: map[string]crcache.Config{i.cfg.Namespace: {}},
+	}, nil
 }
 
 // Dispatcher returns the underlying Dispatcher so the caller can inspect
@@ -74,15 +102,11 @@ func (i *Informer) Dispatcher() *Dispatcher { return i.dispatch }
 func (i *Informer) Start(ctx context.Context) error {
 	i.dispatch.SetRootContext(ctx)
 
-	scheme := i.cfg.Scheme
-	if scheme == nil {
-		var err error
-		scheme, err = buildScheme()
-		if err != nil {
-			return err
-		}
+	opts, err := i.cacheOptions()
+	if err != nil {
+		return err
 	}
-	cache, err := crcache.New(i.cfg.RESTConfig, crcache.Options{Scheme: scheme})
+	cache, err := crcache.New(i.cfg.RESTConfig, opts)
 	if err != nil {
 		return fmt.Errorf("create informer cache: %w", err)
 	}

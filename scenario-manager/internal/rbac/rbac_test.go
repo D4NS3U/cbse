@@ -58,7 +58,8 @@ func errClient(err error) kubernetes.Interface {
 }
 
 func TestRequiredChecksCoversExactContract(t *testing.T) {
-	checks := RequiredChecks()
+	const watchNS = "cbse-system"
+	checks := RequiredChecks(watchNS)
 	want := []Check{
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "get"},
 		{Group: Alpha4ExperimentGroup, Resource: "simulationexperiments", Verb: "list"},
@@ -73,6 +74,9 @@ func TestRequiredChecksCoversExactContract(t *testing.T) {
 		{Group: "", Resource: "secrets", Verb: "get", Name: RegistrySecretName},
 		{Group: "", Resource: "serviceaccounts", Verb: "get"},
 	}
+	for i := range want {
+		want[i].Namespace = watchNS
+	}
 	if len(checks) != len(want) {
 		t.Fatalf("RequiredChecks has %d entries, want %d", len(checks), len(want))
 	}
@@ -83,9 +87,22 @@ func TestRequiredChecksCoversExactContract(t *testing.T) {
 	}
 }
 
+// TestRequiredChecksScopesEveryCheckToNamespace pins the v0.1 namespaced
+// contract: every required check carries the given release namespace, and no
+// check is cluster-wide.
+func TestRequiredChecksScopesEveryCheckToNamespace(t *testing.T) {
+	for _, ns := range []string{"cbse-system", "a", "exp-ns-2"} {
+		for _, c := range RequiredChecks(ns) {
+			if c.Namespace != ns {
+				t.Fatalf("check %+v has Namespace %q, want %q", c, c.Namespace, ns)
+			}
+		}
+	}
+}
+
 func TestVerifyAllAllowedReturnsNil(t *testing.T) {
 	cs := policyClient(func(c Check) (bool, string) { return true, "ok" })
-	if _, err := Verify(context.Background(), cs); err != nil {
+	if _, err := Verify(context.Background(), cs, "cbse-system"); err != nil {
 		t.Fatalf("Verify with all allowed: unexpected error %v", err)
 	}
 }
@@ -97,7 +114,7 @@ func TestVerifyDeniedJobDeleteIsFatal(t *testing.T) {
 		}
 		return true, "ok"
 	})
-	_, err := Verify(context.Background(), cs)
+	_, err := Verify(context.Background(), cs, "cbse-system")
 	if err == nil {
 		t.Fatal("expected fatal error when jobs/delete is denied")
 	}
@@ -124,7 +141,7 @@ func TestVerifyDeniedExperimentPatchIsFatal(t *testing.T) {
 		}
 		return true, "ok"
 	})
-	if _, err := Verify(context.Background(), cs); err == nil {
+	if _, err := Verify(context.Background(), cs, "cbse-system"); err == nil {
 		t.Fatal("expected fatal error when experiment patch is denied")
 	}
 }
@@ -136,7 +153,7 @@ func TestVerifyDeniedExperimentStatusPatchIsFatal(t *testing.T) {
 		}
 		return true, "ok"
 	})
-	_, err := Verify(context.Background(), cs)
+	_, err := Verify(context.Background(), cs, "cbse-system")
 	if err == nil {
 		t.Fatal("expected fatal error when the experiment status patch is denied")
 	}
@@ -166,7 +183,7 @@ func TestVerifyDeniedSecretGetOnWrongNameSucceedsForNamedCheck(t *testing.T) {
 		}
 		return true, "ok"
 	})
-	if _, err := Verify(context.Background(), cs); err != nil {
+	if _, err := Verify(context.Background(), cs, "cbse-system"); err != nil {
 		t.Fatalf("Verify with named-secret allowed: %v", err)
 	}
 }
@@ -179,7 +196,7 @@ func TestVerifyAggregatesMultipleDenials(t *testing.T) {
 		}
 		return true, "ok"
 	})
-	_, err := Verify(context.Background(), cs)
+	_, err := Verify(context.Background(), cs, "cbse-system")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -195,7 +212,7 @@ func TestVerifyAggregatesMultipleDenials(t *testing.T) {
 
 func TestVerifyReviewCallErrorIsFatal(t *testing.T) {
 	cs := errClient(errors.New("apiserver unavailable"))
-	_, err := Verify(context.Background(), cs)
+	_, err := Verify(context.Background(), cs, "cbse-system")
 	if err == nil {
 		t.Fatal("expected fatal error when the review call fails")
 	}
@@ -214,22 +231,57 @@ func TestVerifyReviewCallErrorIsFatal(t *testing.T) {
 }
 
 func TestVerifyEvaluatesEveryRequiredCheck(t *testing.T) {
+	const watchNS = "cbse-system"
 	seen := map[Check]bool{}
 	cs := policyClient(func(c Check) (bool, string) {
 		seen[Check{Group: c.Group, Resource: c.Resource, Verb: c.Verb, Name: c.Name, Subresource: c.Subresource}] = true
 		return true, "ok"
 	})
-	if _, err := Verify(context.Background(), cs); err != nil {
+	if _, err := Verify(context.Background(), cs, watchNS); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	for _, c := range RequiredChecks() {
+	for _, c := range RequiredChecks(watchNS) {
 		key := Check{Group: c.Group, Resource: c.Resource, Verb: c.Verb, Name: c.Name, Subresource: c.Subresource}
 		if !seen[key] {
 			t.Fatalf("check not evaluated: %+v", c)
 		}
 	}
-	if len(seen) != len(RequiredChecks()) {
-		t.Fatalf("evaluated %d distinct checks, want %d", len(seen), len(RequiredChecks()))
+	if len(seen) != len(RequiredChecks(watchNS)) {
+		t.Fatalf("evaluated %d distinct checks, want %d", len(seen), len(RequiredChecks(watchNS)))
+	}
+}
+
+// TestVerifyScopesEveryReviewToTheReleaseNamespace pins the v0.1 runtime
+// contract: every SelfSubjectAccessReview issued at startup carries the
+// release namespace, so a namespaced Role is sufficient and no cluster-wide
+// authorization is required.
+func TestVerifyScopesEveryReviewToTheReleaseNamespace(t *testing.T) {
+	const watchNS = "cbse-system"
+	var seen []string
+	cs := policyClient(func(c Check) (bool, string) {
+		seen = append(seen, c.Namespace)
+		return true, "ok"
+	})
+	if _, err := Verify(context.Background(), cs, watchNS); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if len(seen) != len(RequiredChecks(watchNS)) {
+		t.Fatalf("issued %d reviews, want %d", len(seen), len(RequiredChecks(watchNS)))
+	}
+	for _, ns := range seen {
+		if ns != watchNS {
+			t.Fatalf("review issued with namespace %q, want %q", ns, watchNS)
+		}
+	}
+}
+
+// TestVerifyRejectsEmptyNamespace pins that the SM has no cluster-wide
+// fallback: an empty watch namespace is a wiring error, not a silent
+// upgrade to cluster-wide checks.
+func TestVerifyRejectsEmptyNamespace(t *testing.T) {
+	cs := policyClient(func(c Check) (bool, string) { return true, "ok" })
+	if _, err := Verify(context.Background(), cs, ""); err == nil {
+		t.Fatal("Verify with an empty namespace must return an error")
 	}
 }
 

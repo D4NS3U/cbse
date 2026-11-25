@@ -16,15 +16,18 @@
 // Scenario Manager starts informers, NATS consumers, scenario selection,
 // runner-start discovery, or observation, it verifies that its
 // ServiceAccount holds every workload verb and resource the alpha4 contract
-// requires, across namespaces. A denied check is a fatal installation error
+// requires, scoped to the single release/experiment namespace the SM
+// watches. A denied check is a fatal installation error
 // that prevents startup because the deployment cannot execute its contract.
 //
 // The checks use Kubernetes SelfSubjectAccessReview so the verification probes
 // the effective RBAC decision (including bound ServiceAccount tokens and
 // role bindings) rather than reading Role objects, which SM is not granted.
-// Per-scenario runtime Forbidden responses during reconciliation do not call
-// this package; they fail only the affected scenario and never terminate the
-// process.
+// Every check is namespaced: v0.1 is a single-namespace installation, so the
+// checks are scoped to the release namespace and no cluster-wide check is
+// issued. Per-scenario runtime Forbidden responses during reconciliation do
+// not call this package; they fail only the affected scenario and never
+// terminate the process.
 package rbac
 
 import (
@@ -51,10 +54,9 @@ type Check struct {
 	Verb        string // get, list, watch, create, delete, patch, ...
 	Name        string // resourceName for named-resource rules (e.g. the Secret)
 	Subresource string // optional subresource
-	// Namespace is empty for cluster-wide checks. Alpha4 SM holds a
-	// ClusterRole/ClusterRoleBinding because it discovers experiments and
-	// creates, observes, and deletes Jobs across namespaces, so every required
-	// check is cluster-wide.
+	// Namespace is the release/experiment namespace the check is scoped to.
+	// It is never empty: v0.1 is a single-namespace installation and the SM
+	// holds a namespaced Role, so every required check is namespaced.
 	Namespace string
 }
 
@@ -71,7 +73,8 @@ func (c Check) String() string {
 }
 
 // RequiredChecks returns the exact set of workload permissions the default SM
-// ServiceAccount must hold: get/list/watch/patch on alpha4
+// ServiceAccount must hold, every check scoped to the given release
+// namespace: get/list/watch/patch on alpha4
 // simulationexperiments; patch on the simulationexperiments/status
 // subresource (the SM-owned scenarioManagerVerdict report, written only by
 // the aggregate pass); create/delete/get/list/watch on batch jobs; get on the
@@ -80,8 +83,8 @@ func (c Check) String() string {
 // status/update/delete (the status patch above is the single deliberate
 // exception - the narrow SM-owned report field), PriorityClass, RuntimeClass,
 // or RBAC-management permission, so those are deliberately absent.
-func RequiredChecks() []Check {
-	return []Check{
+func RequiredChecks(namespace string) []Check {
+	checks := []Check{
 		// Alpha4 SimulationExperiments: get, list, watch, patch (finalizer),
 		// and patch on the status subresource (the SM-owned
 		// scenarioManagerVerdict report field - the aggregate pass writes it,
@@ -102,6 +105,10 @@ func RequiredChecks() []Check {
 		// Core ServiceAccounts: get only (no list/watch).
 		{Group: "", Resource: "serviceaccounts", Verb: "get"},
 	}
+	for i := range checks {
+		checks[i].Namespace = namespace
+	}
+	return checks
 }
 
 // Decision reports the outcome of one check.
@@ -112,13 +119,18 @@ type Decision struct {
 	Err     error
 }
 
-// Verify issues a SelfSubjectAccessReview for every RequiredChecks entry and
-// returns nil only if every check is allowed. A denied check, or a check whose
-// review call failed, is a fatal installation error. The returned error
-// aggregates every failure so an operator sees the full permission gap. The
-// allowed decisions are also returned for diagnostics and tests.
-func Verify(ctx context.Context, k8s kubernetes.Interface) ([]Decision, error) {
-	checks := RequiredChecks()
+// Verify issues a SelfSubjectAccessReview for every RequiredChecks entry,
+// every check scoped to the release namespace, and returns nil only if every
+// check is allowed. A denied check, or a check whose review call failed, is a
+// fatal installation error. The returned error aggregates every failure so an
+// operator sees the full permission gap. The allowed decisions are also
+// returned for diagnostics and tests. An empty namespace is a wiring error:
+// the SM has no cluster-wide fallback.
+func Verify(ctx context.Context, k8s kubernetes.Interface, namespace string) ([]Decision, error) {
+	if namespace == "" {
+		return nil, fmt.Errorf("startup authorization: watch namespace must not be empty")
+	}
+	checks := RequiredChecks(namespace)
 	decisions := make([]Decision, 0, len(checks))
 	var failures []Decision
 	for _, c := range checks {

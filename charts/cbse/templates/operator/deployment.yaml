@@ -1,0 +1,61 @@
+# Experiment Operator Deployment: one replica, stable selector, digest-pinned
+# image, fixed watch namespace (the release namespace via the downward API),
+# HTTP probes on the named health port, and the restricted security profile.
+# v0.1 runs a single replica without leader election; no metrics, webhook, or
+# Service objects are rendered.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cbse.name.experimentOperator" . }}
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "cbse.name.experimentOperator" . }}
+      {{- include "cbse.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "cbse.name.experimentOperator" . }}
+        {{- include "cbse.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cbse.name.experimentOperator" . }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          image: {{ include "cbse.image" .Values.operator.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args:
+            - --health-probe-bind-address=:8081
+          env:
+            - name: EXPERIMENT_OPERATOR_WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: health
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true

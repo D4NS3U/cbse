@@ -54,22 +54,27 @@ Want to supply your own Experimental Design Service, Translator, or PostProcessi
 
 The most useful follow-up references are:
 
+- [Helm installation guide](docs/HELM_INSTALLATION.md) for installing the shared control plane with the `cbse` chart.
 - [Testing guide](docs/CBSE_TESTING_GUIDE.md) for repository tests, smoke architecture, and diagnostics.
 - [Cluster requirements](docs/CLUSTER_REQUIREMENTS.md) for the runtime cluster requirements, including the `UserNamespacesSupport` feature gate.
 - [Experiment Operator README](experiment-operator/README.md) for operator development and generated API assets.
 - [Test harness README](test/README.md) for the test harness layout.
 - [Code wiki](docs/wiki/README.md) — the generated reference documentation: architecture, per-module deep-dives, and Mermaid/UML diagrams for the whole component chain.
 
-## Quickstart (from source)
+## Installation
 
-**Today's path is source.** Installation by Helm chart is a planned future capability — a designated forward reference for Package B (release pipeline) of the repository professionalization program — and no chart exists yet. Until then, build and run CBSE from this repository.
+**Helm is the recommended installation path.** The `cbse` chart in [`charts/cbse/`](charts/cbse/) installs the shared control plane — the alpha4 `SimulationExperiment` CRD, the Experiment Operator, the Scenario Manager, a single-node NATS/JetStream, and the Scenario Manager's PostgreSQL Core DB — into one dedicated namespace. The [Helm installation guide](docs/HELM_INSTALLATION.md) covers prerequisites, the Secret contract, payload-safe registry-auth creation, digest-pinned release values, and the install/observe/upgrade/uninstall workflow; the [chart README](charts/cbse/README.md) is the complete values and resource reference.
 
-### Prerequisites
+### From source (development path)
+
+Building and running CBSE from this repository remains the development path: the source smoke suite is the repository's development validation of the shared stack, and the same suite can run against a chart-installed stack via `make test-helm-smoke` (see the [testing guide](docs/CBSE_TESTING_GUIDE.md)).
+
+#### Prerequisites
 
 - A Go toolchain of the 1.26 era — the workspace (`go.work`) pins `go 1.26.3`
 - `make`
 
-### Steps
+#### Steps
 
 ```bash
 # D4NS3U is the public GitHub organization hosting the repository

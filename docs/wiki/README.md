@@ -21,6 +21,7 @@ CBSE is a Kubernetes-native framework for running simulation experiments. An **E
 - [`experiment-operator/cmd/main.go`](https://github.com/D4NS3U/cbse/blob/c993397/experiment-operator/cmd/main.go) — the operator binary: watches `SimulationExperiment` CRs and reconciles children.
 - [`scenario-manager/cmd/main.go`](https://github.com/D4NS3U/cbse/blob/c993397/scenario-manager/cmd/main.go) — the Scenario Manager binary: the NATS server, DB state machine, and Job orchestrator.
 - [`test/e2e/manifests/`](https://github.com/D4NS3U/cbse/blob/c993397/test/e2e/manifests/base/stack.yaml) — the stack-level manifests (SM, NATS, core DB) the harness deploys alongside the operator.
+- [`docs/HELM_INSTALLATION.md`](../HELM_INSTALLATION.md) — the installation guide for the shared control plane as one `cbse` Helm chart release (chart reference: `charts/cbse/README.md` in the repository).
 
 ## High-Level Architecture
 

@@ -763,7 +763,7 @@ func TestKubePatchVerdictPayloadCarriesOnlyScenarioManagerVerdict(t *testing.T) 
 		WithStatusSubresource(&experimentalpha4.SimulationExperiment{}).Build()
 	rc := &recordingClient{WithWatch: cs}
 
-	if err := NewKube(rc).PatchVerdict(context.Background(), "ns", "proj", "Finished"); err != nil {
+	if err := testKube(t, rc, "ns").PatchVerdict(context.Background(), "ns", "proj", "Finished"); err != nil {
 		t.Fatalf("PatchVerdict: %v", err)
 	}
 
@@ -816,7 +816,7 @@ func TestKubePatchAwaitingFinalizationPayloadCarriesOnlyMessage(t *testing.T) {
 		WithStatusSubresource(&experimentalpha4.SimulationExperiment{}).Build()
 	rc := &recordingClient{WithWatch: cs}
 
-	if err := NewKube(rc).PatchAwaitingFinalization(context.Background(), "ns", "proj"); err != nil {
+	if err := testKube(t, rc, "ns").PatchAwaitingFinalization(context.Background(), "ns", "proj"); err != nil {
 		t.Fatalf("PatchAwaitingFinalization: %v", err)
 	}
 
@@ -868,7 +868,7 @@ func TestPassWriteIfAbsentIsIdempotent(t *testing.T) {
 		// verdict.
 		WithStatusSubresource(&experimentalpha4.SimulationExperiment{}).Build()
 	rc := &recordingClient{WithWatch: cs}
-	s, err := NewScheduler(store, NewKube(rc), Config{})
+	s, err := NewScheduler(store, testKube(t, rc, "ns"), Config{})
 	if err != nil {
 		t.Fatalf("NewScheduler: %v", err)
 	}
@@ -947,5 +947,61 @@ func TestSchedulerShutdownWithoutStart(t *testing.T) {
 	defer cancel()
 	if err := s.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown without Start: %v", err)
+	}
+}
+
+// testKube builds the production Kube adapter over the given client, bound to
+// the watched namespace the kube payload tests use; it fails the test on
+// construction error (the tests always pass a valid namespace).
+func testKube(t *testing.T, k8s client.Client, namespace string) Kube {
+	t.Helper()
+	k, err := NewKube(k8s, namespace)
+	if err != nil {
+		t.Fatalf("NewKube: %v", err)
+	}
+	return k
+}
+
+// TestKubeListExperimentsNeverLeavesTheWatchedNamespace pins the
+// one-release/one-watched-namespace contract: the aggregate pass's experiment
+// list is bound to the watched namespace, and SimulationExperiments in other
+// namespaces are never enumerated. The namespaced Role grants no cluster-
+// scope list, so a cluster-wide fallback would both fail authorization and
+// read state the release never owns.
+func TestKubeListExperimentsNeverLeavesTheWatchedNamespace(t *testing.T) {
+	watched := "cbse-e2e-run"
+	objs := []client.Object{
+		experiment(watched, "proj-a", "InProgress", ""),
+		experiment(watched, "proj-b", "InProgress", ""),
+		experiment("cbse-e2e-other", "proj-c", "InProgress", ""),
+	}
+	cs := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(objs...).Build()
+	k := testKube(t, cs, watched)
+
+	got, err := k.ListExperiments(context.Background())
+	if err != nil {
+		t.Fatalf("ListExperiments: %v", err)
+	}
+	if len(got) != 2 {
+		names := []string{}
+		for _, e := range got {
+			names = append(names, e.Namespace+"/"+e.Name)
+		}
+		t.Fatalf("ListExperiments returned %d experiments %v; want exactly the 2 in the watched namespace %q", len(got), names, watched)
+	}
+	for _, e := range got {
+		if e.Namespace != watched {
+			t.Fatalf("ListExperiments leaked %s/%s outside the watched namespace %q", e.Namespace, e.Name, watched)
+		}
+	}
+}
+
+// TestNewKubeRejectsEmptyNamespace pins the fail-fast guard: the production
+// adapter cannot be built without a watch namespace, so the aggregate pass
+// can never silently fall back to a cluster-wide list.
+func TestNewKubeRejectsEmptyNamespace(t *testing.T) {
+	cs := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
+	if _, err := NewKube(cs, ""); err == nil {
+		t.Fatal("NewKube with an empty namespace: want error (no cluster-wide fallback)")
 	}
 }

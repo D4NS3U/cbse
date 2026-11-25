@@ -1,0 +1,84 @@
+# Pre-install/pre-upgrade registry validation hook. Runs a single read-only
+# check of the installation-owner Secret cbse-registry-auth in the release
+# namespace and fails the install/upgrade with one constant, actionable line
+# when the Secret is absent, has the wrong type, or has a missing/empty
+# .dockerconfigjson key. The hook never owns, labels, annotates, adopts,
+# patches, or deletes the Secret, and it never decodes, prints, traces, or
+# persists the Secret payload: the base64 .dockerconfigjson value is captured
+# into a shell variable solely to test non-emptiness. The Job image is the
+# locked public kubectl+shell image; the hook ServiceAccount carries no
+# imagePullSecrets, so this Job must be pullable without cbse-registry-auth.
+# backoffLimit 0 and restartPolicy Never: a failed hook Job stays in place
+# for diagnosis until the next Helm attempt replaces it.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cbse-hook-registry-validation
+  labels:
+    {{- include "cbse.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: "pre-install,pre-upgrade"
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: "before-hook-creation,hook-succeeded"
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: cbse-hook-registry-validation
+        {{- include "cbse.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: cbse-helm-hooks
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: validate
+          image: {{ include "cbse.image" .Values.hooks.kubectlImage }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              set -eu
+              secret="cbse-registry-auth"
+              ns="${CBSE_HOOK_NAMESPACE}"
+              missing="CBSE registry validation failed: the installation-owner Secret cbse-registry-auth is missing from namespace ${ns}; create the kubernetes.io/dockerconfigjson Secret there before installing or upgrading the CBSE chart (Helm validates it but never owns it)"
+              value="$(kubectl get secret "${secret}" -n "${ns}" -o jsonpath='{.data.\.dockerconfigjson}' 2>/dev/null)" || {
+                echo "${missing}" >&2
+                exit 1
+              }
+              type="$(kubectl get secret "${secret}" -n "${ns}" -o jsonpath='{.type}' 2>/dev/null)" || {
+                echo "${missing}" >&2
+                exit 1
+              }
+              if [ "${type}" != "kubernetes.io/dockerconfigjson" ]; then
+                echo "CBSE registry validation failed: Secret cbse-registry-auth in namespace ${ns} has type ${type}; the CBSE chart requires type kubernetes.io/dockerconfigjson" >&2
+                exit 1
+              fi
+              if [ -z "${value}" ]; then
+                echo "CBSE registry validation failed: Secret cbse-registry-auth in namespace ${ns} has a missing or empty .dockerconfigjson key; recreate it from a valid Docker config before installing or upgrading the CBSE chart" >&2
+                exit 1
+              fi
+              echo "CBSE registry validation passed: Secret cbse-registry-auth is present in namespace ${ns} with the required type and a non-empty .dockerconfigjson key"
+          env:
+            - name: CBSE_HOOK_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true

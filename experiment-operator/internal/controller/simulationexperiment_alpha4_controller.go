@@ -78,9 +78,11 @@ var alpha4ExperimentNameRe = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 // components: image- and host-based database connection Secrets, image-based
 // database Deployments with exactly one cbse-registry-auth pull-Secret, the
 // two-container rootless BuildKit Translator Deployment and Service, the
-// single-container PPS Deployment and Service, the single-container
-// Experimental Design Service Deployment and Service, the Translator
-// ConfigMap, and the deterministic runner ServiceAccount.
+// single-container PPS Deployment and Service with exactly one
+// cbse-registry-auth pull-Secret, the single-container Experimental Design
+// Service Deployment and Service with exactly one cbse-registry-auth
+// pull-Secret, the Translator ConfigMap, and the deterministic runner
+// ServiceAccount.
 //
 // This is the only reconciler registered by the operator's controller-manager;
 // alpha2 and alpha3 are not served or reconciled.
@@ -716,8 +718,11 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileTranslator(ctx context.C
 // Deployment and the PPS Service from spec.postProcessingService. The PPS
 // differs from the Translator only per the alpha4 PPS contract: one container
 // under the restricted profile, the resultdb connection Secret mounted
-// read-only, and the PPS env contract in place of the translator env. Image,
-// port, command, and args pass through verbatim from the spec.
+// read-only, and the PPS env contract in place of the translator env. The Pod
+// carries exactly one cbse-registry-auth imagePullSecrets for kubelet
+// image-pull authorization (never mounted, exposed through env, or otherwise
+// injected). Image, port, command, and args pass through verbatim from the
+// spec.
 func (r *Alpha4SimulationExperimentReconciler) reconcilePPS(ctx context.Context, instance *experimentalpha4.SimulationExperiment) error {
 	pps := instance.Spec.PostProcessingService
 
@@ -753,6 +758,9 @@ func (r *Alpha4SimulationExperimentReconciler) reconcilePPS(ctx context.Context,
 			ctr.Args = pps.Args
 		}
 		dep.Spec.Template.Spec.Containers = []corev1.Container{ctr}
+		// Exactly one pull-Secret reference; the registry Secret is never
+		// mounted, exposed through env, or otherwise injected here.
+		dep.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: registryAuthSecretName}}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("reconcile PPS Deployment: %w", err)
@@ -777,9 +785,11 @@ func (r *Alpha4SimulationExperimentReconciler) reconcilePPS(ctx context.Context,
 // landed PPS provisioning: one container under the restricted profile so the
 // USER 1000:1000 image runs, the detaildb connection Secret (the existing
 // five-field endpoint contract) mounted read-only as the only volume, and the
-// EDS env contract in place of the PPS env. Image, port, command, and args
-// pass through verbatim from the spec; there is no builderImage or
-// registry-auth surface - the EDS pulls nothing.
+// EDS env contract in place of the PPS env. Like the PPS, the Pod carries
+// exactly one cbse-registry-auth imagePullSecrets for kubelet image-pull
+// authorization; there is no builderImage and no registry-auth surface - no
+// credentials are mounted or injected into the EDS. Image, port, command, and
+// args pass through verbatim from the spec.
 func (r *Alpha4SimulationExperimentReconciler) reconcileEDS(ctx context.Context, instance *experimentalpha4.SimulationExperiment) error {
 	eds := instance.Spec.ExperimentalDesignService
 
@@ -815,6 +825,9 @@ func (r *Alpha4SimulationExperimentReconciler) reconcileEDS(ctx context.Context,
 			ctr.Args = eds.Args
 		}
 		dep.Spec.Template.Spec.Containers = []corev1.Container{ctr}
+		// Exactly one pull-Secret reference; the registry Secret is never
+		// mounted, exposed through env, or otherwise injected here.
+		dep.Spec.Template.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: registryAuthSecretName}}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("reconcile EDS Deployment: %w", err)

@@ -17,22 +17,43 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/D4NS3U/cbse/scenario-manager/internal/core"
+	"github.com/D4NS3U/cbse/scenario-manager/internal/health"
 )
 
-// main bootstraps the Scenario Manager. RunScenarioManager performs all startup
-// validation (runner-start worker count, messaging templates/stream names, Core DB
-// schema, Kubernetes authorization, and the authentication-free NATS connection) in
+// main bootstraps the Scenario Manager. It constructs the explicit-dependency
+// readiness state and the health server (listening on
+// SCENARIO_MANAGER_HEALTH_ADDRESS, default :8080; a malformed address or a
+// server start failure is fatal), serves /healthz and /readyz on that
+// address, and runs core.RunScenarioManager, which performs all startup
+// validation (runner-start worker count, messaging templates/stream names,
+// the single release/experiment watch namespace, Core DB schema, namespaced
+// Kubernetes authorization, and the authentication-free NATS connection) in
 // the SM startup failure-class order before starting any informer, consumer,
-// selector, or scheduler; any startup configuration failure is fatal and exits the
-// process before the control loop starts.
+// selector, or scheduler; any startup configuration failure is fatal and
+// exits the process before the control loop starts.
+// RunScenarioManager flips the readiness state to ready at exactly the point
+// immediately before the existing "Scenario Manager is ready" log and back to
+// not ready before the shutdown join.
 func main() {
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	core.RunScenarioManager(rootCtx)
+	readiness := health.NewReadiness()
+	server, err := health.NewServer(readiness)
+	if err != nil {
+		log.Fatalf("Scenario Manager health server: %v", err)
+	}
+	go func() {
+		if err := server.Start(rootCtx, health.Address(os.Getenv(health.AddressEnv))); err != nil {
+			log.Fatalf("Scenario Manager health server: %v", err)
+		}
+	}()
+
+	core.RunScenarioManager(rootCtx, readiness)
 }

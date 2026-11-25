@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CBSE chart values (v0.1 control-plane value surface)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "imagePullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "operator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "scenarioManager": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runnerStartWorkers", "healthPort"],
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "runnerStartWorkers": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "healthPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "nats": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "jetstream": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxMemoryStore": { "$ref": "#/definitions/positiveQuantity" },
+            "maxFileStore": { "$ref": "#/definitions/positiveQuantity" }
+          }
+        },
+        "persistence": { "$ref": "#/definitions/persistence" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "coreDatabase": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": { "$ref": "#/definitions/image" },
+        "database": { "type": "string", "minLength": 1 },
+        "persistence": { "$ref": "#/definitions/persistence" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kubectlImage": { "$ref": "#/definitions/image" }
+      }
+    },
+    "networkPolicies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    }
+  },
+  "definitions": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": { "type": "string" },
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:[a-f0-9]{64})?$"
+        }
+      }
+    },
+    "quantity": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?[a-zA-Z]*$"
+    },
+    "positiveQuantity": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*(\\.[0-9]+)?[a-zA-Z]*$|^0\\.[1-9][0-9]*[a-zA-Z]*$"
+    },
+    "resourceList": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": { "$ref": "#/definitions/quantity" },
+        "memory": { "$ref": "#/definitions/quantity" }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": { "$ref": "#/definitions/resourceList" },
+        "limits": { "$ref": "#/definitions/resourceList" }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "size", "retain"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "size": { "$ref": "#/definitions/positiveQuantity" },
+        "storageClass": { "type": "string" },
+        "retain": { "type": "boolean" }
+      }
+    }
+  }
+}

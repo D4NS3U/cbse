@@ -1,6 +1,6 @@
 # FEATURE.md — The CBSE Helm control-plane installation (first sketch)
 
-**Status: DRAFT — design pass complete; slice specifications and dispatch prompts authored (2026-10-22).** All rulings H1–H8 are closed; H1 is ready for dispatch, with H2–H6 dependency-gated by the wave plan. v0.1 renders its own NATS/JetStream and PostgreSQL Core DB directly in the chart, alongside the Experiment Operator and Scenario Manager. External NATS and PostgreSQL are required future installation modes and their compatibility seams are specified here, but they do not ship as non-functional values in v0.1.
+**Status: IMPLEMENTATION COMPLETE — H1–H6 are independently approved and landed on feature branch `D4NS3U/helm-control-plane-installation` (H6 merge `6796c8a`, 2026-11-25). The unchanged 15-spec suite is green through both manifest and Helm installers; lifecycle, retained cleanup, and documentation gates are settled. Final merge to `main` remains user-approved work.** All rulings H1–H8 are closed and H1–H6 specifications/prompts are authored. v0.1 renders its own NATS/JetStream and PostgreSQL Core DB directly in the chart, alongside the Experiment Operator and Scenario Manager. External NATS and PostgreSQL are required future installation modes and their compatibility seams are specified here, but they do not ship as non-functional values in v0.1. See [IMPLEMENTATION_HANDOFF.md](IMPLEMENTATION_HANDOFF.md).
 
 ## 1. Title and mission
 
