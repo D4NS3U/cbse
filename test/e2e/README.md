@@ -48,6 +48,63 @@ make test-smoke \
   CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
 ```
 
+### Shared-stack installer modes (manifest | helm)
+
+The harness installs the shared stack through `CBSE_STACK_INSTALLER` (default
+`manifest`); any other value is rejected before any cluster mutation. Both
+modes share one flow after stack readiness: the same run namespace/project,
+the same digest image set, the same rendered `SimulationExperiment`, the same
+15-spec Ginkgo suite and assertions, the same ownership label and
+`cbse-smoke-lock` Lease, and the same artifact/summary layout (each run writes
+`stack-installer.txt`).
+
+- `manifest` (default): the existing path. The harness server-side applies the
+  shared CRD, creates `core-db-credentials`, patches the namespace default
+  ServiceAccount with the pull Secret (kept until every operator-created
+  workload carries explicit pull references), renders and applies
+  `stack.yaml`, and waits for the four shared Deployments plus the Scenario
+  Manager readiness log line.
+- `helm`: the chart owns `core-db-credentials` (never created by the harness)
+  and no default ServiceAccount is patched. The harness generates the private
+  `helm-values.yaml` (mode 0600, five digest components from the run's
+  `images.env` plus the repository image lock), installs the pinned-Helm
+  release with `helm upgrade --install cbse charts/cbse --namespace <run-ns>
+  --values <artifact-values> --wait --atomic --timeout 5m`, and verifies
+  readiness by release status plus Deployment/StatefulSet rollouts and the
+  Scenario Manager Pod readiness (the chart `/readyz` probe — no log-grep
+  readiness). The chart's `crds/` directory installs the shared CRD only when
+  it is absent; the harness never applies the CRD in this mode. Only safe
+  Helm artifacts are written (`helm-status.txt`, `helm-history.txt`,
+  `objects-inventory.txt`) — never `helm get manifest` output or Secret data.
+
+```bash
+# Helm-installed run of the same unchanged suite:
+make test-helm-smoke \
+  KUBECONFIG=/path/to/kubeconfig \
+  CBSE_REGISTRY=<your-registry> \
+  CBSE_REGISTRY_AUTH_FILE=<protected-docker-config>
+```
+
+`make test-helm-smoke` invokes the existing `test-smoke` recipe with
+`CBSE_STACK_INSTALLER=helm`; the pinned Helm binary is installed by the
+`helm-tools` target into the ignored root `bin/` directory. The retained
+honor is the same: `CBSE_STACK_INSTALLER=helm make test-e2e-retained ...`
+retains a Helm-installed interactive stack.
+
+Teardown is installer-aware and CRs-first in both modes: the
+`SimulationExperiment` resources are deleted with wait while the Scenario
+Manager is alive; the Helm release is then uninstalled
+(`helm uninstall cbse --wait --timeout 3m`, release absence verified) in Helm
+mode; the run namespace is deleted; the Lease is released. `make test-clean
+RUN_ID=<id>` performs the same order for a retained or failed run and surfaces
+a failed release uninstall instead of ignoring it.
+
+The suite's Core DB access is installer-independent: it execs exactly one
+Ready Pod resolved by the stable label `app=core-db` (a Deployment under the
+manifest installer, a one-replica StatefulSet under the Helm installer), with
+the psql user taken from the workload's own `POSTGRES_USER` environment. The
+per-experiment databases remain Deployments.
+
 A smoke build builds the default alpha4 reference set
 (`exop,sm,eds-mock,eds,translator,runner-base,scenario-detail-database,pps`);
 `build-images.sh`

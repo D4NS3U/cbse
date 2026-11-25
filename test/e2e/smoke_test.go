@@ -1550,19 +1550,74 @@ func requiredEnv(name string) string {
 	return value
 }
 
-// queryDatabase executes a SQL query against the Core DB (deployment/core-db,
-// database scenarios, user cbse_test) via kubectl exec + psql, returning the
-// trimmed pipe-separated stdout. On any exec failure it returns a
-// "query-error: ..." string rather than failing the spec, so Eventually callers
-// can keep polling; assertions check for that prefix where relevant.
-func queryDatabase(query string) string {
+// coreDBExecTarget resolves the exact one Ready Pod of the shared Core DB by
+// the stable label app=core-db and returns the kubectl exec target
+// "pod/<name>". The Core DB workload is a Deployment under the manifest
+// installer and a one-replica StatefulSet under the Helm installer; both
+// carry the identical label on their Pods, so the lookup is
+// installer-independent. The Pod-level Ready condition is evaluated from the
+// Pod list JSON in Go (kubectl jsonpath cannot express a nested condition
+// filter), so the lookup is exact and deterministic. It returns "" when zero
+// or multiple Pods are Ready so the caller can report a query error and keep
+// polling until the workload settles (a transient double-Ready during a
+// rolling update must not fail an Eventually-driven assertion immediately).
+func coreDBExecTarget() string {
 	kubectl := requiredEnv("KUBECTL")
 	namespace := requiredEnv("CBSE_TEST_NAMESPACE")
 	cmd := exec.Command(
 		kubectl,
 		"--kubeconfig", requiredEnv("KUBECONFIG"),
-		"exec", "-n", namespace, "deployment/core-db", "--",
-		"psql", "-U", "cbse_test", "-d", "scenarios", "-At", "-F", "|", "-c", query,
+		"get", "pods", "-n", namespace, "-l", "app=core-db", "-o", "json",
+	)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	var list corev1.PodList
+	if err := json.Unmarshal(stdout.Bytes(), &list); err != nil {
+		return ""
+	}
+	var ready []string
+	for _, pod := range list.Items {
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+				ready = append(ready, pod.Name)
+				break
+			}
+		}
+	}
+	if len(ready) != 1 {
+		return ""
+	}
+	return "pod/" + ready[0]
+}
+
+// queryDatabase executes a SQL query against the shared Core DB (exactly one
+// Ready Pod with the stable label app=core-db — a Deployment under the
+// manifest installer, a one-replica StatefulSet under the Helm installer —
+// database scenarios) via kubectl exec + psql, returning the trimmed
+// pipe-separated stdout. The psql user is taken from the workload's own
+// POSTGRES_USER environment (supplied from the fixed-name
+// core-db-credentials Secret in both installer modes), so the helper stays
+// installer-independent without reading any credential. On any failure it
+// returns a "query-error: ..." string rather than failing the spec, so
+// Eventually callers can keep polling; assertions check for that prefix where
+// relevant.
+func queryDatabase(query string) string {
+	kubectl := requiredEnv("KUBECTL")
+	namespace := requiredEnv("CBSE_TEST_NAMESPACE")
+	target := coreDBExecTarget()
+	if target == "" {
+		return "query-error: expected exactly one Ready Pod with the stable label app=core-db"
+	}
+	cmd := exec.Command(
+		kubectl,
+		"--kubeconfig", requiredEnv("KUBECONFIG"),
+		"exec", "-n", namespace, target, "--",
+		"sh", "-c", `psql -U "$POSTGRES_USER" -d scenarios -At -F '|' -c `+shQuote(query),
 	)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

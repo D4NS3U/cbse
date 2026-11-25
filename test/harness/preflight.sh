@@ -16,20 +16,29 @@
 # preflight.sh — validate cluster, credentials, and image lock before mutation.
 #
 # Runs every check the smoke suite needs before it mutates the cluster or
-# registry: the kubeconfig points at the expected test API server and context;
-# the server is Kubernetes >= 1.30; at least one linux/amd64 Ready schedulable
-# Node exists; the UserNamespacesSupport feature gate is enabled (required by
-# the rootless BuildKit Translator sidecar); the admin can perform every verb
-# the suite uses; the pull Secret exists with the right type; the source-image
-# lock is valid; docker/buildx and registry connectivity work (unless
-# SKIP_BUILD=1); skip-build images are immutable digests; the registry auth
-# file has credentials for the registry host; the cleanup adapter exists; and
-# the Harbor generated-runner repository is reachable (200 or 404). Every check
-# is read-only: no cluster or registry mutation happens here.
+# registry: the shared-stack installer selection is manifest (default) or
+# helm and, for helm, the pinned Helm binary reports the pinned version
+# (installer/tool validation); the kubeconfig points at the expected test
+# API server and context; the server is Kubernetes >= 1.30; at least one
+# linux/amd64 Ready schedulable Node exists; the UserNamespacesSupport
+# feature gate is enabled (required by the rootless BuildKit Translator
+# sidecar); the admin can perform every verb the suite uses; the pull Secret
+# exists with the right type; the source-image lock is valid;
+# docker/buildx and registry connectivity work (unless SKIP_BUILD=1); skip-
+# build images are immutable digests; the registry auth file has credentials
+# for the registry host; the cleanup adapter exists; and the Harbor
+# generated-runner repository is reachable (200 or 404). Every check is
+# read-only: no cluster or registry mutation happens here.
 #
 # Inputs / environment:
 #   KUBECTL    (required) path to the pinned kubectl binary.
 #   KUBECONFIG (required) dedicated test-cluster kubeconfig (must be readable).
+#   CBSE_STACK_INSTALLER=manifest|helm (default manifest); any other value
+#              fails before any cluster interaction.
+#   HELM       (helm installer only) pinned helm binary; defaults to
+#              bin/helm-v3.18.4 under the repository root.
+#   HELM_VERSION (default v3.18.4) required helm version for the helm
+#              installer.
 #   CBSE_EXPECTED_APISERVER (default https://192.168.101.245:6443) required
 #              API server; a mismatch aborts to protect the wrong cluster.
 #   CBSE_EXPECTED_CONTEXT   (default default) required current-context.
@@ -64,6 +73,34 @@ pull_secret_name="${CBSE_PULL_SECRET_NAME:-cbse-registry-auth}"
 pull_secret_namespace="${CBSE_PULL_SECRET_NAMESPACE:-cbse-test-system}"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 lock_file="${root}/test/e2e/images.lock.env"
+
+# Installer selection and tool validation (H5): manifest (default) or helm.
+# An invalid value fails before any cluster or registry interaction. For the
+# helm installer the pinned Helm binary must exist and report the pinned
+# version (the release build suffix, e.g. +g<hash>, is accepted); no other
+# helm behavior is validated here.
+stack_installer="${CBSE_STACK_INSTALLER:-manifest}"
+case "${stack_installer}" in
+  manifest|helm) ;;
+  *)
+    echo "CBSE_STACK_INSTALLER must be manifest or helm (got: ${stack_installer})" >&2
+    exit 2 ;;
+esac
+if [[ "${stack_installer}" == "helm" ]]; then
+  helm_version="${HELM_VERSION:-v3.18.4}"
+  helm_bin="${HELM:-${root}/bin/helm-${helm_version}}"
+  [[ -x "${helm_bin}" ]] || {
+    echo "Helm installer selected but the pinned Helm binary is missing: ${helm_bin}" >&2
+    exit 2
+  }
+  helm_reported="$("${helm_bin}" version --short 2>/dev/null || true)"
+  # The pinned release binary reports its version with a build suffix
+  # (v3.18.4+g<hash>); accept the pinned semantic version with or without it.
+  [[ "${helm_reported}" == "${helm_version}" || "${helm_reported}" == "${helm_version}"* ]] || {
+    echo "Helm installer selected but ${helm_bin} reports ${helm_reported:-unparsable}, expected the pinned ${helm_version}" >&2
+    exit 2
+  }
+fi
 
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
 

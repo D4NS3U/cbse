@@ -62,9 +62,10 @@ func (s *PersistenceStore) IsFinalized(ctx context.Context, namespace, project s
 	return persistence.IsFinalized(ctx, s.DB, namespace, project)
 }
 
-// Kube is the Kubernetes surface the aggregate pass uses: the cluster-wide
-// SimulationExperiment list (the same namespace scope the informer's watch
-// uses) and the status-subresource patches.
+// Kube is the Kubernetes surface the aggregate pass uses: the
+// SimulationExperiment list scoped to the single release watch namespace (the
+// same namespace scope the informer's watch uses) and the status-subresource
+// patches.
 //
 // Field ownership (the additive amendment of the SBO finalization protocol):
 // the SM never writes phase; the SM writes status fields in exactly two
@@ -73,7 +74,9 @@ func (s *PersistenceStore) IsFinalized(ctx context.Context, namespace, project s
 // retains full ownership of phase and all other messages (its terminal
 // derivation overwrites the diagnostic message at the phase transition).
 type Kube interface {
-	// ListExperiments lists every SimulationExperiment cluster-wide.
+	// ListExperiments lists every SimulationExperiment in the watched
+	// namespace. The production adapter is bound to that namespace at
+	// construction, so experiments outside it are never enumerated.
 	ListExperiments(ctx context.Context) ([]experimentalpha4.SimulationExperiment, error)
 	// PatchVerdict reports the verdict through the status subresource writer
 	// (client.Status().Patch) with a merge patch whose status payload carries
@@ -86,23 +89,28 @@ type Kube interface {
 	PatchAwaitingFinalization(ctx context.Context, namespace, name string) error
 }
 
-// kubeAdapter is the production Kube over a controller-runtime client.
+// kubeAdapter is the production Kube over a controller-runtime client,
+// bound to the single release watch namespace.
 type kubeAdapter struct {
-	k8s client.Client
+	k8s       client.Client
+	namespace string
 }
 
 // NewKube builds the production Kube adapter over the given controller-runtime
-// client. The client's scheme must know the alpha4 SimulationExperiment type.
-func NewKube(k8s client.Client) Kube {
-	return &kubeAdapter{k8s: k8s}
+// client, bound to the validated configured watch namespace (one release per
+// watched namespace). The client's scheme must know the alpha4
+// SimulationExperiment type. An empty namespace is rejected: an empty scope
+// would silently fall back to a cluster-wide list, which the release contract
+// forbids (the namespaced Role grants no cluster-scope list authorization).
+func NewKube(k8s client.Client, namespace string) (Kube, error) {
+	if namespace == "" {
+		return nil, fmt.Errorf("watch namespace is required: the aggregate pass never lists cluster-wide")
+	}
+	return &kubeAdapter{k8s: k8s, namespace: namespace}, nil
 }
 
-// listNamespace is the list scope of the aggregate pass: empty = cluster-wide,
-// the same scope the informer's watch uses.
-const listNamespace = ""
-
 func (k *kubeAdapter) ListExperiments(ctx context.Context) ([]experimentalpha4.SimulationExperiment, error) {
-	return kube.ListSimulationExperiments(ctx, k.k8s, listNamespace)
+	return kube.ListSimulationExperiments(ctx, k.k8s, k.namespace)
 }
 
 // patchPayload is the exact status merge patch the SM writes for the verdict
