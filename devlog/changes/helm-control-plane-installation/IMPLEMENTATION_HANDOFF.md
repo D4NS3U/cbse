@@ -10,8 +10,8 @@ This is the durable routing ledger for [FEATURE.md](FEATURE.md). Slice states us
 | H2 — Operator and Scenario Manager workloads | **complete** | Landed on feature branch via merge commit `6969513` (reviewed implementation HEAD `c0d06668a1bf984a23906e75123c24f6ae6e1036`; commits `eeb592a`, `c0d0666`) | none |
 | H3 — internal NATS and Core DB | **complete** | Landed on feature branch via merge commit `e465775` (reviewed implementation HEAD `60b9a3efdf000df6ea8f4b0e25cdf39fa593573a`); F-R1 closed | none |
 | H4 — lifecycle safety | **complete** | Landed on feature branch via merge commit `b453fff` (reviewed corrected HEAD `0d4800c2edc72554b5869e5d771e07b1778bb150`); fresh lifecycle and 15/15 smoke independently rerun | none |
-| H5 — Helm smoke integration | incomplete | H4 settled; H5 unblocked | manager/user decision to start H5 |
-| H6 — documentation | incomplete | waits for H5 | — |
+| H5 — Helm smoke integration | **complete** | Landed via merge commit `8267460` (reviewed corrected HEAD `abe40ff`; implementation `f27eb5d` plus namespace-scope fix `abe40ff`); independent manifest and Helm smoke both 15/15 | none |
+| H6 — documentation | incomplete | H5 settled; documentation wave unblocked | manager/user decision to start H6 |
 
 ## H1 settlement (2026-11-02)
 
@@ -139,11 +139,32 @@ The ruled distroless source cannot execute the required validation and recovery 
 2. Guard count word-splitting is safe because Kubernetes object names contain no whitespace; names are never printed.
 3. The pre-existing preflight artifact includes the cluster API endpoint; H4 did not introduce or change that behavior. H5 documentation/artifact review should avoid reproducing operational endpoints.
 
+## H5 settlement (2026-11-25)
+
+- **Run:** `run_5f3031d1e91d`
+- **Implementation:** task `task_9298dfd646fc`, dispatch `ctx_4f76fb314ca2`, runtime attestation `ai.forge/qwen3.8-27b-nvfp4`, commit `f27eb5d`.
+- **Licensed blocker fix:** task `task_aefabc05d011`, dispatch `ctx_a1ec5ff5b407`, corrected HEAD `abe40ff`; the Scenario Manager aggregate pass now lists only the validated watch namespace rather than requiring forbidden cluster-wide access.
+- **Independent review:** task `task_70e21d3bf134`, dispatch `ctx_8535acddab64`, runtime attestation `ai.forge/glm`, verdict **approve** on exact HEAD `abe40ff`.
+- **Landing:** feature-branch merge commit `8267460`; `main` remains untouched.
+- **Reports (untracked):** `artifacts/orchestration/helm-H5-implementation-report.md`, `artifacts/orchestration/helm-H5-review.md`.
+
+### Verified H5 gates
+
+- `CBSE_STACK_INSTALLER=manifest|helm` selects one shared harness flow; `manifest` remains the default and invalid values fail before cluster mutation.
+- `make test-fast`, shell syntax, fake-tool installer/cleanup tests, targeted Scenario Manager race tests, and the unchanged 15-spec compile/count gates passed.
+- Core DB access is installer-independent through an exact-one-Ready-Pod lookup by stable label; SQL, scenarios, timings, and assertions remain unchanged.
+- Helm mode consumes H4's private digest-values generator, installs with pinned Helm, preserves chart-owned Core DB credentials, avoids the default-ServiceAccount patch, records only safe status/history/inventory artifacts, and tears down CRs before Helm release/namespace/Lease removal.
+- Implementation manifest smoke `20261125095819-ffbd33`: **15/15 passed**, clean teardown.
+- Implementation Helm smoke `20261125101028-96e5cb`: **15/15 passed**, clean teardown; this supplies the required live NATS read-only-root and Core DB `PGDATA` chart proof.
+- Independent review manifest smoke `h5rev-manifest-02`: **15/15 passed** after one transient EDS port-forward EOF in the first attempt; independent Helm smoke `h5rev-helm-01`: **15/15 passed**. Release, namespace, Lease, and SimulationExperiment cleanup were verified; the shared CRD remained.
+- Retained Helm run `20261125094418-d056a2` plus `test-clean` proved CR deletion → Helm uninstall → namespace deletion → Lease release.
+
+### H5 blocker resolution and observations
+
+The first Helm run exposed that the aggregate pass used `listNamespace = ""` while the chart intentionally grants namespaced RBAC. The accepted fix wires `SCENARIO_MANAGER_WATCH_NAMESPACE` into the aggregate Kubernetes adapter, rejects an empty namespace, and includes a two-namespace regression test. Chart RBAC remained namespaced; no ClusterRole or permission broadening was added.
+
+Independent review recorded non-blocking observations for later maintenance: a cold-node Translator pull should remain under observation despite successful live runs without the default-SA patch; one transient EDS port-forward EOF belongs in the flake ledger; and the smoke EXIT trap's uninstall-error reporting differs from explicit `test-clean` failure propagation. None blocks H5.
+
 ## Next wave
 
-H5 — Helm smoke integration — is unblocked:
-
-- add the `manifest|helm` installer mode to the unchanged 15-spec suite and generate private release values through the H4 contract;
-- prove both manifest and Helm modes at **15/15**, including live NATS read-only-root and Core DB `PGDATA` behavior;
-- retain H4 lifecycle contracts rather than rewriting them;
-- receive independent review and land only on this feature branch.
+H6 — Helm installation and operations documentation — is unblocked. It must document only behavior proven by H1–H5, remain documentation-only, pass chart/render/link/secret-hygiene checks, and receive independent review before landing on this feature branch.
