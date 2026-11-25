@@ -237,9 +237,16 @@ func RunScenarioManager(ctx context.Context, readiness readinessReporter) {
 	}
 	// The aggregate verdict pass reports the SM-owned scenarioManagerVerdict
 	// through the status subresource; it reads only Core DB and Kubernetes.
+	// Its experiment list is bound to the validated watch namespace: the
+	// one-release/one-watched-namespace contract and the namespaced Role
+	// grant no cluster-scope list, so the pass never falls back to one.
+	aggregateKube, err := aggregate.NewKube(k8sClient, cfg.watchNamespace)
+	if err != nil {
+		log.Fatalf("Scenario Manager startup: aggregate kube: %v", err)
+	}
 	aggregateScheduler, err := aggregate.NewScheduler(
 		&aggregate.PersistenceStore{DB: store},
-		aggregate.NewKube(k8sClient),
+		aggregateKube,
 		aggregate.Config{},
 	)
 	if err != nil {
