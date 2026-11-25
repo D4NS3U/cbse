@@ -1,15 +1,35 @@
 Thank you for installing {{ .Chart.Name }} {{ .Chart.Version }} (release "{{ .Release.Name }}").
 
-This chart is pre-release: the complete installation guide is supplied by the
-H6 documentation slice, and this note is the only operational contract until
-then.
+{{ .Chart.Name }} v0.1 is a pre-release chart: it installed the alpha4
+SimulationExperiment CRD, the Experiment Operator, the Scenario Manager, a
+single-node NATS/JetStream, and the Scenario Manager PostgreSQL Core DB into
+the single release namespace {{ .Release.Namespace }}. The complete
+installation and operations guide added by the H6 documentation slice is
+docs/HELM_INSTALLATION.md in the source repository; the chart README
+(charts/cbse/README.md) is the values and lifecycle reference.
 
-Prerequisite:
-  * The kubernetes.io/dockerconfigjson Secret named cbse-registry-auth must
-    already exist in {{ .Release.Namespace }}. The chart validates and
-    references it but never creates, mutates, or deletes it.
+Readiness:
+  * Check the release and the shared stack (expect the two StatefulSets at
+    1/1 Ready and the two data PVCs bound when persistence is enabled):
+      helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
+      kubectl get pods,statefulset,pvc -n {{ .Release.Namespace }}
 
 Experiments:
   * SimulationExperiment resources belong in the release namespace
-    {{ .Release.Namespace }}; one chart release per namespace is the v0.1
-    installation model.
+    {{ .Release.Namespace }}; create your first one there and drive its
+    Experimental Design Service through a local port-forward of the
+    per-experiment <experiment-name>-eds-svc Service.
+
+Registry Secret:
+  * cbse-registry-auth was validated at install time and remains
+    installation-owner managed: the chart references it but never creates,
+    mutates, or deletes it.
+
+Retained data and uninstall:
+  * The Core DB and JetStream PVCs and the Helm-managed
+    core-db-credentials Secret are retained by default, so a reinstall
+    reconnects to the retained data.
+  * Uninstall is guarded: while any SimulationExperiment remains in
+    {{ .Release.Namespace }}, the pre-delete hook blocks it. Delete all
+    experiments first (the live Scenario Manager releases its finalizers),
+    then rerun helm uninstall. The shared CRD is never removed by the chart.

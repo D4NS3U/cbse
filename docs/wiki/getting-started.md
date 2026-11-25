@@ -59,5 +59,6 @@ make test-clean RUN_ID=<run-id> KUBECONFIG=<path-to-test-cluster-config>
 ## Where to Go Next
 
 - Architecture: [architecture.md](architecture.md)
+- Installing the shared control plane with the `cbse` Helm chart: [../HELM_INSTALLATION.md](../HELM_INSTALLATION.md)
 - The interface reference: [modules/communication-interfaces.md](modules/communication-interfaces.md)
 - Module map: [README.md#module-map](README.md#module-map)
