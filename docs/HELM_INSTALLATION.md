@@ -82,9 +82,18 @@ inside the Scenario Manager, are unchanged by the chart.
   `persistence.enabled=false` is an explicit development-only ephemeral
   (`emptyDir`) branch.
 - **Registry access:** every cluster node that runs the chart's workloads must
-  be able to pull the digest-pinned images from your registry. For private
-  images the node-level pull is authorized by the namespace's
-  `cbse-registry-auth` Secret (see below).
+  be able to pull the digest-pinned images. The proven pull boundary is
+  per-workload: the Operator and Scenario Manager ServiceAccounts carry an
+  explicit `imagePullSecrets: cbse-registry-auth`, and the operator-created
+  experiment workloads (EDS, Translator, PPS, per-experiment databases,
+  runner Jobs) reference the same fixed Secret. The NATS and Core DB
+  StatefulSet Pods carry **no** `imagePullSecrets` and no dedicated
+  ServiceAccount, so their images must be pullable without that Secret —
+  use the official public images from the repository image lock, or mirrors
+  already authorized at the node level. Pointing those two images at a
+  private mirror is a future installation-owner concern, not something the
+  chart authorizes. The lifecycle hook Jobs also carry no pull Secret and
+  run a digest-pinned public image.
 - **Image architecture support:** the released digest references must be
   pullable on your cluster's node architecture; the smoke image set is
   `linux/amd64` only, so a cluster with different architecture nodes needs
@@ -131,16 +140,13 @@ kubectl create secret generic cbse-registry-auth \
   -n <release-namespace>
 ```
 
-Verify the Secret **by name and type only** — never inspect or print its data:
+Verify the Secret **by name and type only** — never inspect or print its
+data:
 
 ```bash
-# Expect: kubernetes.io/dockerconfigjson
-kubectl get secret cbse-registry-auth -n <release-namespace> -o jsonpath='{.type}'
-
-# Expect a non-zero count (the key is non-empty); the payload itself is never
-# displayed because only its length is printed.
+# Expect: cbse-registry-auth kubernetes.io/dockerconfigjson
 kubectl get secret cbse-registry-auth -n <release-namespace> \
-  -o jsonpath='{.data.\.dockerconfigjson}' | wc -c
+  -o jsonpath='{.metadata.name} {.type}'
 ```
 
 The chart's pre-install hook performs exactly this read-only validation and
@@ -160,9 +166,17 @@ Three distinct things are often conflated; they are separate:
 2. **Optional packaged-chart publication.** Publishing a packaged chart
    (Helm package/index) is an optional release decision, not a v0.1
    requirement and not promised here.
-3. **Private images.** The component images (Operator, Scenario Manager, NATS
-   mirror, PostgreSQL mirror, hook kubectl image) are referenced by
-   repository + immutable `sha256:` digest. The release process generates one
+3. **Private images.** The component images (Operator, Scenario Manager,
+   NATS, PostgreSQL, hook kubectl image) are referenced by repository +
+   immutable `sha256:` digest. The private-repository requirement applies
+   only where a chart workload actually carries a pull Secret: the Operator
+   and Scenario Manager Pods (and, during experiment provisioning, the
+   operator-created workloads). The NATS and Core DB Pods have no pull
+   Secret, so release values should point them at images pullable without
+   `cbse-registry-auth` (the official public images in the repository image
+   lock, or node-level-authorized mirrors); a private mirror for those two
+   is a future installation-owner concern, not chart-supported behavior.
+   The release process generates one
    **private, untracked** installation-owner values file, conventionally
    `values-images-<version>.yaml`, containing the repositories and resolved
    digests for exactly five components: `operator.image`,
@@ -191,8 +205,10 @@ make helm-image-values \
 - The file is written atomically with mode `0600`; the generator prints only
   the output path and the component count, never the repository values.
 
-The generated file has this shape (placeholder values shown; real repositories
-and digests come from your release):
+The generated file has this shape (the operator and scenario-manager
+repositories are the private release components; the NATS, PostgreSQL, and
+hook repositories are the repository image-lock values; all digests are
+resolved immutable references):
 
 ```yaml
 operator:
@@ -205,15 +221,15 @@ scenarioManager:
     digest: "sha256:<64-hex-digest>"
 nats:
   image:
-    repository: "<your-private-registry>/nats"
+    repository: "docker.io/library/nats"
     digest: "sha256:<64-hex-digest>"
 coreDatabase:
   image:
-    repository: "<your-private-registry>/postgres"
+    repository: "docker.io/library/postgres"
     digest: "sha256:<64-hex-digest>"
 hooks:
   kubectlImage:
-    repository: "registry.k8s.io/kubectl"
+    repository: "docker.io/alpine/k8s"
     digest: "sha256:<64-hex-digest>"
 ```
 
