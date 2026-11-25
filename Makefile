@@ -18,13 +18,14 @@ CBSE_REGISTRY ?=
 TEST_IMAGE_VERSION ?= $(shell date -u +%-y.%-m.%-d)
 CBSE_IMAGE_COMPONENTS ?= exop,sm,eds-mock,eds,translator,runner-base,scenario-detail-database,pps
 
-.PHONY: help test-fast test-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools helm-tools helm-lint helm-render test-helm-chart test-helm-lifecycle helm-image-values verify-generated
+.PHONY: help test-fast test-smoke test-helm-smoke test-e2e-retained publish-test-images test-diagnose test-clean test-tools helm-tools helm-lint helm-render test-helm-chart test-helm-lifecycle helm-image-values verify-generated
 
 help:
 	@echo "CBSE test commands:"
 	@echo "  make test-fast"
 	@echo "  make publish-test-images TEST_IMAGE_VERSION=$(TEST_IMAGE_VERSION)"
 	@echo "  make test-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
+	@echo "  make test-helm-smoke KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
 	@echo "  make test-e2e-retained KUBECONFIG=/path/to/config CBSE_REGISTRY=<your-registry>"
 	@echo "  make test-diagnose RUN_ID=<run-id> KUBECONFIG=/path/to/config"
 	@echo "  make test-clean RUN_ID=<run-id> KUBECONFIG=/path/to/config"
@@ -110,6 +111,13 @@ test-smoke: test-tools
 	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }
 	KUBECTL="$(KUBECTL)" CBSE_REGISTRY="$(CBSE_REGISTRY)" \
 	  TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)" $(TEST_DIR)/harness/smoke.sh
+
+# Helm-installed smoke (H5): the existing test-smoke recipe with the Helm
+# shared-stack installer selected (CBSE_STACK_INSTALLER=helm). The pinned
+# Helm binary comes from helm-tools; the private image values are generated
+# in-run from the run's own images.env plus the repository image lock.
+test-helm-smoke: helm-tools
+	CBSE_STACK_INSTALLER=helm $(MAKE) test-smoke TEST_IMAGE_VERSION="$(TEST_IMAGE_VERSION)"
 
 test-e2e-retained: test-tools
 	@test -n "$(CBSE_REGISTRY)" || { echo "CBSE_REGISTRY is required (environment-provided; see docs/CBSE_TESTING_GUIDE.md)" >&2; exit 2; }

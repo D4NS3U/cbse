@@ -24,7 +24,16 @@
 # overrides; registry-cleanup annotation verification and unsafe-repo refusal;
 # diagnose on an absent namespace; acquire-lock Lease contention; clean
 # idempotency and the H4 CRs-first ordering (CR delete before namespace
-# delete, Lease still released); generate-helm-values.sh positive receipt
+# delete, Lease still released); the H5 installer selection (invalid value
+# rejected before cluster mutation, helm tool validation), the full smoke.sh
+# command flow for both installers with a fake kubectl/helm/go (manifest:
+# CRD apply, credentials, default-SA patch, stack apply, log-grep readiness;
+# helm: generated private values, exact pinned install command, no CRD apply/
+# credentials/SA patch, readyz-backed readiness, safe artifacts, CRs-first
+# helm-uninstall teardown with release-absence verification, failure
+# propagation), the Helm-aware clean.sh ordering (CR delete before release
+# uninstall before namespace delete, surfaced uninstall failure), and
+# generate-helm-values.sh positive receipt
 # (mode 0600, exactly five components, locked auxiliary images, no private
 # repository on stdout) plus tag/malformed/missing/OUTPUT-location negatives;
 # and helm-lifecycle.sh required-input validation before any cluster access.
@@ -662,5 +671,418 @@ grep -Fq 'test-helm-lifecycle helm-image-values' "${root}/Makefile"
 grep -Fq 'pinned_helm="${HELM:-}"' "${root}/test/harness/test-helm-chart.sh"
 grep -Fq 'cbse_helm_run_discovered' "${root}/test/harness/test-helm-chart.sh"
 grep -Fq 'assert-helpers.sh' "${root}/test/harness/test-helm-chart.sh"
+
+
+# ---------------------------------------------------------------------------
+# H5: installer selection and the smoke.sh command flow for both installers,
+# driven with fake kubectl/helm/go against fake state. The combined command
+# log (FAKE_CMD_LOG) records "K: ..." kubectl calls and "H: ..." helm calls so
+# the expected order across both tools is assertable in one place.
+# ---------------------------------------------------------------------------
+
+# Fake Helm: models the single release "cbse" behind a state file. Every call
+# is logged; unknown subcommands (including `get manifest`, `get values`, and
+# `get all`) fail loudly so any forbidden diagnostic call breaks the run.
+cat >"${tmp}/fake-helm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+log="${FAKE_CMD_LOG:-/dev/null}"
+printf 'H: %s\n' "$*" >>"${log}"
+state="${FAKE_HELM_STATE:-}"
+case "${1:-}" in
+  version)
+    echo "v3.18.4"
+    ;;
+  upgrade|install)
+    if [[ "${FAKE_HELM_INSTALL_FAIL:-0}" == "1" ]]; then
+      echo "Error: INSTALLATION FAILED (self-test failure injection)" >&2
+      exit 1
+    fi
+    [[ -n "${state}" ]] || { echo "fake helm: FAKE_HELM_STATE is required" >&2; exit 9; }
+    touch "${state}"
+    ;;
+  status)
+    [[ -n "${state}" ]] || { echo "fake helm: FAKE_HELM_STATE is required" >&2; exit 9; }
+    if [[ ! -e "${state}" ]]; then
+      echo 'Error: release "cbse" not found' >&2
+      exit 1
+    fi
+    if [[ "$*" == *"-o json"* ]]; then
+      printf '{"info":{"status":"deployed"}}\n'
+    else
+      printf 'NAME: cbse\nSTATUS: deployed\n\nResources:\n- v1/Pod/core-db-0\n- v1/Pod/sm-eds-nats-0\n- apps/v1/StatefulSet/core-db\n- apps/v1/StatefulSet/sm-eds-nats\n- apps/v1/Deployment/experiment-operator\n- apps/v1/Deployment/scenario-manager\n'
+    fi
+    ;;
+  history)
+    [[ -n "${state}" ]] || { echo "fake helm: FAKE_HELM_STATE is required" >&2; exit 9; }
+    if [[ ! -e "${state}" ]]; then
+      echo 'Error: release "cbse" not found' >&2
+      exit 1
+    fi
+    printf 'REVISION\tCHART\tUPDATED\tSTATUS\tDESCRIPTION\n1\tcbse-0.1.0\t2026-01-01 00:00:00\tdeployed\tinstall: installed (self-test)\n'
+    ;;
+  list)
+    if [[ -n "${state}" && -e "${state}" ]]; then
+      printf 'cbse\n'
+    fi
+    ;;
+  uninstall)
+    if [[ "${FAKE_HELM_UNINSTALL_FAIL:-0}" == "1" ]]; then
+      echo 'Error: UNINSTALL FAILED (self-test failure injection)' >&2
+      exit 1
+    fi
+    [[ -n "${state}" ]] || { echo "fake helm: FAKE_HELM_STATE is required" >&2; exit 9; }
+    rm -f "${state}"
+    ;;
+  *)
+    echo "unexpected fake helm call: $*" >&2
+    exit 9
+    ;;
+esac
+EOF
+chmod +x "${tmp}/fake-helm"
+
+# Fake go: the smoke orchestrator ends with `go test -tags=e2e`; the
+# self-test asserts orchestration, not the suite, so the fake succeeds.
+cat >"${tmp}/fake-bin/go" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${tmp}/fake-bin/go"
+
+# Fake kubectl for the full smoke flow: honors every preflight read, the
+# shared and installer-specific smoke commands, the diagnose/clean/teardown
+# commands, and logs each call. The registry Secret JSON carries a sentinel
+# payload so the artifact scan can prove no Secret data leaked.
+cat >"${tmp}/kubectl-smoke" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+log="${FAKE_CMD_LOG:-/dev/null}"
+printf 'K: %s\n' "$*" >>"${log}"
+args="$*"
+# Consume stdin before exiting so upstream writers (jq, kubectl --dry-run)
+# never hit a closed pipe (SIGPIPE) in the smoke pipeline.
+if [[ "${args}" == *" -f -"* ]]; then
+  cat >/dev/null || true
+fi
+case "${args}" in
+  *"config current-context"*) echo default ;;
+  *"config view --minify"*) printf '%s' "${FAKE_SERVER:-https://192.168.101.245:6443}" ;;
+  *"version -o json"*) printf '%s' '{"serverVersion":{"gitVersion":"v1.32.5+k3s1"}}' ;;
+  *"get nodes"*) cat "${FAKE_NODES_FILE:?FAKE_NODES_FILE is required}" ;;
+  *"get --raw=/metrics"*)
+    case "${FAKE_USERNS:-1}" in
+      0) printf '%s\n' 'kubernetes_feature_enabled{name="UserNamespacesSupport",stage="BETA"} 0' ;;
+      missing) : ;;
+      *) printf '%s\n' 'kubernetes_feature_enabled{name="UserNamespacesSupport",stage="BETA"} 1' ;;
+    esac ;;
+  *"auth can-i"*) echo yes ;;
+  *"get secret cbse-registry-auth -n cbse-test-system -o jsonpath"*) echo kubernetes.io/dockerconfigjson ;;
+  *"get secret cbse-registry-auth -n cbse-test-system -o json"*)
+    cat <<'JSON'
+{"apiVersion":"v1","kind":"Secret","metadata":{"name":"cbse-registry-auth","namespace":"cbse-test-system","resourceVersion":"1","uid":"fake-uid","creationTimestamp":"2026-01-01T00:00:00Z","managedFields":[]},"type":"kubernetes.io/dockerconfigjson","data":{".dockerconfigjson":"U0VOVElORUxfU0VDUkVUX1BBWUxPQUQ="}}
+JSON
+    ;;
+  *"create namespace cbse-test-system --dry-run=client -o yaml"*)
+    printf 'apiVersion: v1\nkind: Namespace\nmetadata:\n  name: cbse-test-system\n' ;;
+  *"label namespace cbse-test-system"*) exit 0 ;;
+  *" create -f "*) exit 0 ;;
+  *"get crd simulationexperiments.experiment.cbse.terministic.de -o jsonpath={.metadata.labels"*) echo cbse ;;
+  *"get crd simulationexperiments.experiment.cbse.terministic.de -o jsonpath={.spec.versions[?(@.storage==true)].name}"*) echo alpha4 ;;
+  *"get crd simulationexperiments.experiment.cbse.terministic.de -o jsonpath={.spec.versions[*].name}"*) echo alpha4 ;;
+  *"get crd simulationexperiments.experiment.cbse.terministic.de"*) exit 0 ;;
+  *"apply --server-side --dry-run=server"*) exit 0 ;;
+  *"apply --server-side"*) exit 0 ;;
+  *"label crd simulationexperiments"*) exit 0 ;;
+  *"create namespace cbse-e2e-"*) exit 0 ;;
+  *"label namespace cbse-e2e-"*) exit 0 ;;
+  *"create secret generic core-db-credentials"*)
+    printf 'apiVersion: v1\nkind: Secret\nmetadata:\n  name: core-db-credentials\ntype: Opaque\n' ;;
+  *"apply -n cbse-e2e-"*) exit 0 ;;
+  *"apply -f -"*) exit 0 ;;
+  *"apply -f "*) exit 0 ;;
+  *"patch serviceaccount default"*) exit 0 ;;
+  *"kustomize "*)
+    printf 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: CBSE_NAMESPACE-stub\n' ;;
+  *"rollout status deployment/"*) exit 0 ;;
+  *"rollout status statefulset/"*) exit 0 ;;
+  *"logs deployment/scenario-manager"*) echo "Scenario Manager is ready" ;;
+  *"get deployment scenario-manager -n cbse-e2e-"*) echo /readyz ;;
+  *"wait --for=condition=Ready"*) exit 0 ;;
+  *"get namespace cbse-e2e-"*) exit 0 ;;
+  *"get all,configmaps"*) printf 'NAMESPACE   NAME   READY   AGE\n' ;;
+  *"get events -n cbse-e2e-"*) printf 'LAST SEEN   TYPE     REASON\n' ;;
+  *"describe pods -n cbse-e2e-"*) printf 'stub pod descriptions\n' ;;
+  *"get simulationexperiments -n cbse-e2e-"*) printf 'items: []\n' ;;
+  *"get pods -n "*"-o custom-columns"*) printf 'NAME   IMAGE   PHASE\n' ;;
+  *"get pods -n "*"-o name"*) : ;;
+  *"get statefulsets,pvc"*) printf 'NAME   READY   AGE\n' ;;
+  *"delete simulationexperiment --all -n cbse-e2e-"*) exit 0 ;;
+  *"delete namespace cbse-e2e-"*) exit 0 ;;
+  *"get lease cbse-smoke-lock"*) printf '%s' "${FAKE_LEASE_HOLDER:-}" ;;
+  *"delete lease cbse-smoke-lock"*) exit 0 ;;
+  *)
+    echo "unexpected fake smoke kubectl call: ${args}" >&2
+    exit 9
+    ;;
+esac
+EOF
+chmod +x "${tmp}/kubectl-smoke"
+
+smoke_common=(
+  KUBECTL="${tmp}/kubectl-smoke"
+  KUBECONFIG="${tmp}/kubeconfig"
+  SKIP_BUILD=1
+  FAKE_NODES_FILE="${tmp}/node_amd64.json"
+  OPERATOR_IMAGE=registry.example.test/operator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  SM_IMAGE=registry.example.test/sm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  EDS_IMAGE=registry.example.test/eds@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+  EDS_REFERENCE_IMAGE=registry.example.test/eds-reference@sha256:222222222222222222222222222222222222222222222222222222222222222
+  TRANS_IMAGE=registry.example.test/trans@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  RUNNER_BASE_IMAGE=registry.example.test/runner-base@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  DETAIL_DB_IMAGE=registry.example.test/scenario-detail-database@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+  PPS_IMAGE=registry.example.test/pps@sha256:1111111111111111111111111111111111111111111111111111111111111111
+  CBSE_REGISTRY_AUTH_FILE="${tmp}/auth.json"
+)
+
+line_of() {
+  grep -nF "$1" "$2" 2>/dev/null | head -n1 | cut -d: -f1 || true
+}
+
+# --- manifest installer flow (default path, unchanged behavior) -------------
+smoke_log_m="${tmp}/smoke-m-cmds.log"
+rm -f "${smoke_log_m}"
+smoke_rc=0
+PATH="${tmp}/fake-bin:${PATH}" \
+  FAKE_CMD_LOG="${smoke_log_m}" FAKE_LEASE_HOLDER=h5manifest \
+  RUN_ID=h5manifest CBSE_STACK_INSTALLER=manifest HELM="${tmp}/no-helm" \
+  env "${smoke_common[@]}" "${root}/test/harness/smoke.sh" >/dev/null 2>&1 || smoke_rc=$?
+[[ "${smoke_rc}" -eq 0 ]] || { echo "smoke.sh manifest flow failed (rc=${smoke_rc})" >&2; exit 1; }
+# manifest mode keeps the existing behavior: CRD server-side apply, harness
+# core-db-credentials, default-SA pull patch, stack.yaml, log-grep readiness.
+grep -Fq 'apply --server-side --field-manager=cbse-smoke -f ' "${smoke_log_m}" || { echo "manifest flow did not server-side apply the CRD" >&2; exit 1; }
+grep -Fq 'create secret generic core-db-credentials' "${smoke_log_m}" || { echo "manifest flow did not create core-db-credentials" >&2; exit 1; }
+grep -Fq 'patch serviceaccount default' "${smoke_log_m}" || { echo "manifest flow did not patch the default ServiceAccount" >&2; exit 1; }
+grep -Fq 'kustomize ' "${smoke_log_m}" || { echo "manifest flow did not render stack.yaml via kustomize" >&2; exit 1; }
+grep -Fq 'logs deployment/scenario-manager' "${smoke_log_m}" || { echo "manifest flow lost the log-grep readiness gate" >&2; exit 1; }
+grep -Eq '^H: ' "${smoke_log_m}" && { echo "manifest flow invoked the Helm binary" >&2; exit 1; }
+m_lease="$(line_of ' create -f ' "${smoke_log_m}")"
+m_ns="$(line_of 'create namespace cbse-e2e-h5manifest' "${smoke_log_m}")"
+m_cred="$(line_of 'create secret generic core-db-credentials' "${smoke_log_m}")"
+m_pull="$(line_of 'apply -n cbse-e2e-h5manifest -f -' "${smoke_log_m}")"
+m_sa="$(line_of 'patch serviceaccount default' "${smoke_log_m}")"
+m_stack="$(line_of "apply -n cbse-e2e-h5manifest -f ${root}/artifacts/test/h5manifest/stack.yaml" "${smoke_log_m}")"
+m_rollout="$(line_of 'rollout status deployment/core-db' "${smoke_log_m}")"
+m_exp="$(line_of "apply -f ${root}/artifacts/test/h5manifest/experiment.yaml" "${smoke_log_m}")"
+m_crdel="$(line_of 'delete simulationexperiment --all -n cbse-e2e-h5manifest' "${smoke_log_m}")"
+m_nsdel="$(line_of 'delete namespace cbse-e2e-h5manifest' "${smoke_log_m}")"
+m_leaseget="$(line_of 'get lease cbse-smoke-lock' "${smoke_log_m}")"
+m_leasedel="$(line_of 'delete lease cbse-smoke-lock' "${smoke_log_m}")"
+for v in m_lease m_ns m_cred m_pull m_sa m_stack m_rollout m_exp m_crdel m_nsdel m_leaseget m_leasedel; do
+  [[ -n "${!v}" ]] || { echo "manifest flow missing step: ${v}" >&2; exit 1; }
+done
+(( m_lease < m_ns && m_ns < m_cred && m_cred < m_pull && m_pull < m_sa && m_sa < m_stack && m_stack < m_rollout && m_rollout < m_exp && m_exp < m_crdel && m_crdel < m_nsdel && m_nsdel < m_leaseget && m_leaseget < m_leasedel )) || {
+  echo "manifest flow command order violated (Lease < ns < credentials < pull Secret < SA patch < stack < rollout < experiment < CR delete < ns delete < Lease read < Lease release)" >&2
+  exit 1
+}
+m_art="${root}/artifacts/test/h5manifest"
+grep -Fqx manifest "${m_art}/stack-installer.txt" || { echo "manifest flow did not write stack-installer.txt" >&2; exit 1; }
+[[ -s "${m_art}/stack.yaml" ]] || { echo "manifest flow lost stack.yaml rendering" >&2; exit 1; }
+grep -Fq '"installer":"manifest"' "${m_art}/summary.json" || { echo "manifest summary missing the installer field" >&2; exit 1; }
+grep -Fq '"result":"passed"' "${m_art}/summary.json" || { echo "manifest summary reports a failure" >&2; exit 1; }
+# No Secret payload may leak into the artifacts (sentinel in both encodings).
+grep -Rq 'SENTINEL_SECRET_PAYLOAD\|U0VOVElORUxfU0VDUkVUX1BBWUxPQUQ=' "${m_art}" && {
+  echo "manifest flow leaked the registry Secret payload into the artifacts" >&2
+  exit 1
+}
+
+# --- helm installer flow -----------------------------------------------------
+smoke_log_h="${tmp}/smoke-h-cmds.log"
+smoke_state_h="${tmp}/helm-h-state"
+rm -f "${smoke_log_h}" "${smoke_state_h}"
+smoke_rc=0
+PATH="${tmp}/fake-bin:${PATH}" \
+  FAKE_CMD_LOG="${smoke_log_h}" FAKE_LEASE_HOLDER=h5helm FAKE_HELM_STATE="${smoke_state_h}" \
+  RUN_ID=h5helm CBSE_STACK_INSTALLER=helm HELM="${tmp}/fake-helm" \
+  env "${smoke_common[@]}" "${root}/test/harness/smoke.sh" >/dev/null 2>&1 || smoke_rc=$?
+[[ "${smoke_rc}" -eq 0 ]] || { echo "smoke.sh helm flow failed (rc=${smoke_rc})" >&2; exit 1; }
+# Helm mode must not create the credentials, patch the default SA, apply the
+# CRD, render stack.yaml, or use log-grep readiness.
+grep -Fq 'apply --server-side' "${smoke_log_h}" && { echo "helm flow applied the CRD separately" >&2; exit 1; }
+grep -Fq 'create secret generic core-db-credentials' "${smoke_log_h}" && { echo "helm flow created core-db-credentials (the chart owns it)" >&2; exit 1; }
+grep -Fq 'patch serviceaccount default' "${smoke_log_h}" && { echo "helm flow patched the default ServiceAccount" >&2; exit 1; }
+grep -Fq 'kustomize ' "${smoke_log_h}" && { echo "helm flow rendered stack.yaml (manifest-only)" >&2; exit 1; }
+grep -Fq 'logs deployment/scenario-manager' "${smoke_log_h}" && { echo "helm flow used log-grep readiness" >&2; exit 1; }
+# The exact pinned install command consumes the generated artifact values.
+grep -Fq "H: upgrade --install cbse ${root}/charts/cbse --namespace cbse-e2e-h5helm --values ${root}/artifacts/test/h5helm/helm-values.yaml --wait --atomic --timeout 5m" "${smoke_log_h}" || {
+  echo "helm flow did not run the pinned upgrade --install command with the artifact values" >&2
+  exit 1
+}
+h_pull="$(line_of 'apply -n cbse-e2e-h5helm -f -' "${smoke_log_h}")"
+h_install="$(line_of 'H: upgrade --install cbse' "${smoke_log_h}")"
+h_status="$(line_of 'H: status cbse -n cbse-e2e-h5helm -o json' "${smoke_log_h}")"
+h_rollout="$(line_of 'rollout status statefulset/core-db' "${smoke_log_h}")"
+h_wait="$(line_of 'wait --for=condition=Ready' "${smoke_log_h}")"
+h_label="$(line_of 'label crd simulationexperiments' "${smoke_log_h}")"
+h_exp="$(line_of "apply -f ${root}/artifacts/test/h5helm/experiment.yaml" "${smoke_log_h}")"
+h_crdel="$(line_of 'delete simulationexperiment --all -n cbse-e2e-h5helm' "${smoke_log_h}")"
+h_uninstall="$(line_of 'H: uninstall cbse' "${smoke_log_h}")"
+h_nsdel="$(line_of 'delete namespace cbse-e2e-h5helm' "${smoke_log_h}")"
+h_leaseget="$(line_of 'get lease cbse-smoke-lock' "${smoke_log_h}")"
+h_leasedel="$(line_of 'delete lease cbse-smoke-lock' "${smoke_log_h}")"
+for v in h_pull h_install h_status h_rollout h_wait h_label h_exp h_crdel h_uninstall h_nsdel h_leaseget h_leasedel; do
+  [[ -n "${!v}" ]] || { echo "helm flow missing step: ${v}" >&2; exit 1; }
+done
+(( h_pull < h_install && h_install < h_status && h_status < h_rollout && h_rollout < h_wait && h_wait < h_label && h_label < h_exp && h_exp < h_crdel && h_crdel < h_uninstall && h_uninstall < h_nsdel && h_nsdel < h_leaseget && h_leaseget < h_leasedel )) || {
+  echo "helm flow command order violated (pull Secret < install < status < rollout < readyz wait < CRD label < experiment < CR delete < helm uninstall < ns delete < Lease read < Lease release)" >&2
+  exit 1
+}
+# Teardown verified the release absence after the uninstall: a final release
+# lookup must appear after the uninstall line.
+h_absent="$(grep -nF 'H: status cbse -n cbse-e2e-h5helm' "${smoke_log_h}" | tail -n1 | cut -d: -f1)"
+(( h_absent > h_uninstall )) || { echo "helm teardown did not verify the release absence" >&2; exit 1; }
+[[ ! -e "${smoke_state_h}" ]] || { echo "helm teardown left the release behind" >&2; exit 1; }
+h_art="${root}/artifacts/test/h5helm"
+grep -Fqx helm "${h_art}/stack-installer.txt" || { echo "helm flow did not write stack-installer.txt" >&2; exit 1; }
+[[ -s "${h_art}/helm-status.txt" ]] || { echo "helm flow did not write helm-status.txt" >&2; exit 1; }
+[[ -s "${h_art}/helm-history.txt" ]] || { echo "helm flow did not write helm-history.txt" >&2; exit 1; }
+[[ -f "${h_art}/objects-inventory.txt" ]] || { echo "helm flow did not write the object inventory" >&2; exit 1; }
+[[ ! -f "${h_art}/stack.yaml" ]] || { echo "helm flow wrote stack.yaml (manifest-only artifact)" >&2; exit 1; }
+grep -Fq '"installer":"helm"' "${h_art}/summary.json" || { echo "helm summary missing the installer field" >&2; exit 1; }
+grep -Fq '"result":"passed"' "${h_art}/summary.json" || { echo "helm summary reports a failure" >&2; exit 1; }
+# The generated values file: private (0600), exactly five digest components,
+# locked auxiliary images included.
+h_values="${h_art}/helm-values.yaml"
+[[ -f "${h_values}" ]] || { echo "helm flow did not generate the private values file" >&2; exit 1; }
+h_mode="$(stat -f '%Lp' "${h_values}" 2>/dev/null || stat -c '%a' "${h_values}")"
+[[ "${h_mode}" == "600" ]] || { echo "generated values file is not mode 0600 (${h_mode})" >&2; exit 1; }
+[[ "$(grep -c '^    repository:' "${h_values}")" -eq 5 ]] || { echo "generated values must map exactly five components" >&2; exit 1; }
+grep -Fqx '    repository: "registry.example.test/operator"' "${h_values}" || { echo "generated values lost the run's operator image" >&2; exit 1; }
+grep -Fqx '    repository: "docker.io/library/nats"' "${h_values}" || { echo "generated values lost the locked NATS image" >&2; exit 1; }
+grep -Fqx '    repository: "docker.io/library/postgres"' "${h_values}" || { echo "generated values lost the locked Core DB image" >&2; exit 1; }
+grep -Fqx '    repository: "docker.io/alpine/k8s"' "${h_values}" || { echo "generated values lost the locked hook image" >&2; exit 1; }
+# Safe-artifact proof: no Secret payload (sentinel in both encodings), no
+# Helm manifest, no decoded release Secret anywhere under the artifact dir.
+grep -Rq 'SENTINEL_SECRET_PAYLOAD\|U0VOVElORUxfU0VDUkVUX1BBWUxPQUQ=' "${h_art}" && {
+  echo "helm flow leaked the registry Secret payload into the artifacts" >&2
+  exit 1
+}
+grep -Rq 'helm.sh/release-manifest\|kind: Secret' "${h_art}/helm-status.txt" "${h_art}/helm-history.txt" && {
+  echo "helm flow wrote a manifest or Secret body to the status/history artifacts" >&2
+  exit 1
+}
+
+# --- invalid installer: rejected before any cluster mutation ----------------
+smoke_log_b="${tmp}/smoke-bad-cmds.log"
+rm -f "${smoke_log_b}"
+bad_rc=0
+PATH="${tmp}/fake-bin:${PATH}" \
+  FAKE_CMD_LOG="${smoke_log_b}" FAKE_LEASE_HOLDER=h5bad \
+  RUN_ID=h5bad CBSE_STACK_INSTALLER=kustomize \
+  env "${smoke_common[@]}" "${root}/test/harness/smoke.sh" >/dev/null 2>"${tmp}/smoke-bad.err" || bad_rc=$?
+[[ "${bad_rc}" -eq 2 ]] || { echo "smoke.sh accepted an invalid installer (rc=${bad_rc})" >&2; exit 1; }
+grep -Fq 'CBSE_STACK_INSTALLER must be manifest or helm' "${tmp}/smoke-bad.err" || { echo "invalid-installer rejection message missing" >&2; exit 1; }
+[[ -e "${smoke_log_b}" && -s "${smoke_log_b}" ]] && { echo "invalid installer reached the cluster (kubectl was invoked)" >&2; exit 1; }
+[[ -d "${root}/artifacts/test/h5bad" ]] && { echo "invalid installer created an artifact dir before validation" >&2; exit 1; }
+
+# --- failure propagation: a failed helm install still tears down ------------
+smoke_log_f="${tmp}/smoke-f-cmds.log"
+smoke_state_f="${tmp}/helm-f-state"
+rm -f "${smoke_log_f}" "${smoke_state_f}"
+fail_rc=0
+PATH="${tmp}/fake-bin:${PATH}" \
+  FAKE_CMD_LOG="${smoke_log_f}" FAKE_LEASE_HOLDER=h5fail FAKE_HELM_STATE="${smoke_state_f}" \
+  FAKE_HELM_INSTALL_FAIL=1 \
+  RUN_ID=h5fail CBSE_STACK_INSTALLER=helm HELM="${tmp}/fake-helm" \
+  env "${smoke_common[@]}" "${root}/test/harness/smoke.sh" >/dev/null 2>&1 || fail_rc=$?
+[[ "${fail_rc}" -ne 0 ]] || { echo "smoke.sh swallowed the helm install failure (rc=0)" >&2; exit 1; }
+grep -Fq 'delete simulationexperiment --all -n cbse-e2e-h5fail' "${smoke_log_f}" || { echo "failed helm run did not delete the CRs in the trap" >&2; exit 1; }
+grep -Fq 'delete namespace cbse-e2e-h5fail' "${smoke_log_f}" || { echo "failed helm run did not delete the namespace in the trap" >&2; exit 1; }
+grep -Fq 'delete lease cbse-smoke-lock' "${smoke_log_f}" || { echo "failed helm run did not release the Lease" >&2; exit 1; }
+f_crdel="$(line_of 'delete simulationexperiment --all -n cbse-e2e-h5fail' "${smoke_log_f}")"
+f_nsdel="$(line_of 'delete namespace cbse-e2e-h5fail' "${smoke_log_f}")"
+(( f_crdel < f_nsdel )) || { echo "failed helm run deleted the namespace before the CRs" >&2; exit 1; }
+[[ ! -e "${smoke_state_f}" ]] || { echo "failed helm run left a release state behind" >&2; exit 1; }
+grep -Fq '"result":"failed"' "${root}/artifacts/test/h5fail/summary.json" || { echo "failed helm run summary is not failed" >&2; exit 1; }
+
+# --- clean.sh: Helm-aware CRs-first ordering and surfaced failure -----------
+cat >"${tmp}/kubectl-clean-h5" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+log="${FAKE_CMD_LOG:-/dev/null}"
+printf 'K: %s\n' "$*" >>"${log}"
+case "$*" in
+  *"get namespace cbse-e2e-h5clean -o jsonpath"*) printf '%s' h5clean ;;
+  *"get namespace cbse-e2e-h5clean"*) exit 0 ;;
+  *"get crd simulationexperiments"*) exit 0 ;;
+  *"delete simulationexperiment --all -n cbse-e2e-h5clean --wait=true --timeout=120s"*) exit 0 ;;
+  *"delete namespace cbse-e2e-h5clean --wait=true --timeout=180s"*) exit 0 ;;
+  *"get lease cbse-smoke-lock"*) printf '%s' h5clean ;;
+  *"delete lease cbse-smoke-lock"*) exit 0 ;;
+  *) echo "unexpected clean-h5 fake kubectl call: $*" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "${tmp}/kubectl-clean-h5"
+
+clean_log_1="${tmp}/clean-h5.log"
+clean_state="${tmp}/helm-clean-state"
+rm -f "${clean_log_1}" "${clean_state}"
+touch "${clean_state}"
+KUBECTL="${tmp}/kubectl-clean-h5" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=h5clean \
+  HELM="${tmp}/fake-helm" FAKE_CMD_LOG="${clean_log_1}" FAKE_HELM_STATE="${clean_state}" \
+  "${root}/test/harness/clean.sh"
+c_crdel="$(line_of 'delete simulationexperiment --all -n cbse-e2e-h5clean' "${clean_log_1}")"
+c_uninstall="$(line_of 'H: uninstall cbse' "${clean_log_1}")"
+c_nsdel="$(line_of 'delete namespace cbse-e2e-h5clean' "${clean_log_1}")"
+c_leaseget="$(line_of 'get lease cbse-smoke-lock' "${clean_log_1}")"
+c_leasedel="$(line_of 'delete lease cbse-smoke-lock' "${clean_log_1}")"
+for v in c_crdel c_uninstall c_nsdel c_leaseget c_leasedel; do
+  [[ -n "${!v}" ]] || { echo "clean.sh missing helm-aware step: ${v}" >&2; exit 1; }
+done
+(( c_crdel < c_uninstall && c_uninstall < c_nsdel && c_nsdel < c_leaseget && c_leaseget < c_leasedel )) || {
+  echo "clean.sh ordering violated (CR delete < helm uninstall < namespace delete < Lease read < Lease release)" >&2
+  exit 1
+}
+[[ ! -e "${clean_state}" ]] || { echo "clean.sh did not uninstall the Helm release" >&2; exit 1; }
+
+# A failed release uninstall is surfaced (non-zero exit) but the namespace
+# deletion and Lease release still proceed.
+clean_log_2="${tmp}/clean-h5-fail.log"
+rm -f "${clean_log_2}"
+touch "${clean_state}"
+clean_rc=0
+KUBECTL="${tmp}/kubectl-clean-h5" KUBECONFIG="${tmp}/kubeconfig" RUN_ID=h5clean \
+  HELM="${tmp}/fake-helm" FAKE_CMD_LOG="${clean_log_2}" FAKE_HELM_STATE="${clean_state}" \
+  FAKE_HELM_UNINSTALL_FAIL=1 \
+  "${root}/test/harness/clean.sh" >/dev/null 2>"${tmp}/clean-h5-fail.err" || clean_rc=$?
+[[ "${clean_rc}" -eq 1 ]] || { echo "clean.sh did not exit non-zero on the failed Helm uninstall (rc=${clean_rc})" >&2; exit 1; }
+grep -Fq 'Helm uninstall cbse failed' "${tmp}/clean-h5-fail.err" || { echo "clean.sh did not surface the uninstall failure" >&2; exit 1; }
+grep -Fq 'delete namespace cbse-e2e-h5clean' "${clean_log_2}" || { echo "clean.sh skipped the namespace deletion after the uninstall failure" >&2; exit 1; }
+grep -Fq 'delete lease cbse-smoke-lock' "${clean_log_2}" || { echo "clean.sh leaked the Lease after the uninstall failure" >&2; exit 1; }
+
+# --- preflight: installer/tool validation -----------------------------------
+if env "${common[@]}" CBSE_STACK_INSTALLER=kustomize "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted an invalid CBSE_STACK_INSTALLER" >&2; exit 1
+fi
+if env "${common[@]}" CBSE_STACK_INSTALLER=helm HELM="${tmp}/no-such-helm" "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a missing helm binary for the helm installer" >&2; exit 1
+fi
+cat >"${tmp}/helm-wrong-version" <<'EOF'
+#!/usr/bin/env bash
+echo "v3.9.9"
+EOF
+chmod +x "${tmp}/helm-wrong-version"
+if env "${common[@]}" CBSE_STACK_INSTALLER=helm HELM="${tmp}/helm-wrong-version" "${root}/test/harness/preflight.sh" >/dev/null 2>&1; then
+  echo "preflight accepted a non-pinned helm version for the helm installer" >&2; exit 1
+fi
+cat >"${tmp}/helm-pinned" <<'EOF'
+#!/usr/bin/env bash
+echo "v3.18.4"
+EOF
+chmod +x "${tmp}/helm-pinned"
+env "${common[@]}" CBSE_STACK_INSTALLER=helm HELM="${tmp}/helm-pinned" "${root}/test/harness/preflight.sh" >/dev/null
+
+# Self-test artifact cleanup (the ignored artifacts/ directory stays pristine).
+rm -rf "${root}/artifacts/test/h5manifest" "${root}/artifacts/test/h5helm" "${root}/artifacts/test/h5fail"
 
 echo "Harness self-tests passed."
