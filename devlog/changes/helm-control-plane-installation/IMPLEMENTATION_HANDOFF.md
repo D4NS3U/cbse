@@ -11,7 +11,7 @@ This is the durable routing ledger for [FEATURE.md](FEATURE.md). Slice states us
 | H3 — internal NATS and Core DB | **complete** | Landed on feature branch via merge commit `e465775` (reviewed implementation HEAD `60b9a3efdf000df6ea8f4b0e25cdf39fa593573a`); F-R1 closed | none |
 | H4 — lifecycle safety | **complete** | Landed on feature branch via merge commit `b453fff` (reviewed corrected HEAD `0d4800c2edc72554b5869e5d771e07b1778bb150`); fresh lifecycle and 15/15 smoke independently rerun | none |
 | H5 — Helm smoke integration | **complete** | Landed via merge commit `8267460` (reviewed corrected HEAD `abe40ff`; implementation `f27eb5d` plus namespace-scope fix `abe40ff`); independent manifest and Helm smoke both 15/15 | none |
-| H6 — documentation | incomplete | H5 settled; documentation wave unblocked | manager/user decision to start H6 |
+| H6 — documentation | **complete** | Landed via merge commit `6796c8a` (reviewed corrected HEAD `5c75b87`; implementation `32d2856` plus review fixes `5c75b87`) | none |
 
 ## H1 settlement (2026-11-02)
 
@@ -165,6 +165,22 @@ The first Helm run exposed that the aggregate pass used `listNamespace = ""` whi
 
 Independent review recorded non-blocking observations for later maintenance: a cold-node Translator pull should remain under observation despite successful live runs without the default-SA patch; one transient EDS port-forward EOF belongs in the flake ledger; and the smoke EXIT trap's uninstall-error reporting differs from explicit `test-clean` failure propagation. None blocks H5.
 
-## Next wave
+## H6 settlement (2026-11-25)
 
-H6 — Helm installation and operations documentation — is unblocked. It must document only behavior proven by H1–H5, remain documentation-only, pass chart/render/link/secret-hygiene checks, and receive independent review before landing on this feature branch.
+- **Implementation:** task `task_61f0462a36de`, dispatch `ctx_e466eed45d70`, runtime attestation `ai.forge/qwen3.8-27b-nvfp4`, implementation commit `32d2856`.
+- **Review-fix round:** task `task_ddc088b582a5`, dispatch `ctx_98423aaedeb2`, corrected HEAD `5c75b87`.
+- **Independent review:** task `task_87955da87dbc`, dispatch `ctx_7f69a86795fd`, initial `request-fixes`; re-review task `task_e4621c06ac61`, dispatch `ctx_f0920b45296b`, runtime attestation `ai.forge/glm`, verdict **approve** on exact corrected HEAD `5c75b87`.
+- **Landing:** feature-branch merge commit `6796c8a`; `main` remains untouched.
+- **Reports (untracked):** `artifacts/orchestration/helm-H6-implementation-report.md`, `artifacts/orchestration/helm-H6-review.md`.
+
+### Verified H6 gates
+
+- Added canonical `docs/HELM_INSTALLATION.md` and completed chart README/NOTES, root README, cluster requirements, testing guide, and bounded wiki installation/topology links.
+- Documentation accurately covers installed resources, same-namespace operation, Secret ownership/lifecycle, payload-safe registry Secret creation, generated immutable image values, install/observe/first experiment, upgrade/rollback, CRs-first guarded uninstall, retained data, CRD lifecycle, troubleshooting, limitations, and the external-service roadmap.
+- Review fixes corrected the per-workload private-image pull boundary, aligned hook/NATS/PostgreSQL repositories with landed image locks, and reduced registry Secret verification to metadata name/type only.
+- `make helm-lint`, `make helm-render`, and `make test-helm-chart`: rc=0 from implementation and independent re-review.
+- Relative-link, command/value/resource-name, secret/private-infrastructure hygiene, required-content, and docs-only containment audits all passed.
+
+## Feature completion
+
+H1–H6 are complete and independently approved. The feature branch contains the chart, dual-installer smoke integration, lifecycle safety, and canonical documentation. Remaining work is administrative settlement only: push the synchronized feature branch and obtain explicit user approval before merging it into `main`.

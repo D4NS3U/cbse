@@ -1,5 +1,7 @@
 # Pause checkpoint — Helm control-plane installation
 
+> **Historical checkpoint, superseded 2026-11-25:** H5 and H6 are now complete and independently approved. See `IMPLEMENTATION_HANDOFF.md` for the current feature-complete state.
+
 **Recorded:** 2026-11-04  
 **Feature branch:** `D4NS3U/helm-control-plane-installation`  
 **Implementation checkpoint:** `319893592eab4ab784859b5c613489713d6d478d`
