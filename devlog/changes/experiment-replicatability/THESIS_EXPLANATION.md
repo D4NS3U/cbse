@@ -43,9 +43,10 @@ Asynchronous start times also do not help when time is not part of the RNG
 state. The requirement is not merely “a separate RNG object per container.” The
 requirement is:
 
-> Every logical replication must receive a distinct random stream, and that
-> stream must be deterministically reconstructible when the replication is
-> retried or replayed.
+> Every different replication index within a scenario must receive a distinct
+> random stream, and that stream must be deterministically reconstructible when
+> the replication is retried or replayed. Reusing a scenario seed across
+> scenarios may intentionally align their indexed streams.
 
 ## 2. Current CBSE execution flow
 
@@ -169,10 +170,11 @@ spec:
     rootSeed: 123456789
 ```
 
-The final API still needs rulings for integer range, required versus generated
-behavior, and whether updates are forbidden after execution begins. Regardless
-of the final shape, the value must be durable, exportable, and stable throughout
-the experiment.
+The draft implementation contract makes this field required, accepts values
+from zero through `9223372036854775807`, and makes the complete `randomness`
+object immutable after creation. There is no server-generated mode. A pointer
+in the Go API lets runtime code distinguish an absent legacy stored value from
+an explicit zero and fail closed.
 
 The root seed is scientific provenance, not a password.
 
@@ -182,13 +184,20 @@ The scenario seed separates the random streams of different scenarios. It lives
 in EDS recipe information and is resolved by the Translator when it generates
 the runner image.
 
-The current reference recipe already has an integer called `seed_policy`. One
-open design question is whether this existing value should formally become the
-scenario seed or whether a new `scenario_seed` field should be introduced.
+The draft preserves the current integer field `seed_policy` and formally defines
+its value as the scenario seed. No parallel `scenario_seed` recipe or database
+column is introduced. Its range is `0..2147483647`, matching PostgreSQL
+`INTEGER`. Result provenance additionally emits `scenario_seed` as an explicit
+semantic alias and asserts that it equals `seed_policy`.
 
-The scenario seed must not be inferred from a generated Core DB row ID if a
-recreated experiment is expected to reconstruct the same streams. It must be
-part of the persistent experimental design.
+Scenario-seed uniqueness is not required. If two scenarios intentionally use
+the same scenario seed, equal replication indices receive equal effective seeds.
+This is the platform's common-random-number mechanism. Scenarios that require
+independent streams must use different scenario seeds.
+
+The scenario seed is not inferred from a generated Core DB row ID. It remains
+part of the persistent experimental design so a recreated experiment can
+reconstruct the same streams.
 
 ### 5.3 Global replication index
 
@@ -263,16 +272,11 @@ env:
 Every Pod in the round receives the same root seed and offset. Kubernetes
 resolves a different completion index for each logical Job completion.
 
-The Translator-generated image additionally supplies the scenario seed, for
-example through:
-
-```text
-CBSE_SCENARIO_SEED=7001
-```
-
-or through a generated scenario configuration read by the base-image library.
-The exact representation remains open, but Scenario Manager should not parse
-model-specific recipe JSON to discover it.
+The Translator-generated image supplies the scenario seed through the existing
+`scenario.json` key `seed_policy`. The generated runner passes that integer as
+the explicit argument to the base-image `cbse_random.derive_stream` Facade.
+Scenario Manager therefore does not parse model-specific recipe JSON and no
+fourth runtime environment variable is required.
 
 The environment names are framework-owned. Custom Job templates must not be
 able to override them.
@@ -288,19 +292,25 @@ know future PPS wave sizes or cumulative offsets when the image is translated.
 The base image executes inside every runner Pod and can combine both sources of
 information.
 
-The base facility conceptually performs:
+The base facility exposes an immutable `StreamDescriptor` through:
+
+```python
+stream = cbse_random.derive_stream(scenario["seed_policy"])
+```
+
+Internally it performs:
 
 ```python
 root_seed = read_root_seed()
-scenario_seed = read_scenario_seed()
+scenario_seed = validate_argument(scenario_seed)
 offset = read_replication_offset()
 completion_index = read_completion_index()
 
-replication_index = offset + completion_index
+replication_index = checked_add(offset, completion_index)
 effective_seed = derive(root_seed, scenario_seed, replication_index)
 ```
 
-It then makes the effective seed available to the generated model runner.
+The generated model runner then adapts `stream.effective_seed` to its local RNG.
 
 The base facility must fail if required values are missing or malformed. It must
 never silently return to hostname- or time-based seeding.
@@ -329,34 +339,35 @@ base image digest B -> new derivation
 ```
 
 An old experiment retains its generated runner/base-image digest and therefore
-its original algorithm. A base image may emit a readable constant such as
-`cbse-seed-v1` in the result, but this is provenance produced by the artifact,
-not user-selectable configuration.
+its original algorithm. The draft base image emits the readable constant
+`cbse-hmac-sha256-u63-v1` in the result, but this is provenance produced by the
+artifact, not user-selectable configuration.
 
 The image digest remains the authoritative record of the executable behavior.
 
 ## 10. Effective-seed derivation
 
-The exact algorithm is not yet settled. One candidate is a byte-exact
-HMAC-SHA-256 construction:
+The draft pins a byte-exact HMAC-SHA-256 construction. The key is the root
+seed encoded as unsigned 64-bit big-endian. The message is the literal ASCII
+bytes `cbse.seed.v1` followed by a zero byte, then the scenario seed and global
+replication index, each encoded as unsigned 64-bit big-endian. The first eight
+digest bytes are interpreted unsigned big-endian and masked with
+`0x7fffffffffffffff`.
 
 ```text
-effective_seed = first 63 bits of HMAC-SHA-256(
-    key     = encoded experiment root seed,
-    message = domain separator
-              || encoded scenario seed
-              || encoded global replication index
-)
+key     = uint64be(root_seed)
+message = b"cbse.seed.v1\\0"
+          || uint64be(scenario_seed)
+          || uint64be(global_replication_index)
+digest  = HMAC-SHA-256(key, message)
+effective_seed = uint64be(digest[0:8]) AND 0x7fffffffffffffff
 ```
 
-A complete scientific contract must specify integer widths, signedness, byte
-order, domain-separator bytes, digest truncation, masking, error behavior, and
-test vectors. Simply writing “HMAC-SHA-256” is not enough for independent
-implementations to agree.
-
-A truncated hash has a theoretical collision probability. It is negligible for
-ordinary experiment sizes but not mathematically zero. The final design should
-state the accepted risk and whether duplicate effective seeds are checked.
+The normative feature specification contains literal cross-language golden
+vectors. A truncated hash has a theoretical collision probability. The draft
+accepts that negligible risk for ordinary experiment sizes, tests observed
+seeds for uniqueness, and retains the replication index—not the effective
+seed—as the primary logical identity.
 
 ## 11. Retry behavior under the proposed design
 
@@ -383,16 +394,19 @@ A Pod might successfully insert its result and then fail before Kubernetes
 records completion. A replacement Pod can rerun the same logical replication
 and attempt another insert.
 
-The deterministic seed design therefore exposes a related storage requirement:
-results must be idempotent by logical replication identity. A candidate key is:
+The draft makes results idempotent by logical replication identity. Every
+scenario already has its own result table, so that table gains a non-null unique
+`replication_index BIGINT` column. An insert for a new index creates one row. An
+identical result for an existing index is accepted as an idempotent retry. A
+different result for an existing index fails and leaves the original row
+unchanged.
 
-```text
-(experiment identity, scenario identity, global replication index)
-```
-
-Without this protection, PPS could count two attempts of the same replication
-as two independent observations. The exact Result DB schema and duplicate-write
-behavior remain to be designed.
+This prevents PPS from counting two attempts of the same replication as two
+independent observations. PPS also reads observations in ascending
+`replication_index`, rather than database insertion order. This makes the order
+of floating-point aggregation stable even when concurrent Pods finish in a
+different order. A legacy append-only table without the required
+column/constraint is rejected rather than altered by a runner Pod.
 
 ## 13. Local RNG and user flexibility
 
@@ -441,11 +455,12 @@ A result should record enough information to audit and reconstruct the stream:
 
 ```json
 {
+  "seed_policy": 1001,
   "root_seed": 123456789,
-  "scenario_seed": 7001,
+  "scenario_seed": 1001,
   "replication_index": 37,
-  "effective_seed": 8072139487123,
-  "seed_derivation": "cbse-seed-v1",
+  "effective_seed": 1861266435019188106,
+  "seed_derivation": "cbse-hmac-sha256-u63-v1",
   "rng_algorithm": "python-random-mt19937"
 }
 ```
@@ -483,7 +498,9 @@ terms consistently.
 
 If fully implemented and validated, the feature should establish that:
 
-1. every logical replication receives a distinct deterministic stream identity;
+1. every different replication index within a scenario receives a distinct
+   deterministic stream assignment, while equal scenario seeds intentionally
+   support common random numbers across scenarios;
 2. a recreation with the same root seed, scenario seeds, replication indices,
    and image digests reconstructs the same effective seeds;
 3. Pod names, nodes, scheduling order, and wall-clock time do not affect seed
@@ -512,19 +529,17 @@ methodology.
 
 ## 19. Proposed implementation sequence
 
-A practical implementation order is:
+The draft implementation package uses six reviewed slices:
 
-1. add and validate the experiment root seed in `SimulationExperiment`;
-2. settle the scenario-seed recipe contract;
-3. carry Scenario Manager's cumulative offset into effective-Job construction;
-4. project the Kubernetes completion index into each runner;
-5. reserve the randomness environment interface;
-6. implement and test the base-image derivation facility;
-7. update the reference Translator and runner result contract;
-8. make result insertion idempotent by logical replication identity;
-9. prove retry stability, wave-partition invariance, and experiment recreation;
-10. validate through both manifest and Helm installation modes;
-11. publish the final reproducibility and thesis documentation.
+1. D1 adds the root-seed API and formalizes existing `seed_policy` semantics;
+2. D3 implements the base-image derivation Facade and may run in parallel with
+   D1;
+3. D2 carries the cumulative offset and injects runtime coordinates;
+4. D4 integrates the reference runner, provenance, and idempotent Result DB;
+5. D5 proves adaptive-wave continuity and recreation through both manifest and
+   Helm installation modes;
+6. D6 publishes product documentation, followed by manager-owned thesis and
+   handoff settlement.
 
 ## 20. Thesis-oriented summary
 
